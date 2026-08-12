@@ -93,22 +93,64 @@ def test_parse_book_uses_manifest_source_type_for_original_source(tmp_path: Path
     }
 
 
-def test_segment_writes_only_placeholder_contract(tmp_path: Path) -> None:
+def _write_parsed_document(tmp_path: Path, doc_id: str) -> None:
+    parsed_dir = tmp_path / "sources" / "parsed" / doc_id
+    parsed_dir.mkdir(parents=True, exist_ok=True)
+    (parsed_dir / "document.json").write_text(
+        json.dumps(
+            {
+                "doc_id": doc_id,
+                "title": "Deep Work",
+                "blocks": [
+                    {"id": "b1", "type": "title", "text": "Chapter 1", "level": 1, "order": 0},
+                    {"id": "b2", "type": "text", "text": "Body.", "order": 1},
+                ],
+                "metadata": {"parser": "markdown"},
+            }
+        )
+    )
+
+
+def test_segment_writes_sections_from_parsed_document(tmp_path: Path) -> None:
     runner = _init_workspace(tmp_path)
+    _write_parsed_document(tmp_path, "deep-work")
 
     result = runner.invoke(app, ["segment", str(tmp_path), "deep-work", "--segmenter", "heading"])
 
     assert result.exit_code == 0, result.output
-    payload = _placeholder(tmp_path, "segment-deep-work")
-    assert payload["command"] == "segment"
-    assert payload["doc_id"] == "deep-work"
-    assert payload["segmenter"] == "heading"
-    assert payload["outputs"] == {
-        "sections_manifest": str(
-            tmp_path / "sources" / "sections" / "deep-work" / "sections.jsonl"
-        ),
-        "sections_dir": str(tmp_path / "sources" / "sections" / "deep-work"),
-    }
+    sections_dir = tmp_path / "sources" / "sections" / "deep-work"
+    manifest = sections_dir / "sections.jsonl"
+    assert manifest.is_file()
+    lines = manifest.read_text().splitlines()
+    assert len(lines) == 1
+    assert json.loads(lines[0])["id"] == "deep-work.chapter-1"
+    assert (sections_dir / "deep-work.chapter-1.md").is_file()
+    assert "segmenter: heading" in result.output
+    assert "sections: 1" in result.output
+    # A real segment run never writes a placeholder request artifact.
+    assert not (tmp_path / "runs" / "cli-placeholders" / "segment-deep-work.json").exists()
+
+
+def test_segment_reports_a_missing_parsed_document(tmp_path: Path) -> None:
+    runner = _init_workspace(tmp_path)
+
+    result = runner.invoke(app, ["segment", str(tmp_path), "deep-work"])
+
+    assert result.exit_code != 0
+    assert "Parsed document not found" in result.output
+    assert not (tmp_path / "sources" / "sections" / "deep-work").exists()
+
+
+def test_segment_reports_a_corrupt_parsed_document(tmp_path: Path) -> None:
+    runner = _init_workspace(tmp_path)
+    parsed_dir = tmp_path / "sources" / "parsed" / "deep-work"
+    parsed_dir.mkdir(parents=True, exist_ok=True)
+    (parsed_dir / "document.json").write_text("not json")
+
+    result = runner.invoke(app, ["segment", str(tmp_path), "deep-work"])
+
+    assert result.exit_code != 0
+    assert "Invalid parsed document" in result.output
     assert not (tmp_path / "sources" / "sections" / "deep-work").exists()
 
 
@@ -167,17 +209,17 @@ def test_reading_plan_commands_write_only_placeholder_contracts(tmp_path: Path) 
 def test_placeholder_commands_support_dry_run_without_writing(tmp_path: Path) -> None:
     runner = _init_workspace(tmp_path)
 
-    result = runner.invoke(app, ["segment", str(tmp_path), "deep-work", "--dry-run"])
+    result = runner.invoke(app, ["wiki", "compile", str(tmp_path), "deep-work", "--dry-run"])
 
     assert result.exit_code == 0, result.output
     assert "Backend not run" in result.output
-    assert not (tmp_path / "runs" / "cli-placeholders" / "segment-deep-work.json").exists()
+    assert not (tmp_path / "runs" / "cli-placeholders" / "wiki-compile-deep-work.json").exists()
 
 
 def test_placeholder_commands_validate_ids(tmp_path: Path) -> None:
     runner = _init_workspace(tmp_path)
 
-    result = runner.invoke(app, ["segment", str(tmp_path), "../../../escape"])
+    result = runner.invoke(app, ["wiki", "compile", str(tmp_path), "../../../escape"])
 
     assert result.exit_code != 0
     assert "doc_id must be a lowercase hyphenated slug" in result.output

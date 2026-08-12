@@ -12,3 +12,9 @@ def write_document(document: Document, output_dir: Path) -> Path:
     document_path = output_dir / "document.json"
     document_path.write_text(document.model_dump_json(indent=2) + "\n")
     return document_path
+
+
+def read_document(document_path: Path) -> Document:
+    """Load a canonical ``document.json`` written by :func:`write_document`."""
+
+    return Document.model_validate_json(document_path.read_text())

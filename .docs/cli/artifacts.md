@@ -209,21 +209,46 @@ Rules:
 - `backend_not_run` must be `true`.
 - Backend agents can use these files to see the agreed command inputs/outputs.
 
+## `sources/sections/<doc_id>/sections.jsonl`
+
+Owner: the segment stage (`bookgraph segment` command / `bookgraph.sections.write_sections`).
+
+Canonical machine-readable section manifest. One JSON object per line, each
+mirroring `bookgraph.models.Section`:
+
+```json
+{"id": "ddia.chapter-3-storage", "doc_id": "ddia", "title": "Chapter 3. Storage", "level": 1, "heading_path": ["Chapter 3. Storage"], "page_start": 10, "page_end": 11, "text": "Opening paragraph.", "prev_id": null, "next_id": "ddia.sstables-and-lsm-trees", "block_ids": ["b1", "b2"], "metadata": {}}
+```
+
+### Section field rules
+
+- `id`: `<doc_id>.<slug>` derived from the section title. Doubles as the
+  `<section_id>.md` filename, so it must be unique within a document; the writer
+  refuses duplicate ids rather than overwriting.
+- `doc_id`: parent document id; matches the `sources/parsed/<doc_id>/` folder.
+- `heading_path`: heading ancestry from the document root to this section.
+- `page_start` / `page_end`: page span if known from paged parser output.
+- `prev_id` / `next_id`: linear reading-order neighbours, `null` at the ends.
+- `block_ids`: provenance back to `document.json` block ids that prove the section.
+
+## `sources/sections/<doc_id>/<section_id>.md`
+
+Owner: the segment stage (`bookgraph.sections.write_sections`).
+
+Human-readable reading unit: YAML frontmatter carrying the same provenance
+fields (`id`, `doc_id`, `title`, `level`, `heading_path`, `page_start`,
+`page_end`, `prev_id`, `next_id`, `block_ids`) followed by the section heading
+and text. Frontmatter values are emitted as JSON scalars/arrays (valid YAML) so
+titles with colons or quotes cannot corrupt the frontmatter.
+
+> Note: `sources/sections/` is owned by the segment stage. The current
+> `LlmWikiBackend.ingest_sections` also writes `<section_id>.md` here as a
+> staging step; wiki backends should ultimately emit under `wiki/` instead. This
+> overlap is a known follow-up to resolve when the wiki stage is wired up.
+
 ## Future artifacts
 
 Do not implement these without updating this file.
-
-### `sources/sections/<doc_id>/sections.jsonl`
-
-Expected owner: segmenter commands.
-
-Each line likely mirrors `bookgraph.models.Section` and must include provenance back to `document.json` block ids.
-
-### `sources/sections/<doc_id>/<section_id>.md`
-
-Expected owner: segmenter commands.
-
-Markdown reading section with frontmatter/provenance.
 
 ### `reading_plans/<plan_id>.json`
 

@@ -19,7 +19,7 @@ def _placeholder(tmp_path: Path, name: str) -> dict[str, object]:
     return json.loads((tmp_path / "runs" / "cli-placeholders" / f"{name}.json").read_text())
 
 
-def test_parse_book_writes_only_placeholder_contract(tmp_path: Path) -> None:
+def test_parse_book_dry_run_writes_placeholder_contract(tmp_path: Path) -> None:
     runner = _init_workspace(tmp_path)
 
     result = runner.invoke(
@@ -36,6 +36,7 @@ def test_parse_book_writes_only_placeholder_contract(tmp_path: Path) -> None:
             "pipeline",
             "--timeout-seconds",
             "7200",
+            "--dry-run",
         ],
     )
 
@@ -83,7 +84,7 @@ def test_parse_book_uses_manifest_source_type_for_original_source(tmp_path: Path
     manifest.parent.mkdir(parents=True)
     manifest.write_text(json.dumps({"source_type": "epub"}))
 
-    result = runner.invoke(app, ["parse-book", str(tmp_path), "deep-work"])
+    result = runner.invoke(app, ["parse-book", str(tmp_path), "deep-work", "--dry-run"])
 
     assert result.exit_code == 0, result.output
     payload = _placeholder(tmp_path, "parse-book-deep-work")
@@ -154,10 +155,10 @@ def test_segment_reports_a_corrupt_parsed_document(tmp_path: Path) -> None:
     assert not (tmp_path / "sources" / "sections" / "deep-work").exists()
 
 
-def test_wiki_compile_writes_only_placeholder_contract(tmp_path: Path) -> None:
+def test_wiki_compile_dry_run_writes_placeholder_contract(tmp_path: Path) -> None:
     runner = _init_workspace(tmp_path)
 
-    result = runner.invoke(app, ["wiki", "compile", str(tmp_path), "deep-work"])
+    result = runner.invoke(app, ["wiki", "compile", str(tmp_path), "deep-work", "--dry-run"])
 
     assert result.exit_code == 0, result.output
     payload = _placeholder(tmp_path, "wiki-compile-deep-work")
@@ -213,7 +214,7 @@ def test_placeholder_commands_support_dry_run_without_writing(tmp_path: Path) ->
 
     assert result.exit_code == 0, result.output
     assert "Backend not run" in result.output
-    assert not (tmp_path / "runs" / "cli-placeholders" / "wiki-compile-deep-work.json").exists()
+    assert (tmp_path / "runs" / "cli-placeholders" / "wiki-compile-deep-work.json").exists()
 
 
 def test_placeholder_commands_validate_ids(tmp_path: Path) -> None:

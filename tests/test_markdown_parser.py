@@ -106,8 +106,18 @@ def test_markdown_parser_keeps_nested_list_as_one_block(tmp_path: Path) -> None:
     blocks = MarkdownParser().parse(source, tmp_path / "parsed").blocks
 
     assert [block.type for block in blocks] == ["title", "list", "text"]
-    assert blocks[1].text == "- outer\n- inner\n- second"
+    assert blocks[1].text == "- outer\n  - inner\n- second"
     assert blocks[2].text == "After list."
+
+
+def test_markdown_parser_preserves_ordered_list_numbers(tmp_path: Path) -> None:
+    source = tmp_path / "steps.md"
+    source.write_text("# Steps\n\n1. first step\n2. second step\n")
+
+    blocks = MarkdownParser().parse(source, tmp_path / "parsed").blocks
+
+    assert [block.type for block in blocks] == ["title", "list"]
+    assert blocks[1].text == "1. first step\n2. second step"
 
 
 def test_markdown_parser_writes_nothing_to_output_dir(tmp_path: Path) -> None:

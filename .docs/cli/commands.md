@@ -189,7 +189,8 @@ Current auto-routing:
 
 | Source type | Parser |
 | --- | --- |
-| `*_middle.json`, `.json` | `mineru-middle-json` |
+| `*_middle.json` | `mineru-middle-json` |
+| other `.json` files | fail unless `--parser` is explicit |
 | `.md`, `.markdown`, `.mdx` | `markdown` |
 | Office/HTML/text extensions supported in routing | `markitdown` |
 | raw `.pdf` | fail unless `--parser` is explicit |

@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from bookgraph.models import BlockType, CanonicalBlock, Document
+from bookgraph.parsers.errors import UnsupportedSourceError
 from bookgraph.ports import DocumentParser
 from bookgraph.utils import doc_id_from_path
 
@@ -20,9 +21,11 @@ class MinerUMiddleJsonParser(DocumentParser):
     name = "mineru-middle-json"
 
     def parse(self, source: Path, output_dir: Path) -> Document:
-        payload = json.loads(source.read_text())
+        del output_dir  # MinerU side artifacts are produced before this parser runs.
+        pdf_info = _require_pdf_info(source, self.name)
+
         blocks: list[CanonicalBlock] = []
-        for page in payload.get("pdf_info", []):
+        for page in pdf_info:
             page_idx = page.get("page_idx")
             para_blocks = page.get("para_blocks") or []
             for index, raw_block in enumerate(para_blocks):
@@ -45,6 +48,29 @@ class MinerUMiddleJsonParser(DocumentParser):
             blocks=blocks,
             metadata={"parser": self.name, "source_path": str(source)},
         )
+
+
+def _require_pdf_info(source: Path, parser_name: str) -> list[Any]:
+    """Fail loudly when the input is not MinerU middle JSON.
+
+    Without this check a stray ``.json`` file parses into an empty document and
+    the whole pipeline reports success on nothing.
+    """
+
+    try:
+        payload = json.loads(source.read_text())
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise UnsupportedSourceError(
+            f"{source.name}: {parser_name} needs valid JSON: {exc}"
+        ) from exc
+
+    pdf_info = payload.get("pdf_info") if isinstance(payload, dict) else None
+    if not isinstance(pdf_info, list):
+        raise UnsupportedSourceError(
+            f"{source.name}: not MinerU middle JSON - {parser_name} requires a "
+            "'pdf_info' list. Run MinerU on the source first."
+        )
+    return pdf_info
 
 
 def _document_title(blocks: list[CanonicalBlock]) -> str | None:

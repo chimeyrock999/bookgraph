@@ -16,7 +16,6 @@ from bookgraph.parsers.routing import (
     ("filename", "expected"),
     [
         ("ddia_middle.json", "mineru-middle-json"),
-        ("layout.json", "mineru-middle-json"),
         ("notes.md", "markdown"),
         ("notes.markdown", "markdown"),
         ("Report Q3.DOCX", "markitdown"),
@@ -33,6 +32,11 @@ def test_select_parser_name_routes_source_by_file_type(filename: str, expected: 
 def test_select_parser_name_requires_an_explicit_choice_for_pdf() -> None:
     with pytest.raises(UnsupportedSourceError, match="MinerU"):
         select_parser_name(Path("ddia.pdf"))
+
+
+def test_select_parser_name_rejects_plain_json_without_mineru_suffix() -> None:
+    with pytest.raises(UnsupportedSourceError, match="_middle.json"):
+        select_parser_name(Path("layout.json"))
 
 
 def test_select_parser_name_rejects_unknown_source_types() -> None:

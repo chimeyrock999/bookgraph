@@ -11,7 +11,7 @@ from bookgraph.defaults import default_parser_registry
 from bookgraph.documents import write_document
 from bookgraph.parsers.markitdown import MissingParserDependencyError
 from bookgraph.parsers.routing import UnsupportedSourceError, select_parser_name
-from bookgraph.utils import doc_id_from_path
+from bookgraph.utils import doc_id_from_path, validate_slug_id
 from bookgraph.workspace import WorkspacePaths, default_config
 
 app = typer.Typer(help="BookGraph: pluggable document-to-graph-wiki pipeline.")
@@ -98,7 +98,7 @@ def _doc_id_for_source(source: Path) -> str:
         except (OSError, json.JSONDecodeError, AttributeError):
             book_id = None
         if isinstance(book_id, str) and book_id:
-            return book_id
+            return validate_slug_id(book_id, field_name="book_id")
     return doc_id_from_path(source)
 
 
@@ -143,15 +143,26 @@ def parse(
         available = ", ".join(registry.names())
         raise typer.BadParameter(f"{exc.args[0]} Available: {available}") from exc
 
-    resolved_doc_id = doc_id or _doc_id_for_source(source_path)
+    try:
+        resolved_doc_id = (
+            validate_slug_id(doc_id, field_name="doc_id")
+            if doc_id
+            else _doc_id_for_source(source_path)
+        )
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
     parsed_dir = workspace.sources_parsed / resolved_doc_id
     try:
         document = plugin.parse(source_path, parsed_dir)
     except MissingParserDependencyError as exc:
         raise typer.BadParameter(str(exc)) from exc
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
 
     if document.doc_id != resolved_doc_id:
-        document = document.model_copy(update={"doc_id": resolved_doc_id})
+        document = type(document).model_validate(
+            {**document.model_dump(), "doc_id": resolved_doc_id}
+        )
 
     document_path = write_document(document, parsed_dir)
 

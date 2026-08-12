@@ -51,6 +51,9 @@ class MarkItDownParser(DocumentParser):
             source_path=str(source),
             parser_name=self.name,
             metadata={"markdown_path": str(staged)},
+            # Block line ranges belong to the staged Markdown, so that artifact -
+            # not the binary original - is what proves each block.
+            block_source_path=str(staged),
         )
 
 

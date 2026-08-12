@@ -153,6 +153,60 @@ def test_parse_ingests_mineru_middle_json(tmp_path: Path) -> None:
     assert payload["blocks"][0]["page_idx"] == 4
 
 
+def test_parse_rejects_traversal_doc_id(tmp_path: Path) -> None:
+    runner = _init_workspace(tmp_path)
+    source = tmp_path / "sources" / "inbox" / "notes.md"
+    source.write_text("# Notes\n")
+
+    result = runner.invoke(
+        app,
+        ["parse", str(source), "--output", str(tmp_path), "--doc-id", "../../../ESCAPED"],
+    )
+
+    assert result.exit_code != 0
+    assert "doc_id must be a lowercase hyphenated slug" in _failure_text(result)
+    assert not (tmp_path.parent / "ESCAPED").exists()
+
+
+def test_parse_rejects_malicious_book_id_from_manifest(tmp_path: Path) -> None:
+    runner = _init_workspace(tmp_path)
+    book_root = tmp_path / "sources" / "inbox" / "book"
+    book_root.mkdir(parents=True, exist_ok=True)
+    (book_root / "book.json").write_text(json.dumps({"book_id": "../../../EVIL2"}))
+    source = book_root / "original.md"
+    source.write_text("# Notes\n")
+
+    result = runner.invoke(app, ["parse", str(source), "--output", str(tmp_path)])
+
+    assert result.exit_code != 0
+    assert "book_id must be a lowercase hyphenated slug" in _failure_text(result)
+    assert not (tmp_path.parent / "EVIL2").exists()
+
+
+def test_parse_rejects_plain_json_without_mineru_suffix(tmp_path: Path) -> None:
+    runner = _init_workspace(tmp_path)
+    source = tmp_path / "sources" / "inbox" / "config.json"
+    source.write_text(json.dumps({"hello": "world"}))
+
+    result = runner.invoke(app, ["parse", str(source), "--output", str(tmp_path)])
+
+    assert result.exit_code != 0
+    assert "_middle.json" in _failure_text(result)
+    assert not (tmp_path / "sources" / "parsed" / "config").exists()
+
+
+def test_parse_rejects_invalid_mineru_middle_json_payload(tmp_path: Path) -> None:
+    runner = _init_workspace(tmp_path)
+    source = tmp_path / "sources" / "inbox" / "config_middle.json"
+    source.write_text(json.dumps({"hello": "world"}))
+
+    result = runner.invoke(app, ["parse", str(source), "--output", str(tmp_path)])
+
+    assert result.exit_code != 0
+    assert "pdf_info" in _failure_text(result)
+    assert not (tmp_path / "sources" / "parsed" / "config").exists()
+
+
 def test_parsers_command_lists_registered_plugins(tmp_path: Path) -> None:
     runner = CliRunner()
 

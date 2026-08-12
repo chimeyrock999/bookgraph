@@ -55,13 +55,19 @@ def document_from_markdown(
     source_path: str,
     parser_name: str,
     metadata: BlockMetadata | None = None,
+    block_source_path: str | None = None,
 ) -> Document:
     """Build a canonical document from Markdown text.
 
     Shared by every parser whose adapter produces Markdown rather than blocks.
+
+    ``source_path`` is the document-level origin the user asked for.
+    ``block_source_path`` is the artifact that actually proves each block, which
+    differs when an adapter converts the original into Markdown first: the block
+    line ranges then belong to the converted Markdown, not to the original.
     """
 
-    blocks = blocks_from_markdown(text, source_path=source_path)
+    blocks = blocks_from_markdown(text, source_path=block_source_path or source_path)
     document_metadata: BlockMetadata = {"parser": parser_name, "source_path": source_path}
     if metadata:
         document_metadata.update(metadata)
@@ -97,14 +103,7 @@ def blocks_from_markdown(text: str, *, source_path: str | None = None) -> list[C
             index = end
         elif token.type in LIST_OPEN_TO_CLOSE:
             end = _end_of_container(tokens, index, LIST_OPEN_TO_CLOSE[token.type])
-            items = [item.content for item in tokens[index:end] if item.type == "inline"]
-            _append(
-                blocks,
-                "list",
-                "\n".join(f"- {item}" for item in items if item.strip()),
-                source_path,
-                token,
-            )
+            _append(blocks, "list", _render_list(tokens[index:end]), source_path, token)
             index = end
         elif token.type == "table_open":
             end = _end_of_container(tokens, index, "table_close")
@@ -198,6 +197,47 @@ def _sole_image(inline: Token) -> Token | None:
     if any(child.type != "image" and child.content.strip() for child in children):
         return None
     return images[0]
+
+
+@dataclass
+class _ListFrame:
+    ordered: bool
+    counter: int
+    awaiting_item_text: bool = False
+
+
+def _render_list(tokens: list[Token]) -> str:
+    """Render a list container, keeping nesting depth and ordered numbering.
+
+    Flattening a list to plain bullets loses real content: an ordered list is a
+    sequence of steps, and indentation carries the parent/child relation.
+    """
+
+    lines: list[str] = []
+    stack: list[_ListFrame] = []
+
+    for token in tokens:
+        if token.type in LIST_OPEN_TO_CLOSE:
+            ordered = token.type == "ordered_list_open"
+            start = int(token.attrGet("start") or 1) if ordered else 1
+            stack.append(_ListFrame(ordered=ordered, counter=start - 1))
+        elif token.type in set(LIST_OPEN_TO_CLOSE.values()):
+            if stack:
+                stack.pop()
+        elif token.type == "list_item_open" and stack:
+            stack[-1].counter += 1
+            stack[-1].awaiting_item_text = True
+        elif token.type == "inline" and stack and token.content.strip():
+            frame = stack[-1]
+            indent = "  " * (len(stack) - 1)
+            if frame.awaiting_item_text:
+                marker = f"{frame.counter}." if frame.ordered else "-"
+                lines.append(f"{indent}{marker} {token.content}")
+                frame.awaiting_item_text = False
+            else:
+                lines.append(f"{indent}  {token.content}")
+
+    return "\n".join(lines)
 
 
 def _render_table(tokens: list[Token]) -> str:

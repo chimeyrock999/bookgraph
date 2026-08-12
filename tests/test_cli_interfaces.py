@@ -141,6 +141,19 @@ def test_segment_reports_a_missing_parsed_document(tmp_path: Path) -> None:
     assert not (tmp_path / "sources" / "sections" / "deep-work").exists()
 
 
+def test_segment_reports_a_corrupt_parsed_document(tmp_path: Path) -> None:
+    runner = _init_workspace(tmp_path)
+    parsed_dir = tmp_path / "sources" / "parsed" / "deep-work"
+    parsed_dir.mkdir(parents=True, exist_ok=True)
+    (parsed_dir / "document.json").write_text("not json")
+
+    result = runner.invoke(app, ["segment", str(tmp_path), "deep-work"])
+
+    assert result.exit_code != 0
+    assert "Invalid parsed document" in result.output
+    assert not (tmp_path / "sources" / "sections" / "deep-work").exists()
+
+
 def test_wiki_compile_writes_only_placeholder_contract(tmp_path: Path) -> None:
     runner = _init_workspace(tmp_path)
 

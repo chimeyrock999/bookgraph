@@ -55,6 +55,18 @@ def test_write_sections_refuses_duplicate_ids(tmp_path: Path) -> None:
         write_sections(sections, tmp_path)
 
 
+@pytest.mark.parametrize("unsafe_id", ["../escape", "a/b", "..", "UPPER", "with space"])
+def test_write_sections_refuses_path_unsafe_ids(tmp_path: Path, unsafe_id: str) -> None:
+    sections = [_section(unsafe_id, "Escape")]
+
+    with pytest.raises(ValueError, match="filename-safe"):
+        write_sections(sections, tmp_path)
+
+    # Nothing is written when an id is path-unsafe, so no escape is possible.
+    assert not (tmp_path / "sections.jsonl").exists()
+    assert not (tmp_path.parent / "escape.md").exists()
+
+
 def test_write_sections_handles_no_sections(tmp_path: Path) -> None:
     output = write_sections([], tmp_path)
 

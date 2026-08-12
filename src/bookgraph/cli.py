@@ -344,7 +344,10 @@ def segment(
             f"Parsed document not found: {document_path}. Run 'bookgraph parse' first."
         )
 
-    document = read_document(document_path)
+    try:
+        document = read_document(document_path)
+    except (OSError, ValueError) as exc:
+        raise typer.BadParameter(f"Invalid parsed document: {document_path}: {exc}") from exc
     sections = registry.get(segmenter_name).segment(document)
     output_dir = workspace.sources_sections / resolved_doc_id
     try:

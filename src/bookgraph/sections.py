@@ -1,11 +1,18 @@
 from __future__ import annotations
 
 import json
+import re
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
 from bookgraph.models import Section
+
+# Section ids double as filenames. A section id is one or more lowercase
+# hyphenated slugs joined by dots (e.g. ``<doc_id>.<slug>``). Anything else -
+# path separators, ``..``, uppercase - is rejected so a pluggable segmenter
+# cannot make the writer escape the output directory.
+_SECTION_ID_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*(?:\.[a-z0-9]+(?:-[a-z0-9]+)*)*$")
 
 
 @dataclass(frozen=True)
@@ -21,10 +28,12 @@ def write_sections(sections: list[Section], output_dir: Path) -> SectionsOutput:
 
     Writes the canonical machine-readable manifest ``sections.jsonl`` (one
     ``Section`` per line) plus one human-readable ``<section_id>.md`` reading unit
-    per section. Section ids double as filenames, so duplicate ids are refused up
-    front rather than silently overwriting each other's Markdown.
+    per section. Section ids double as filenames, so path-unsafe ids are rejected
+    and duplicate ids are refused up front rather than escaping the output
+    directory or silently overwriting each other's Markdown.
     """
 
+    _reject_unsafe_ids(sections)
     _reject_duplicate_ids(sections)
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -68,6 +77,15 @@ def render_section_markdown(section: Section) -> str:
     if section.text:
         body += f"\n\n{section.text}"
     return "\n".join(lines) + "\n\n" + body + "\n"
+
+
+def _reject_unsafe_ids(sections: list[Section]) -> None:
+    unsafe = sorted({s.id for s in sections if not _SECTION_ID_PATTERN.fullmatch(s.id)})
+    if unsafe:
+        raise ValueError(
+            "section ids must be filename-safe slugs (lowercase a-z, 0-9, '-', '.'): "
+            + ", ".join(unsafe)
+        )
 
 
 def _reject_duplicate_ids(sections: list[Section]) -> None:

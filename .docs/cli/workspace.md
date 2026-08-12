@@ -34,6 +34,7 @@ workspace/
     sections/
   wiki/
     concepts/
+    books/
     comparisons/
     daily/
   indexes/
@@ -49,7 +50,10 @@ workspace/
 | `sources/inbox/<book_id>/` | registration / ingestion | Raw source files and `book.json` registration manifest. |
 | `sources/parsed/<doc_id>/` | parser stage | Canonical parser outputs, especially `document.json`; optional parser side artifacts. |
 | `sources/sections/<doc_id>/` | segmenter stage | Human reading sections and section manifests. |
-| `wiki/` | wiki backend | Compiled linked Markdown/wiki artifacts. |
+| `wiki/books/<doc_id>/` | wiki backend | Per-book compiled linked Markdown/wiki artifacts. |
+| `wiki/concepts/` | wiki backend | Cross-book concept pages. |
+| `wiki/comparisons/` | wiki backend | Cross-book comparison pages. |
+| `wiki/daily/` | daily agent/wiki backend | Daily reading notes and summaries. |
 | `indexes/` | index/search/graph stage | Deterministic indexes, graph DB files, search indexes. |
 | `reading_plans/` | reading plan stage | Progress state for daily reading. |
 | `runs/` | orchestration | Run logs and reproducibility metadata. |

@@ -72,6 +72,7 @@ sources.parsed
 sources.sections
 wiki.root
 wiki.concepts
+wiki.books
 wiki.comparisons
 wiki.daily
 indexes.root
@@ -228,36 +229,163 @@ blocks: <block_count>
 document: <workspace>/sources/parsed/<doc_id>/document.json
 ```
 
-## Planned command contracts
+## Placeholder command contracts
 
-Do not implement these without first expanding this file.
+The commands below expose the CLI interface and write placeholder request
+artifacts under `runs/cli-placeholders/`. They intentionally do **not** call the
+backend parser/segmenter/wiki/reading-plan implementations yet.
 
 ### `bookgraph parse-book`
 
-Potential owner: parser/orchestration.
+**Status:** Implemented as CLI placeholder.
 
-Purpose: parse a registered book from `sources/inbox/<book_id>/book.json`, update parser status, and write `sources/parsed/<book_id>/document.json`.
+Declare the book-level raw PDF parse interface. This is aligned with the MinerU
+runner contract from PR #1, but it still does **not** invoke MinerU or parse the
+produced middle JSON.
 
-Open questions:
+```bash
+bookgraph parse-book /path/to/workspace <book_id>
+bookgraph parse-book /path/to/workspace <book_id> --runner mineru --method auto
+bookgraph parse-book /path/to/workspace <book_id> --runner-command mineru --backend pipeline
+bookgraph parse-book /path/to/workspace <book_id> --timeout-seconds 3600
+bookgraph parse-book /path/to/workspace <book_id> --parser mineru-middle-json
+bookgraph parse-book /path/to/workspace <book_id> --dry-run
+```
 
-- Should it call a raw PDF runner or require pre-existing MinerU output?
-- How is parser selection read from `bookgraph.toml`?
-- How are run logs written under `runs/`?
+Options:
+
+- `--runner`: raw-source runner reserved for the future first step. Default: `mineru`.
+- `--runner-command`: executable name reserved for the future runner. Default: `mineru`.
+- `--method/-m`: MinerU method reserved for the future runner. Default: `auto`.
+- `--backend/-b`: optional MinerU backend reserved for the future runner.
+- `--timeout-seconds`: subprocess timeout reserved for the future runner. Default: `3600`; pass `0` to reserve no timeout.
+- `--parser/-p`: parser reserved after runner output is staged. Default: `mineru-middle-json`.
+
+`--parser` is validated against the parser plugin registry; typoed plugin names fail before a placeholder is written.
+
+Writes, unless `--dry-run`:
+
+```text
+runs/cli-placeholders/parse-book-<book_id>.json
+```
+
+Placeholder declares:
+
+- inputs: `sources/inbox/<book_id>/book.json`, `sources/inbox/<book_id>/original.<source_type>`
+- future runner outputs staged flat under `sources/parsed/<book_id>/`:
+  - `<book_id>_middle.json`
+  - optional `<book_id>.md`
+  - optional `<book_id>_layout.pdf`
+  - optional `<book_id>_span.pdf`
+  - optional `<book_id>_content_list.json`
+  - optional `images/`
+- future final output: `sources/parsed/<book_id>/document.json`
+- `backend_not_run: true`
 
 ### `bookgraph segment`
 
-Potential owner: segmenter.
+**Status:** Implemented as CLI placeholder.
 
-Purpose: convert `sources/parsed/<doc_id>/document.json` to human reading sections under `sources/sections/<doc_id>/`.
+```bash
+bookgraph segment /path/to/workspace <doc_id>
+bookgraph segment /path/to/workspace <doc_id> --segmenter heading
+bookgraph segment /path/to/workspace <doc_id> --dry-run
+```
+
+`--segmenter` is validated against the segmenter plugin registry; typoed plugin names fail before a placeholder is written.
+
+Writes, unless `--dry-run`:
+
+```text
+runs/cli-placeholders/segment-<doc_id>.json
+```
+
+Placeholder declares:
+
+- input: `sources/parsed/<doc_id>/document.json`
+- future outputs: `sources/sections/<doc_id>/sections.jsonl`, section Markdown files
+- `backend_not_run: true`
 
 ### `bookgraph wiki compile`
 
-Potential owner: wiki backend.
+**Status:** Implemented as CLI placeholder.
 
-Purpose: compile sections into linked Markdown/wiki artifacts under `wiki/`.
+```bash
+bookgraph wiki compile /path/to/workspace <doc_id>
+bookgraph wiki compile /path/to/workspace <doc_id> --backend llmwiki
+bookgraph wiki compile /path/to/workspace <doc_id> --dry-run
+```
 
-### `bookgraph reading-plan *`
+`--backend` is validated against the wiki-backend plugin registry; typoed plugin names fail before a placeholder is written.
 
-Potential owner: reading plan/MCP.
+Writes, unless `--dry-run`:
 
-Purpose: create/update daily reading progress state under `reading_plans/`.
+```text
+runs/cli-placeholders/wiki-compile-<doc_id>.json
+```
+
+Placeholder declares:
+
+- input: `sources/sections/<doc_id>/sections.jsonl`
+- future output: `wiki/books/<doc_id>/`
+- `backend_not_run: true`
+
+### `bookgraph reading-plan create`
+
+**Status:** Implemented as CLI placeholder.
+
+```bash
+bookgraph reading-plan create /path/to/workspace <doc_id>
+bookgraph reading-plan create /path/to/workspace <doc_id> --plan-id ddia --daily-sections 1
+bookgraph reading-plan create /path/to/workspace <doc_id> --dry-run
+```
+
+`--daily-sections` must be at least `1`.
+
+Writes, unless `--dry-run`:
+
+```text
+runs/cli-placeholders/reading-plan-create-<plan_id>.json
+```
+
+Placeholder declares:
+
+- input: `sources/sections/<doc_id>/sections.jsonl`
+- future output: `reading_plans/<plan_id>.json`
+- `backend_not_run: true`
+
+### `bookgraph reading-plan next`
+
+**Status:** Implemented as CLI placeholder.
+
+```bash
+bookgraph reading-plan next /path/to/workspace <plan_id>
+bookgraph reading-plan next /path/to/workspace <plan_id> --dry-run
+```
+
+Writes, unless `--dry-run`:
+
+```text
+runs/cli-placeholders/reading-plan-next-<plan_id>.json
+```
+
+### `bookgraph reading-plan mark-read`
+
+**Status:** Implemented as CLI placeholder.
+
+```bash
+bookgraph reading-plan mark-read /path/to/workspace <plan_id>
+bookgraph reading-plan mark-read /path/to/workspace <plan_id> --section-id <section_id>
+bookgraph reading-plan mark-read /path/to/workspace <plan_id> --dry-run
+```
+
+Writes, unless `--dry-run`:
+
+```text
+runs/cli-placeholders/reading-plan-mark-read-<plan_id>.json
+```
+
+## Future backend contracts
+
+The placeholder commands above reserve the interfaces. Do not wire real backend
+execution into them without first expanding this file and the artifact contracts.

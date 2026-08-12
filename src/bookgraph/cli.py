@@ -1,20 +1,63 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import typer
 
 from bookgraph.books import build_book_registration, register_book
-from bookgraph.defaults import default_parser_registry
+from bookgraph.defaults import (
+    default_parser_registry,
+    default_segmenter_registry,
+    default_wiki_backend_registry,
+)
 from bookgraph.documents import write_document
 from bookgraph.parsers.markitdown import MissingParserDependencyError
 from bookgraph.parsers.routing import UnsupportedSourceError, select_parser_name
+from bookgraph.plugins import PluginRegistry
 from bookgraph.utils import doc_id_from_path, validate_slug_id
 from bookgraph.workspace import WorkspacePaths, default_config
 
 app = typer.Typer(help="BookGraph: pluggable document-to-graph-wiki pipeline.")
+wiki_app = typer.Typer(help="Wiki backend command interfaces.")
+reading_plan_app = typer.Typer(help="Reading-plan command interfaces.")
+app.add_typer(wiki_app, name="wiki")
+app.add_typer(reading_plan_app, name="reading-plan")
+
+_SOURCE_TYPE_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+
+
+def _validate_id(value: str, field_name: str) -> str:
+    try:
+        return validate_slug_id(value, field_name=field_name)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+
+def _validate_plugin_name(registry: PluginRegistry[Any], name: str) -> str:
+    try:
+        registry.get(name)
+    except KeyError as exc:
+        available = ", ".join(registry.names())
+        raise typer.BadParameter(f"{exc.args[0]} Available: {available}") from exc
+    return name
+
+
+def _registered_original_path(workspace: WorkspacePaths, book_id: str, manifest: Path) -> Path:
+    source_type = "pdf"
+    if manifest.is_file():
+        try:
+            payload = json.loads(manifest.read_text())
+        except (OSError, json.JSONDecodeError) as exc:
+            raise typer.BadParameter(f"Invalid book manifest: {manifest}") from exc
+        raw_source_type = payload.get("source_type")
+        if isinstance(raw_source_type, str):
+            if not _SOURCE_TYPE_PATTERN.fullmatch(raw_source_type):
+                raise typer.BadParameter(f"Invalid source_type in book manifest: {raw_source_type}")
+            source_type = raw_source_type
+    return workspace.sources_inbox / book_id / f"original.{source_type}"
 
 
 def _resolve_workspace_path(path: Path | None, output: Path | None) -> Path:
@@ -143,14 +186,7 @@ def parse(
         available = ", ".join(registry.names())
         raise typer.BadParameter(f"{exc.args[0]} Available: {available}") from exc
 
-    try:
-        resolved_doc_id = (
-            validate_slug_id(doc_id, field_name="doc_id")
-            if doc_id
-            else _doc_id_for_source(source_path)
-        )
-    except ValueError as exc:
-        raise typer.BadParameter(str(exc)) from exc
+    resolved_doc_id = _validate_id(doc_id, "doc_id") if doc_id else _doc_id_for_source(source_path)
     parsed_dir = workspace.sources_parsed / resolved_doc_id
     try:
         document = plugin.parse(source_path, parsed_dir)
@@ -171,3 +207,291 @@ def parse(
     typer.echo(f"title: {document.title}")
     typer.echo(f"blocks: {len(document.blocks)}")
     typer.echo(f"document: {document_path}")
+
+
+def _write_placeholder(workspace: WorkspacePaths, name: str, payload: dict[str, object]) -> Path:
+    output_dir = workspace.runs_root / "cli-placeholders"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    path = output_dir / f"{name}.json"
+    path.write_text(json.dumps(payload, indent=2) + "\n")
+    return path
+
+
+def _print_placeholder(name: str, path: Path | None) -> None:
+    typer.echo(f"Interface: {name}")
+    if path is not None:
+        typer.echo(f"Placeholder: {path}")
+    typer.echo("Backend not run.")
+
+
+@app.command("parse-book")
+def parse_book(
+    workspace_path: Annotated[Path, typer.Argument(help="BookGraph workspace/output root path.")],
+    book_id: Annotated[
+        str,
+        typer.Argument(help="Registered book id from sources/inbox/<book_id>."),
+    ],
+    runner: Annotated[
+        str,
+        typer.Option("--runner", help="Runner requested for the future raw-source step."),
+    ] = "mineru",
+    runner_command: Annotated[
+        str,
+        typer.Option("--runner-command", help="Executable name for the future runner."),
+    ] = "mineru",
+    method: Annotated[
+        str,
+        typer.Option("--method", "-m", help="MinerU method reserved for the future runner."),
+    ] = "auto",
+    backend: Annotated[
+        str | None,
+        typer.Option(
+            "--backend",
+            "-b",
+            help="Optional MinerU backend reserved for the future runner.",
+        ),
+    ] = None,
+    timeout_seconds: Annotated[
+        int | None,
+        typer.Option(
+            "--timeout-seconds",
+            help="Timeout reserved for the future MinerU subprocess; pass 0 for no timeout.",
+        ),
+    ] = 3600,
+    parser: Annotated[
+        str,
+        typer.Option(
+            "--parser",
+            "-p",
+            help="Parser plugin reserved after runner output is staged.",
+        ),
+    ] = "mineru-middle-json",
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Print the interface contract without writing files."),
+    ] = False,
+) -> None:
+    """Declare the registered-book parse interface without invoking parser backends."""
+
+    workspace = WorkspacePaths(workspace_path.expanduser().resolve())
+    resolved_book_id = _validate_id(book_id, "book_id")
+    parser_name = _validate_plugin_name(default_parser_registry(), parser)
+    book_manifest = workspace.sources_inbox / resolved_book_id / "book.json"
+    original_source = _registered_original_path(workspace, resolved_book_id, book_manifest)
+    parsed_dir = workspace.sources_parsed / resolved_book_id
+    middle_json = parsed_dir / f"{resolved_book_id}_middle.json"
+    if timeout_seconds is not None and timeout_seconds < 0:
+        raise typer.BadParameter("timeout_seconds must be non-negative")
+    resolved_timeout = None if timeout_seconds == 0 else timeout_seconds
+    payload: dict[str, object] = {
+        "command": "parse-book",
+        "status": "placeholder",
+        "book_id": resolved_book_id,
+        "runner": {
+            "name": runner,
+            "command": runner_command,
+            "method": method,
+            "backend": backend,
+            "timeout_seconds": resolved_timeout,
+        },
+        "parser": parser_name,
+        "inputs": {
+            "book_manifest": str(book_manifest),
+            "original_source": str(original_source),
+        },
+        "intermediate_outputs": {
+            "parsed_dir": str(parsed_dir),
+            "middle_json": str(middle_json),
+            "markdown": str(parsed_dir / f"{resolved_book_id}.md"),
+            "layout_pdf": str(parsed_dir / f"{resolved_book_id}_layout.pdf"),
+            "span_pdf": str(parsed_dir / f"{resolved_book_id}_span.pdf"),
+            "content_list": str(parsed_dir / f"{resolved_book_id}_content_list.json"),
+            "images_dir": str(parsed_dir / "images"),
+        },
+        "outputs": {"document": str(parsed_dir / "document.json")},
+        "backend_not_run": True,
+    }
+    path = None if dry_run else _write_placeholder(
+        workspace, f"parse-book-{resolved_book_id}", payload
+    )
+    _print_placeholder("parse-book", path)
+
+
+@app.command()
+def segment(
+    workspace_path: Annotated[Path, typer.Argument(help="BookGraph workspace/output root path.")],
+    doc_id: Annotated[str, typer.Argument(help="Parsed document id from sources/parsed/<doc_id>.")],
+    segmenter: Annotated[
+        str,
+        typer.Option(
+            "--segmenter",
+            "-s",
+            help="Segmenter plugin requested for the future backend.",
+        ),
+    ] = "heading",
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Print the interface contract without writing files."),
+    ] = False,
+) -> None:
+    """Declare the segmentation interface without running segmenters."""
+
+    workspace = WorkspacePaths(workspace_path.expanduser().resolve())
+    resolved_doc_id = _validate_id(doc_id, "doc_id")
+    segmenter_name = _validate_plugin_name(default_segmenter_registry(), segmenter)
+    payload: dict[str, object] = {
+        "command": "segment",
+        "status": "placeholder",
+        "doc_id": resolved_doc_id,
+        "segmenter": segmenter_name,
+        "inputs": {"document": str(workspace.sources_parsed / resolved_doc_id / "document.json")},
+        "outputs": {
+            "sections_manifest": str(
+                workspace.sources_sections / resolved_doc_id / "sections.jsonl"
+            ),
+            "sections_dir": str(workspace.sources_sections / resolved_doc_id),
+        },
+        "backend_not_run": True,
+    }
+    path = None if dry_run else _write_placeholder(workspace, f"segment-{resolved_doc_id}", payload)
+    _print_placeholder("segment", path)
+
+
+@wiki_app.command("compile")
+def wiki_compile(
+    workspace_path: Annotated[Path, typer.Argument(help="BookGraph workspace/output root path.")],
+    doc_id: Annotated[str, typer.Argument(help="Sectioned document id.")],
+    backend: Annotated[
+        str,
+        typer.Option("--backend", "-b", help="Wiki backend requested for the future backend."),
+    ] = "llmwiki",
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Print the interface contract without writing files."),
+    ] = False,
+) -> None:
+    """Declare the wiki compile interface without invoking wiki backends."""
+
+    workspace = WorkspacePaths(workspace_path.expanduser().resolve())
+    resolved_doc_id = _validate_id(doc_id, "doc_id")
+    backend_name = _validate_plugin_name(default_wiki_backend_registry(), backend)
+    payload: dict[str, object] = {
+        "command": "wiki compile",
+        "status": "placeholder",
+        "doc_id": resolved_doc_id,
+        "backend": backend_name,
+        "inputs": {
+            "sections_manifest": str(
+                workspace.sources_sections / resolved_doc_id / "sections.jsonl"
+            )
+        },
+        "outputs": {"wiki_book_dir": str(workspace.wiki_books / resolved_doc_id)},
+        "backend_not_run": True,
+    }
+    path = None if dry_run else _write_placeholder(
+        workspace, f"wiki-compile-{resolved_doc_id}", payload
+    )
+    _print_placeholder("wiki compile", path)
+
+
+@reading_plan_app.command("create")
+def reading_plan_create(
+    workspace_path: Annotated[Path, typer.Argument(help="BookGraph workspace/output root path.")],
+    doc_id: Annotated[str, typer.Argument(help="Sectioned document id.")],
+    plan_id: Annotated[
+        str | None,
+        typer.Option("--plan-id", help="Reading plan id; defaults to the doc id."),
+    ] = None,
+    daily_sections: Annotated[
+        int,
+        typer.Option("--daily-sections", help="Requested sections per daily reading tick."),
+    ] = 1,
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Print the interface contract without writing files."),
+    ] = False,
+) -> None:
+    """Declare the reading-plan create interface without building progress state."""
+
+    workspace = WorkspacePaths(workspace_path.expanduser().resolve())
+    resolved_doc_id = _validate_id(doc_id, "doc_id")
+    resolved_plan_id = _validate_id(plan_id or resolved_doc_id, "plan_id")
+    if daily_sections < 1:
+        raise typer.BadParameter("daily_sections must be at least 1")
+    payload: dict[str, object] = {
+        "command": "reading-plan create",
+        "status": "placeholder",
+        "doc_id": resolved_doc_id,
+        "plan_id": resolved_plan_id,
+        "daily_sections": daily_sections,
+        "inputs": {
+            "sections_manifest": str(
+                workspace.sources_sections / resolved_doc_id / "sections.jsonl"
+            )
+        },
+        "outputs": {"reading_plan": str(workspace.reading_plans_root / f"{resolved_plan_id}.json")},
+        "backend_not_run": True,
+    }
+    path = None if dry_run else _write_placeholder(
+        workspace, f"reading-plan-create-{resolved_plan_id}", payload
+    )
+    _print_placeholder("reading-plan create", path)
+
+
+@reading_plan_app.command("next")
+def reading_plan_next(
+    workspace_path: Annotated[Path, typer.Argument(help="BookGraph workspace/output root path.")],
+    plan_id: Annotated[str, typer.Argument(help="Reading plan id.")],
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Print the interface contract without writing files."),
+    ] = False,
+) -> None:
+    """Declare the reading-plan next-section interface without reading progress state."""
+
+    workspace = WorkspacePaths(workspace_path.expanduser().resolve())
+    resolved_plan_id = _validate_id(plan_id, "plan_id")
+    payload: dict[str, object] = {
+        "command": "reading-plan next",
+        "status": "placeholder",
+        "plan_id": resolved_plan_id,
+        "inputs": {"reading_plan": str(workspace.reading_plans_root / f"{resolved_plan_id}.json")},
+        "outputs": {"context_pack": None},
+        "backend_not_run": True,
+    }
+    path = None if dry_run else _write_placeholder(
+        workspace, f"reading-plan-next-{resolved_plan_id}", payload
+    )
+    _print_placeholder("reading-plan next", path)
+
+
+@reading_plan_app.command("mark-read")
+def reading_plan_mark_read(
+    workspace_path: Annotated[Path, typer.Argument(help="BookGraph workspace/output root path.")],
+    plan_id: Annotated[str, typer.Argument(help="Reading plan id.")],
+    section_id: Annotated[
+        str | None,
+        typer.Option("--section-id", help="Specific section id; defaults to current section."),
+    ] = None,
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Print the interface contract without writing files."),
+    ] = False,
+) -> None:
+    """Declare the mark-read interface without mutating progress state."""
+
+    workspace = WorkspacePaths(workspace_path.expanduser().resolve())
+    resolved_plan_id = _validate_id(plan_id, "plan_id")
+    payload: dict[str, object] = {
+        "command": "reading-plan mark-read",
+        "status": "placeholder",
+        "plan_id": resolved_plan_id,
+        "section_id": section_id,
+        "inputs": {"reading_plan": str(workspace.reading_plans_root / f"{resolved_plan_id}.json")},
+        "outputs": {"reading_plan": str(workspace.reading_plans_root / f"{resolved_plan_id}.json")},
+        "backend_not_run": True,
+    }
+    path = None if dry_run else _write_placeholder(
+        workspace, f"reading-plan-mark-read-{resolved_plan_id}", payload
+    )
+    _print_placeholder("reading-plan mark-read", path)

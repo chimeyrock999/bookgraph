@@ -1,0 +1,157 @@
+# CLI Artifact Contracts
+
+This file defines filesystem artifact schemas shared by CLI stages.
+
+## `sources/inbox/<book_id>/book.json`
+
+Owner: `bookgraph add-book` and future book-level orchestration commands.
+
+Current schema:
+
+```json
+{
+  "book_id": "designing-data-intensive-applications",
+  "title": "Designing Data Intensive Applications",
+  "source_type": "pdf",
+  "source_path": "/absolute/original/input/path/book.pdf",
+  "workspace_path": "/absolute/workspace/path",
+  "status": "registered",
+  "pipeline": {
+    "parser": null,
+    "segmenter": null,
+    "wiki_backend": null
+  },
+  "paths": {
+    "book_root": "/absolute/workspace/sources/inbox/<book_id>",
+    "original": "/absolute/workspace/sources/inbox/<book_id>/original.pdf",
+    "parsed": "/absolute/workspace/sources/parsed/<book_id>",
+    "sections": "/absolute/workspace/sources/sections/<book_id>",
+    "wiki": "/absolute/workspace/wiki/books/<book_id>"
+  }
+}
+```
+
+### Field rules
+
+- `book_id`: stable slug derived from title/path unless explicitly overridden by a future option.
+- `title`: human title derived from filename unless explicitly overridden by a future option.
+- `source_type`: currently `pdf` only for `add-book`.
+- `source_path`: absolute path to the user-provided source path at registration time.
+- `workspace_path`: absolute workspace path used at registration time.
+- `status`: current book-level lifecycle state.
+- `pipeline`: per-stage selected plugin/status placeholder. Current registration sets all values to `null`.
+- `paths`: absolute target paths for downstream stages.
+
+### Status values
+
+Current implemented value:
+
+- `registered`: raw source copied/registered; no parser/segmenter/wiki stage has run.
+
+Future values must be added here before implementation, likely:
+
+- `parsed`
+- `segmented`
+- `wiki_built`
+- `failed`
+
+## `sources/inbox/<book_id>/original.pdf`
+
+Owner: `bookgraph add-book`.
+
+Rules:
+
+- Byte copy of the registered PDF source.
+- Must keep `.pdf` extension.
+- Must not be modified by parser/segmenter/wiki commands.
+
+## `sources/parsed/<doc_id>/document.json`
+
+Owner: `bookgraph parse` and future parser commands.
+
+Current schema mirrors `bookgraph.models.Document`:
+
+```json
+{
+  "doc_id": "deep-work",
+  "title": "Deep Work",
+  "blocks": [
+    {
+      "id": "b0",
+      "type": "title",
+      "text": "Deep Work",
+      "level": 1,
+      "page_idx": null,
+      "bbox": null,
+      "source_path": "/absolute/source/path.md",
+      "order": 0,
+      "metadata": {
+        "line_start": 1,
+        "line_end": 1
+      }
+    }
+  ],
+  "metadata": {
+    "parser": "markdown",
+    "source_path": "/absolute/source/path.md"
+  }
+}
+```
+
+### Document field rules
+
+- `doc_id`: stable slug used as output folder name.
+- `title`: parser-derived title if available; fallback to source filename/title.
+- `blocks`: ordered canonical content blocks.
+- `metadata.parser`: parser plugin name that produced the document.
+- `metadata.source_path`: absolute source path parsed by the command.
+
+### Block field rules
+
+- `id`: stable within the document. Current adapters use order/page-based ids.
+- `type`: one of canonical block types from `models.py`: `title`, `text`, `list`, `table`, `image`, `chart`, `equation`, `unknown`.
+- `text`: normalized text content for downstream segmenters.
+- `level`: heading/title level if known.
+- `page_idx`: page index if known from paged parser output.
+- `bbox`: source bounding box if known from layout parser output.
+- `source_path`: path to source/parser artifact that proves the block.
+- `order`: zero-based reading order.
+- `metadata`: parser-specific provenance. Must be JSON scalar values only.
+
+## Parser side artifacts
+
+Parser commands may write side artifacts only under `sources/parsed/<doc_id>/`.
+
+Allowed examples:
+
+```text
+sources/parsed/<doc_id>/<doc_id>.md          # staged markdown from MarkItDown
+sources/parsed/<doc_id>/assets/...           # extracted images/assets
+sources/parsed/<doc_id>/*_middle.json        # copied or generated MinerU output, future
+sources/parsed/<doc_id>/*_layout.pdf         # MinerU layout debug PDF, future
+sources/parsed/<doc_id>/*_span.pdf           # MinerU span debug PDF, future
+```
+
+If a parser writes side artifacts, it should reference them from `document.metadata` when useful.
+
+## Future artifacts
+
+Do not implement these without updating this file.
+
+### `sources/sections/<doc_id>/sections.jsonl`
+
+Expected owner: segmenter commands.
+
+Each line likely mirrors `bookgraph.models.Section` and must include provenance back to `document.json` block ids.
+
+### `sources/sections/<doc_id>/<section_id>.md`
+
+Expected owner: segmenter commands.
+
+Markdown reading section with frontmatter/provenance.
+
+### `reading_plans/<plan_id>.json`
+
+Expected owner: reading-plan commands/MCP.
+
+Daily reading state, next section pointer, and completion status.

@@ -57,6 +57,11 @@ src/bookgraph/
     llmwiki.py              # Stage section markdown for llm-wiki-compiler
 ```
 
+## CLI contracts
+
+CLI behavior and filesystem artifact contracts live in `.docs/cli/`. Update those contracts on
+`main` before implementing or changing CLI behavior so other agents can coordinate safely.
+
 ## Workspace layout
 
 Create a workspace/output directory:

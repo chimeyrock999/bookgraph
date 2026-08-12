@@ -17,6 +17,9 @@ parsers = [
   "markitdown>=0.1.0",
   "pypdf>=4.0",
 ]
+mineru = [
+  "mineru>=2.0",
+]
 mcp = [
   "fastmcp>=2.0",
 ]

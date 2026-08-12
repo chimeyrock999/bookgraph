@@ -246,6 +246,7 @@ produced middle JSON.
 bookgraph parse-book /path/to/workspace <book_id>
 bookgraph parse-book /path/to/workspace <book_id> --runner mineru --method auto
 bookgraph parse-book /path/to/workspace <book_id> --runner-command mineru --backend pipeline
+bookgraph parse-book /path/to/workspace <book_id> --timeout-seconds 3600
 bookgraph parse-book /path/to/workspace <book_id> --parser mineru-middle-json
 bookgraph parse-book /path/to/workspace <book_id> --dry-run
 ```
@@ -256,6 +257,7 @@ Options:
 - `--runner-command`: executable name reserved for the future runner. Default: `mineru`.
 - `--method/-m`: MinerU method reserved for the future runner. Default: `auto`.
 - `--backend/-b`: optional MinerU backend reserved for the future runner.
+- `--timeout-seconds`: subprocess timeout reserved for the future runner. Default: `3600`; pass `0` to reserve no timeout.
 - `--parser/-p`: parser reserved after runner output is staged. Default: `mineru-middle-json`.
 
 Writes, unless `--dry-run`:

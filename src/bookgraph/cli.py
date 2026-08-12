@@ -219,6 +219,13 @@ def parse_book(
             help="Optional MinerU backend reserved for the future runner.",
         ),
     ] = None,
+    timeout_seconds: Annotated[
+        int | None,
+        typer.Option(
+            "--timeout-seconds",
+            help="Timeout reserved for the future MinerU subprocess; pass 0 for no timeout.",
+        ),
+    ] = 3600,
     parser: Annotated[
         str,
         typer.Option(
@@ -242,6 +249,9 @@ def parse_book(
     book_manifest = workspace.sources_inbox / resolved_book_id / "book.json"
     parsed_dir = workspace.sources_parsed / resolved_book_id
     middle_json = parsed_dir / f"{resolved_book_id}_middle.json"
+    if timeout_seconds is not None and timeout_seconds < 0:
+        raise typer.BadParameter("timeout_seconds must be non-negative")
+    resolved_timeout = None if timeout_seconds == 0 else timeout_seconds
     payload: dict[str, object] = {
         "command": "parse-book",
         "status": "placeholder",
@@ -251,6 +261,7 @@ def parse_book(
             "command": runner_command,
             "method": method,
             "backend": backend,
+            "timeout_seconds": resolved_timeout,
         },
         "parser": parser,
         "inputs": {

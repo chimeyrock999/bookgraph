@@ -34,6 +34,8 @@ def test_parse_book_writes_only_placeholder_contract(tmp_path: Path) -> None:
             "ocr",
             "--backend",
             "pipeline",
+            "--timeout-seconds",
+            "7200",
         ],
     )
 
@@ -46,6 +48,7 @@ def test_parse_book_writes_only_placeholder_contract(tmp_path: Path) -> None:
         "command": "mineru",
         "method": "ocr",
         "backend": "pipeline",
+        "timeout_seconds": 7200,
     }
     assert payload["parser"] == "mineru-middle-json"
     assert payload["intermediate_outputs"] == {
@@ -158,3 +161,15 @@ def test_placeholder_commands_validate_ids(tmp_path: Path) -> None:
 
     assert result.exit_code != 0
     assert "doc_id must be a lowercase hyphenated slug" in result.output
+
+
+def test_parse_book_rejects_negative_timeout(tmp_path: Path) -> None:
+    runner = _init_workspace(tmp_path)
+
+    result = runner.invoke(
+        app,
+        ["parse-book", str(tmp_path), "deep-work", "--timeout-seconds", "-1"],
+    )
+
+    assert result.exit_code != 0
+    assert "timeout_seconds must be non-negative" in result.output

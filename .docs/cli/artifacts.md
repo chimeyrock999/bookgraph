@@ -190,7 +190,8 @@ Common schema:
     "name": "mineru",
     "command": "mineru",
     "method": "auto",
-    "backend": null
+    "backend": null,
+    "timeout_seconds": 3600
   },
   "parser": "mineru-middle-json",
   "inputs": {},

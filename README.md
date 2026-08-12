@@ -38,7 +38,7 @@ MCP server plugins
 
 ```text
 src/bookgraph/
-  cli.py                    # Typer CLI
+  cli/                      # Typer CLI (one module per pipeline stage)
   books.py                  # CLI-only book registration contract
   workspace.py              # Workspace/output path contract
   models.py                 # CanonicalBlock, Document, Section

@@ -139,12 +139,14 @@ Implemented:
 
 - Markdown and MarkItDown parser adapters plus file type based parser routing
 - CLI `parse` / `parsers` commands writing `sources/parsed/<doc_id>/document.json`
+- MinerU runner that invokes MinerU on a raw PDF and stages its `*_middle.json`
+- Section writer core (`write_sections`): `sections.jsonl` + `<section_id>.md`
+  reading units from segmenter output, plus a `document.json` reader
 
 Planned next:
 
-- MinerU runner plugin (invoke MinerU instead of only consuming its output)
+- CLI `segment` command wiring the segmenter + section writer end to end
 - PDF metadata/bookmark detector
 - `bookgraph.toml` config loading so CLI defaults come from the workspace
-- section manifest writer (`sections.jsonl`)
 - reading plan store
 - FastMCP server exposing `get_next_section`, `get_section`, `search`, `mark_read`

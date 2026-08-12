@@ -50,3 +50,13 @@ class Section(BaseModel):
     next_id: str | None = None
     block_ids: list[str] = Field(default_factory=list)
     metadata: dict[str, str | int | float | bool | None] = Field(default_factory=dict)
+
+
+class ReadingPlan(BaseModel):
+    """Persisted daily reading progression state for one document."""
+
+    plan_id: str
+    doc_id: str
+    daily_sections: int = 1
+    section_ids: list[str] = Field(default_factory=list)
+    completed: list[str] = Field(default_factory=list)

@@ -49,6 +49,21 @@ def write_sections(sections: list[Section], output_dir: Path) -> SectionsOutput:
     return SectionsOutput(manifest=manifest, markdown=markdown)
 
 
+def read_sections(manifest: Path) -> list[Section]:
+    """Load the canonical ``sections.jsonl`` manifest in reading order.
+
+    The manifest's line order is the linear reading order the segmenter emitted,
+    so consumers (e.g. the reading-plan store) can rely on it directly. Blank
+    lines are ignored so a trailing newline does not become an empty section.
+    """
+
+    sections: list[Section] = []
+    for line in manifest.read_text().splitlines():
+        if line.strip():
+            sections.append(Section.model_validate_json(line))
+    return sections
+
+
 def render_section_markdown(section: Section) -> str:
     """Render a section as Markdown with YAML frontmatter carrying provenance.
 

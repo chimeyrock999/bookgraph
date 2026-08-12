@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from bookgraph.models import Section
-from bookgraph.sections import render_section_markdown, write_sections
+from bookgraph.sections import read_sections, render_section_markdown, write_sections
 
 
 def _section(section_id: str, title: str = "A Title", **overrides: object) -> Section:
@@ -72,6 +72,25 @@ def test_write_sections_handles_no_sections(tmp_path: Path) -> None:
 
     assert output.manifest.read_text() == ""
     assert output.markdown == []
+
+
+def test_read_sections_round_trips_write_sections_in_order(tmp_path: Path) -> None:
+    sections = [_section("ddia.a", "A"), _section("ddia.b", "B"), _section("ddia.c", "C")]
+    output = write_sections(sections, tmp_path)
+
+    loaded = read_sections(output.manifest)
+
+    assert [section.id for section in loaded] == ["ddia.a", "ddia.b", "ddia.c"]
+    assert loaded == sections
+
+
+def test_read_sections_ignores_blank_lines(tmp_path: Path) -> None:
+    manifest = tmp_path / "sections.jsonl"
+    manifest.write_text(_section("ddia.a", "A").model_dump_json() + "\n\n")
+
+    loaded = read_sections(manifest)
+
+    assert [section.id for section in loaded] == ["ddia.a"]
 
 
 def test_render_section_markdown_carries_provenance_frontmatter() -> None:

@@ -6,8 +6,34 @@ from typing import Annotated
 import typer
 
 from bookgraph.cli._app import reading_plan_app
-from bookgraph.cli._shared import _print_placeholder, _validate_id, _write_placeholder
+from bookgraph.cli._shared import _validate_id
+from bookgraph.models import ReadingPlan
+from bookgraph.reading_plans import (
+    create_reading_plan,
+    mark_section_read,
+    next_sections,
+    read_reading_plan,
+    write_reading_plan,
+)
+from bookgraph.sections import read_sections
 from bookgraph.workspace import WorkspacePaths
+
+
+def _plan_path(workspace: WorkspacePaths, plan_id: str) -> Path:
+    return workspace.reading_plans_root / f"{plan_id}.json"
+
+
+def _load_plan(workspace: WorkspacePaths, plan_id: str) -> tuple[Path, ReadingPlan]:
+    path = _plan_path(workspace, plan_id)
+    if not path.is_file():
+        raise typer.BadParameter(
+            f"Reading plan not found: {path}. Run 'bookgraph reading-plan create' first."
+        )
+    try:
+        plan = read_reading_plan(path)
+    except (OSError, ValueError) as exc:
+        raise typer.BadParameter(f"Invalid reading plan: {path}: {exc}") from exc
+    return path, plan
 
 
 @reading_plan_app.command("create")
@@ -20,65 +46,68 @@ def reading_plan_create(
     ] = None,
     daily_sections: Annotated[
         int,
-        typer.Option("--daily-sections", help="Requested sections per daily reading tick."),
+        typer.Option("--daily-sections", help="Sections per daily reading tick."),
     ] = 1,
     dry_run: Annotated[
         bool,
-        typer.Option("--dry-run", help="Print the interface contract without writing files."),
+        typer.Option("--dry-run", help="Compute the plan and print it without writing files."),
     ] = False,
 ) -> None:
-    """Declare the reading-plan create interface without building progress state."""
+    """Create a reading plan from a document's sections manifest."""
 
     workspace = WorkspacePaths(workspace_path.expanduser().resolve())
     resolved_doc_id = _validate_id(doc_id, "doc_id")
     resolved_plan_id = _validate_id(plan_id or resolved_doc_id, "plan_id")
     if daily_sections < 1:
         raise typer.BadParameter("daily_sections must be at least 1")
-    payload: dict[str, object] = {
-        "command": "reading-plan create",
-        "status": "placeholder",
-        "doc_id": resolved_doc_id,
-        "plan_id": resolved_plan_id,
-        "daily_sections": daily_sections,
-        "inputs": {
-            "sections_manifest": str(
-                workspace.sources_sections / resolved_doc_id / "sections.jsonl"
-            )
-        },
-        "outputs": {"reading_plan": str(workspace.reading_plans_root / f"{resolved_plan_id}.json")},
-        "backend_not_run": True,
-    }
-    path = None if dry_run else _write_placeholder(
-        workspace, f"reading-plan-create-{resolved_plan_id}", payload
-    )
-    _print_placeholder("reading-plan create", path)
+
+    manifest = workspace.sources_sections / resolved_doc_id / "sections.jsonl"
+    if not manifest.is_file():
+        raise typer.BadParameter(
+            f"Sections manifest not found: {manifest}. Run 'bookgraph segment' first."
+        )
+    try:
+        sections = read_sections(manifest)
+    except (OSError, ValueError) as exc:
+        raise typer.BadParameter(f"Invalid sections manifest: {manifest}: {exc}") from exc
+
+    try:
+        plan = create_reading_plan(
+            sections,
+            plan_id=resolved_plan_id,
+            doc_id=resolved_doc_id,
+            daily_sections=daily_sections,
+        )
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+    typer.echo(f"plan_id: {plan.plan_id}")
+    typer.echo(f"doc_id: {plan.doc_id}")
+    typer.echo(f"daily_sections: {plan.daily_sections}")
+    typer.echo(f"sections: {len(plan.section_ids)}")
+    if dry_run:
+        typer.echo("reading_plan: (dry run, not written)")
+        return
+    path = write_reading_plan(plan, _plan_path(workspace, resolved_plan_id))
+    typer.echo(f"reading_plan: {path}")
 
 
 @reading_plan_app.command("next")
 def reading_plan_next(
     workspace_path: Annotated[Path, typer.Argument(help="BookGraph workspace/output root path.")],
     plan_id: Annotated[str, typer.Argument(help="Reading plan id.")],
-    dry_run: Annotated[
-        bool,
-        typer.Option("--dry-run", help="Print the interface contract without writing files."),
-    ] = False,
 ) -> None:
-    """Declare the reading-plan next-section interface without reading progress state."""
+    """Print the next unread sections for a reading plan without mutating it."""
 
     workspace = WorkspacePaths(workspace_path.expanduser().resolve())
     resolved_plan_id = _validate_id(plan_id, "plan_id")
-    payload: dict[str, object] = {
-        "command": "reading-plan next",
-        "status": "placeholder",
-        "plan_id": resolved_plan_id,
-        "inputs": {"reading_plan": str(workspace.reading_plans_root / f"{resolved_plan_id}.json")},
-        "outputs": {"context_pack": None},
-        "backend_not_run": True,
-    }
-    path = None if dry_run else _write_placeholder(
-        workspace, f"reading-plan-next-{resolved_plan_id}", payload
-    )
-    _print_placeholder("reading-plan next", path)
+    _, plan = _load_plan(workspace, resolved_plan_id)
+    pack = next_sections(plan)
+
+    typer.echo(f"plan_id: {pack.plan_id}")
+    typer.echo(f"doc_id: {pack.doc_id}")
+    typer.echo(f"next: {', '.join(pack.sections) if pack.sections else '(complete)'}")
+    typer.echo(f"remaining: {pack.remaining}")
 
 
 @reading_plan_app.command("mark-read")
@@ -87,27 +116,32 @@ def reading_plan_mark_read(
     plan_id: Annotated[str, typer.Argument(help="Reading plan id.")],
     section_id: Annotated[
         str | None,
-        typer.Option("--section-id", help="Specific section id; defaults to current section."),
+        typer.Option("--section-id", help="Specific section id; defaults to the next unread one."),
     ] = None,
     dry_run: Annotated[
         bool,
-        typer.Option("--dry-run", help="Print the interface contract without writing files."),
+        typer.Option("--dry-run", help="Print what would be marked without writing files."),
     ] = False,
 ) -> None:
-    """Declare the mark-read interface without mutating progress state."""
+    """Mark a section read and persist the updated reading plan."""
 
     workspace = WorkspacePaths(workspace_path.expanduser().resolve())
     resolved_plan_id = _validate_id(plan_id, "plan_id")
-    payload: dict[str, object] = {
-        "command": "reading-plan mark-read",
-        "status": "placeholder",
-        "plan_id": resolved_plan_id,
-        "section_id": section_id,
-        "inputs": {"reading_plan": str(workspace.reading_plans_root / f"{resolved_plan_id}.json")},
-        "outputs": {"reading_plan": str(workspace.reading_plans_root / f"{resolved_plan_id}.json")},
-        "backend_not_run": True,
-    }
-    path = None if dry_run else _write_placeholder(
-        workspace, f"reading-plan-mark-read-{resolved_plan_id}", payload
-    )
-    _print_placeholder("reading-plan mark-read", path)
+    path, plan = _load_plan(workspace, resolved_plan_id)
+
+    # section_id is a lookup key against the plan's own section ids (which contain
+    # dots, e.g. ``<doc_id>.<slug>``), never a filename, so it is validated by
+    # membership in the store rather than as a bare slug.
+    try:
+        updated, marked = mark_section_read(plan, section_id)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+    typer.echo(f"plan_id: {updated.plan_id}")
+    typer.echo(f"marked: {marked}")
+    typer.echo(f"completed: {len(updated.completed)}/{len(updated.section_ids)}")
+    if dry_run:
+        typer.echo("reading_plan: (dry run, not written)")
+        return
+    write_reading_plan(updated, path)
+    typer.echo(f"reading_plan: {path}")

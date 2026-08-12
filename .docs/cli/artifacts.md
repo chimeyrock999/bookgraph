@@ -118,6 +118,32 @@ Current schema mirrors `bookgraph.models.Document`:
 - `order`: zero-based reading order.
 - `metadata`: parser-specific provenance. Must be JSON scalar values only.
 
+### Provenance rules for converting adapters
+
+When an adapter converts the original source into Markdown before building
+blocks, block-level and document-level provenance point at different files:
+
+- block `source_path` is the **staged artifact the block was read from**, because
+  `metadata.line_start` / `line_end` are line numbers in that artifact. Line 3 of
+  a `.docx` has no meaning; line 3 of the staged Markdown does.
+- `document.metadata.source_path` stays the **original user-provided source**.
+- `document.metadata.markdown_path` records the staged Markdown artifact.
+
+Current behavior:
+
+| Parser | block `source_path` | `metadata.source_path` |
+| --- | --- | --- |
+| `markdown` | the `.md` source itself | same `.md` source |
+| `markitdown` | `sources/parsed/<doc_id>/<doc_id>.md` | original `.docx`/`.pptx`/… |
+| `mineru-middle-json` | the `*_middle.json` file | same `*_middle.json` file |
+
+### List block rules
+
+`list` blocks keep reading structure rather than flattening to bullets:
+
+- ordered lists keep their numbers, including a non-default `start`;
+- nested lists keep hierarchy as two-space indentation per depth level.
+
 ## Parser side artifacts
 
 Parser commands may write side artifacts only under `sources/parsed/<doc_id>/`.

@@ -246,12 +246,44 @@ titles with colons or quotes cannot corrupt the frontmatter.
 > staging step; wiki backends should ultimately emit under `wiki/` instead. This
 > overlap is a known follow-up to resolve when the wiki stage is wired up.
 
+## `reading_plans/<plan_id>.json`
+
+Owner: the reading-plan stage (`bookgraph reading-plan` commands /
+`bookgraph.reading_plans`).
+
+Daily reading progression state for one document. One JSON file per plan id,
+mirroring `bookgraph.models.ReadingPlan`:
+
+```json
+{
+  "plan_id": "daily-ddia",
+  "doc_id": "ddia",
+  "daily_sections": 2,
+  "section_ids": ["ddia.intro", "ddia.chapter-1", "ddia.chapter-2"],
+  "completed": ["ddia.intro"]
+}
+```
+
+### Field rules
+
+- `plan_id`: reading plan id; doubles as the filename, so it is a filesystem-safe
+  slug (lowercase a-z, 0-9, hyphens). Validated on create.
+- `doc_id`: the segmented document this plan reads.
+- `daily_sections`: sections returned per `reading-plan next` tick. At least `1`.
+- `section_ids`: the document's sections in linear reading order, copied from the
+  `sources/sections/<doc_id>/sections.jsonl` line order at create time.
+- `completed`: section ids marked read, in the order they were completed. A subset
+  of `section_ids`.
+
+### Derived state (not stored)
+
+- **next batch**: the first up-to-`daily_sections` ids in `section_ids` that are
+  not in `completed`, in reading order.
+- **done**: every id in `section_ids` is in `completed`.
+
+These are recomputed from `section_ids` + `completed` on each `next` call rather
+than persisted, so the file stays a minimal source of truth.
+
 ## Future artifacts
 
 Do not implement these without updating this file.
-
-### `reading_plans/<plan_id>.json`
-
-Expected owner: reading-plan commands/MCP.
-
-Daily reading state, next section pointer, and completion status.

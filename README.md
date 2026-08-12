@@ -45,7 +45,9 @@ src/bookgraph/
   ports.py                  # Parser / Segmenter / WikiBackend interfaces
   plugins.py                # Name-based plugin registry
   defaults.py               # Built-in plugin registrations
-  documents.py              # document.json writer
+  documents.py              # document.json reader/writer
+  sections.py               # sections.jsonl + <section_id>.md reader/writer
+  reading_plans.py          # reading plan store (create/next/mark-read core)
   parsers/
     mineru.py               # MinerU *_middle.json adapter
     markdown.py             # Markdown -> canonical blocks (shared by Markdown-producing parsers)
@@ -144,10 +146,12 @@ Implemented:
   reading units from segmenter output, plus a `document.json` reader
 - CLI `segment` command: parses `document.json` through a segmenter and writes
   the section artifacts under `sources/sections/<doc_id>/`
+- Reading-plan store (`bookgraph.reading_plans`) and CLI `reading-plan
+  create`/`next`/`mark-read`: daily reading progression state under
+  `reading_plans/<plan_id>.json`
 
 Planned next:
 
 - PDF metadata/bookmark detector
 - `bookgraph.toml` config loading so CLI defaults come from the workspace
-- reading plan store
 - FastMCP server exposing `get_next_section`, `get_section`, `search`, `mark_read`

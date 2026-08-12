@@ -274,11 +274,123 @@ sections: <section_count>
 manifest: <workspace>/sources/sections/<doc_id>/sections.jsonl
 ```
 
+## `bookgraph reading-plan`
+
+**Status:** Implemented.
+
+Build and advance daily reading progression state for one segmented document.
+The plan is a single JSON file per plan id under `reading_plans/`; see
+`artifacts.md` for its schema.
+
+### `bookgraph reading-plan create`
+
+Create a reading plan from a document's sections manifest.
+
+```bash
+bookgraph reading-plan create /path/to/workspace <doc_id>
+bookgraph reading-plan create /path/to/workspace <doc_id> --plan-id ddia --daily-sections 1
+bookgraph reading-plan create /path/to/workspace <doc_id> --dry-run
+```
+
+#### Inputs
+
+- `workspace_path`: workspace/output root.
+- `doc_id`: segmented document id under `sources/sections/<doc_id>/`.
+- `--plan-id`: reading plan id; doubles as the output filename. Defaults to `doc_id`.
+- `--daily-sections`: sections per daily reading tick. Must be at least `1`. Default: `1`.
+- `--dry-run`: compute and print the plan without writing files.
+
+Reads `sources/sections/<doc_id>/sections.jsonl` (fails if missing or empty). The
+manifest's line order is taken as the linear reading order.
+
+#### Writes
+
+```text
+reading_plans/<plan_id>.json
+```
+
+#### Prints
+
+```text
+plan_id: <plan_id>
+doc_id: <doc_id>
+daily_sections: <n>
+sections: <section_count>
+reading_plan: <workspace>/reading_plans/<plan_id>.json
+```
+
+### `bookgraph reading-plan next`
+
+Print the next unread sections without mutating the plan.
+
+```bash
+bookgraph reading-plan next /path/to/workspace <plan_id>
+```
+
+#### Inputs
+
+- `workspace_path`: workspace/output root.
+- `plan_id`: existing reading plan id (fails if the plan file is missing).
+
+#### Writes
+
+- None. `next` is read-only.
+
+#### Prints
+
+```text
+plan_id: <plan_id>
+doc_id: <doc_id>
+next: <section_id>[, <section_id> ...]     # or "(complete)" when nothing is left
+remaining: <unread_count>
+```
+
+`next` returns up to `daily_sections` unread section ids, in reading order.
+
+### `bookgraph reading-plan mark-read`
+
+Mark a section read and persist the updated plan.
+
+```bash
+bookgraph reading-plan mark-read /path/to/workspace <plan_id>
+bookgraph reading-plan mark-read /path/to/workspace <plan_id> --section-id <section_id>
+bookgraph reading-plan mark-read /path/to/workspace <plan_id> --dry-run
+```
+
+#### Inputs
+
+- `workspace_path`: workspace/output root.
+- `plan_id`: existing reading plan id (fails if the plan file is missing).
+- `--section-id`: specific section id to mark. Must belong to the plan. Defaults
+  to the next unread section. Re-marking an already-read section is idempotent.
+- `--dry-run`: print what would be marked without writing files.
+
+#### Writes
+
+```text
+reading_plans/<plan_id>.json        # updated in place, unless --dry-run
+```
+
+#### Prints
+
+```text
+plan_id: <plan_id>
+marked: <section_id>
+completed: <completed_count>/<section_count>
+reading_plan: <workspace>/reading_plans/<plan_id>.json
+```
+
+### Must not do (all reading-plan commands)
+
+- Must not parse, segment, or compile wiki.
+- Must not run MCP server/tools.
+- Must not write outside `reading_plans/`.
+
 ## Placeholder command contracts
 
 The commands below expose the CLI interface and write placeholder request
 artifacts under `runs/cli-placeholders/`. They intentionally do **not** call the
-backend parser/wiki/reading-plan implementations yet.
+backend parser/wiki implementations yet.
 
 ### `bookgraph parse-book`
 
@@ -350,61 +462,6 @@ Placeholder declares:
 - input: `sources/sections/<doc_id>/sections.jsonl`
 - future output: `wiki/books/<doc_id>/`
 - `backend_not_run: true`
-
-### `bookgraph reading-plan create`
-
-**Status:** Implemented as CLI placeholder.
-
-```bash
-bookgraph reading-plan create /path/to/workspace <doc_id>
-bookgraph reading-plan create /path/to/workspace <doc_id> --plan-id ddia --daily-sections 1
-bookgraph reading-plan create /path/to/workspace <doc_id> --dry-run
-```
-
-`--daily-sections` must be at least `1`.
-
-Writes, unless `--dry-run`:
-
-```text
-runs/cli-placeholders/reading-plan-create-<plan_id>.json
-```
-
-Placeholder declares:
-
-- input: `sources/sections/<doc_id>/sections.jsonl`
-- future output: `reading_plans/<plan_id>.json`
-- `backend_not_run: true`
-
-### `bookgraph reading-plan next`
-
-**Status:** Implemented as CLI placeholder.
-
-```bash
-bookgraph reading-plan next /path/to/workspace <plan_id>
-bookgraph reading-plan next /path/to/workspace <plan_id> --dry-run
-```
-
-Writes, unless `--dry-run`:
-
-```text
-runs/cli-placeholders/reading-plan-next-<plan_id>.json
-```
-
-### `bookgraph reading-plan mark-read`
-
-**Status:** Implemented as CLI placeholder.
-
-```bash
-bookgraph reading-plan mark-read /path/to/workspace <plan_id>
-bookgraph reading-plan mark-read /path/to/workspace <plan_id> --section-id <section_id>
-bookgraph reading-plan mark-read /path/to/workspace <plan_id> --dry-run
-```
-
-Writes, unless `--dry-run`:
-
-```text
-runs/cli-placeholders/reading-plan-mark-read-<plan_id>.json
-```
 
 ## Future backend contracts
 

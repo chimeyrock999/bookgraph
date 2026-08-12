@@ -167,10 +167,33 @@ def test_wiki_compile_writes_only_placeholder_contract(tmp_path: Path) -> None:
     assert not (tmp_path / "wiki" / "books" / "deep-work").exists()
 
 
-def test_reading_plan_commands_write_only_placeholder_contracts(tmp_path: Path) -> None:
-    runner = _init_workspace(tmp_path)
+def _write_sections_manifest(tmp_path: Path, doc_id: str, section_ids: list[str]) -> Path:
+    sections_dir = tmp_path / "sources" / "sections" / doc_id
+    sections_dir.mkdir(parents=True, exist_ok=True)
+    manifest = sections_dir / "sections.jsonl"
+    lines = [
+        json.dumps(
+            {
+                "id": section_id,
+                "doc_id": doc_id,
+                "title": section_id,
+                "level": 1,
+                "heading_path": [section_id],
+                "text": "Body.",
+                "block_ids": [],
+            }
+        )
+        for section_id in section_ids
+    ]
+    manifest.write_text("\n".join(lines) + "\n")
+    return manifest
 
-    create = runner.invoke(
+
+def test_reading_plan_create_builds_plan_from_sections(tmp_path: Path) -> None:
+    runner = _init_workspace(tmp_path)
+    _write_sections_manifest(tmp_path, "deep-work", ["deep-work.a", "deep-work.b", "deep-work.c"])
+
+    result = runner.invoke(
         app,
         [
             "reading-plan",
@@ -183,27 +206,111 @@ def test_reading_plan_commands_write_only_placeholder_contracts(tmp_path: Path) 
             "2",
         ],
     )
-    next_result = runner.invoke(app, ["reading-plan", "next", str(tmp_path), "daily-ddia"])
-    mark = runner.invoke(
+
+    assert result.exit_code == 0, result.output
+    assert "sections: 3" in result.output
+    plan = json.loads((tmp_path / "reading_plans" / "daily-ddia.json").read_text())
+    assert plan["plan_id"] == "daily-ddia"
+    assert plan["doc_id"] == "deep-work"
+    assert plan["daily_sections"] == 2
+    assert plan["section_ids"] == ["deep-work.a", "deep-work.b", "deep-work.c"]
+    assert plan["completed"] == []
+
+
+def test_reading_plan_create_reports_a_missing_sections_manifest(tmp_path: Path) -> None:
+    runner = _init_workspace(tmp_path)
+
+    result = runner.invoke(app, ["reading-plan", "create", str(tmp_path), "deep-work"])
+
+    assert result.exit_code != 0
+    assert "Sections manifest not found" in result.output
+    assert not (tmp_path / "reading_plans" / "deep-work.json").exists()
+
+
+def test_reading_plan_create_dry_run_writes_nothing(tmp_path: Path) -> None:
+    runner = _init_workspace(tmp_path)
+    _write_sections_manifest(tmp_path, "deep-work", ["deep-work.a"])
+
+    result = runner.invoke(
+        app, ["reading-plan", "create", str(tmp_path), "deep-work", "--dry-run"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "sections: 1" in result.output
+    assert not (tmp_path / "reading_plans" / "deep-work.json").exists()
+
+
+def test_reading_plan_next_returns_the_daily_batch(tmp_path: Path) -> None:
+    runner = _init_workspace(tmp_path)
+    _write_sections_manifest(tmp_path, "deep-work", ["deep-work.a", "deep-work.b", "deep-work.c"])
+    create = runner.invoke(
+        app,
+        ["reading-plan", "create", str(tmp_path), "deep-work", "--daily-sections", "2"],
+    )
+    assert create.exit_code == 0, create.output
+
+    result = runner.invoke(app, ["reading-plan", "next", str(tmp_path), "deep-work"])
+
+    assert result.exit_code == 0, result.output
+    assert "next: deep-work.a, deep-work.b" in result.output
+    assert "remaining: 3" in result.output
+
+
+def test_reading_plan_next_reports_a_missing_plan(tmp_path: Path) -> None:
+    runner = _init_workspace(tmp_path)
+
+    result = runner.invoke(app, ["reading-plan", "next", str(tmp_path), "missing"])
+
+    assert result.exit_code != 0
+    assert "Reading plan not found" in result.output
+
+
+def test_reading_plan_mark_read_advances_progress(tmp_path: Path) -> None:
+    runner = _init_workspace(tmp_path)
+    _write_sections_manifest(tmp_path, "deep-work", ["deep-work.a", "deep-work.b"])
+    runner.invoke(app, ["reading-plan", "create", str(tmp_path), "deep-work"])
+
+    # Default marks the next unread section.
+    first = runner.invoke(app, ["reading-plan", "mark-read", str(tmp_path), "deep-work"])
+    assert first.exit_code == 0, first.output
+    assert "marked: deep-work.a" in first.output
+    assert "completed: 1/2" in first.output
+
+    # An explicit section id marks that one.
+    second = runner.invoke(
+        app,
+        ["reading-plan", "mark-read", str(tmp_path), "deep-work", "--section-id", "deep-work.b"],
+    )
+    assert second.exit_code == 0, second.output
+    assert "completed: 2/2" in second.output
+    plan = json.loads((tmp_path / "reading_plans" / "deep-work.json").read_text())
+    assert plan["completed"] == ["deep-work.a", "deep-work.b"]
+
+    # After completion, next reports nothing left.
+    nxt = runner.invoke(app, ["reading-plan", "next", str(tmp_path), "deep-work"])
+    assert "next: (complete)" in nxt.output
+    assert "remaining: 0" in nxt.output
+
+
+def test_reading_plan_mark_read_rejects_an_unknown_section(tmp_path: Path) -> None:
+    runner = _init_workspace(tmp_path)
+    _write_sections_manifest(tmp_path, "deep-work", ["deep-work.a"])
+    runner.invoke(app, ["reading-plan", "create", str(tmp_path), "deep-work"])
+
+    result = runner.invoke(
         app,
         [
             "reading-plan",
             "mark-read",
             str(tmp_path),
-            "daily-ddia",
+            "deep-work",
             "--section-id",
-            "deep-work.intro",
+            "deep-work.ghost",
         ],
     )
 
-    assert create.exit_code == 0, create.output
-    assert next_result.exit_code == 0, next_result.output
-    assert mark.exit_code == 0, mark.output
-    assert _placeholder(tmp_path, "reading-plan-create-daily-ddia")["daily_sections"] == 2
-    assert _placeholder(tmp_path, "reading-plan-next-daily-ddia")["backend_not_run"] is True
-    mark_payload = _placeholder(tmp_path, "reading-plan-mark-read-daily-ddia")
-    assert mark_payload["section_id"] == "deep-work.intro"
-    assert not (tmp_path / "reading_plans" / "daily-ddia.json").exists()
+    assert result.exit_code != 0
+    assert "is not in reading plan" in result.output
 
 
 def test_placeholder_commands_support_dry_run_without_writing(tmp_path: Path) -> None:

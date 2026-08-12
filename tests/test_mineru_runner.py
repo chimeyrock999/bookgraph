@@ -135,3 +135,51 @@ def test_run_raises_when_no_middle_json_is_produced(tmp_path: Path) -> None:
 
     with pytest.raises(MinerURunError, match="no .*_middle.json"):
         runner.run(_pdf(tmp_path), tmp_path / "parsed" / "doc")
+
+
+def test_run_maps_timeout_to_run_error(tmp_path: Path) -> None:
+    def timing_out(argv: list[str]) -> subprocess.CompletedProcess[str]:
+        raise subprocess.TimeoutExpired(cmd=argv, timeout=1)
+
+    runner = MinerURunner(timeout_seconds=1, run_process=timing_out)
+    out = tmp_path / "parsed" / "doc"
+
+    with pytest.raises(MinerURunError, match="timed out"):
+        runner.run(_pdf(tmp_path), out)
+    assert not (out / "_mineru").exists()
+
+
+def test_run_refuses_multiple_middle_json(tmp_path: Path) -> None:
+    def two_middle(argv: list[str]) -> subprocess.CompletedProcess[str]:
+        work = _output_dir_from_argv(argv)
+        for name in ("a", "b"):
+            auto = work / name / "auto"
+            auto.mkdir(parents=True, exist_ok=True)
+            (auto / f"{name}_middle.json").write_text('{"pdf_info": []}')
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    runner = MinerURunner(run_process=two_middle)
+
+    with pytest.raises(MinerURunError, match="multiple"):
+        runner.run(_pdf(tmp_path), tmp_path / "parsed" / "doc")
+
+
+def test_run_rolls_back_partial_staging_on_copy_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import bookgraph.parsers.mineru_runner as mod
+
+    def failing_copytree(*args: object, **kwargs: object) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(mod.shutil, "copytree", failing_copytree)
+    runner = MinerURunner(run_process=_fake_mineru())  # produces images/ -> copytree
+    out = tmp_path / "parsed" / "doc"
+
+    with pytest.raises(OSError, match="disk full"):
+        runner.run(_pdf(tmp_path), out)
+
+    # Nothing half-staged and the temp work dir is gone.
+    assert not (out / "doc_middle.json").exists()
+    assert not (out / "doc.md").exists()
+    assert not (out / "_mineru").exists()

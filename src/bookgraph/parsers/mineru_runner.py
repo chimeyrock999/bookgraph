@@ -12,6 +12,7 @@ from bookgraph.utils import MINERU_MIDDLE_JSON_SUFFIX
 CommandRunner = Callable[[list[str]], "subprocess.CompletedProcess[str]"]
 
 _WORK_SUBDIR = "_mineru"
+_DEFAULT_TIMEOUT_SECONDS = 3600
 
 
 class MinerUNotInstalledError(RuntimeError):
@@ -66,6 +67,7 @@ class MinerURunner:
     command: str = "mineru"
     method: str = "auto"
     backend: str | None = None
+    timeout_seconds: int | None = _DEFAULT_TIMEOUT_SECONDS
     run_process: CommandRunner | None = field(default=None)
 
     def run(self, pdf: Path, output_dir: Path) -> MinerURunResult:
@@ -76,14 +78,19 @@ class MinerURunner:
         if not pdf.is_file():
             raise UnsupportedSourceError(f"PDF not found: {pdf}")
 
-        runner = self.run_process
-        if runner is None:
+        process: CommandRunner | None = self.run_process
+        if process is None:
             if shutil.which(self.command) is None:
                 raise MinerUNotInstalledError(
                     f"MinerU executable '{self.command}' not found on PATH. "
                     "Install with: uv sync --extra mineru"
                 )
-            runner = _default_run_process
+            timeout = self.timeout_seconds
+
+            def _run_default(argv: list[str]) -> subprocess.CompletedProcess[str]:
+                return _default_run_process(argv, timeout)
+
+            process = _run_default
 
         work_dir = output_dir / _WORK_SUBDIR
         if work_dir.exists():
@@ -91,25 +98,26 @@ class MinerURunner:
         work_dir.mkdir(parents=True, exist_ok=True)
 
         argv = self._build_argv(pdf, work_dir)
-        completed = runner(argv)
-        if completed.returncode != 0:
-            shutil.rmtree(work_dir, ignore_errors=True)
-            raise MinerURunError(
-                f"MinerU failed on {pdf.name} (exit {completed.returncode}): "
-                f"{(completed.stderr or '').strip() or 'no stderr'}"
-            )
+        try:
+            try:
+                completed = process(argv)
+            except subprocess.TimeoutExpired as exc:
+                raise MinerURunError(
+                    f"MinerU timed out after {self.timeout_seconds}s on {pdf.name}."
+                ) from exc
+            if completed.returncode != 0:
+                raise MinerURunError(
+                    f"MinerU failed on {pdf.name} (exit {completed.returncode}): "
+                    f"{(completed.stderr or '').strip() or 'no stderr'}"
+                )
 
-        middle_json = _locate_middle_json(work_dir)
-        if middle_json is None:
-            shutil.rmtree(work_dir, ignore_errors=True)
-            raise MinerURunError(
-                f"MinerU produced no *{MINERU_MIDDLE_JSON_SUFFIX} for {pdf.name}. "
-                f"Searched under {work_dir}."
+            middle_json = _select_middle_json(work_dir, pdf)
+            # Staging copies out of work_dir before the finally cleanup removes it.
+            return _stage_artifacts(
+                middle_json, output_dir, stem=output_dir.name, command=argv
             )
-
-        result = _stage_artifacts(middle_json, output_dir, stem=output_dir.name, command=argv)
-        shutil.rmtree(work_dir, ignore_errors=True)
-        return result
+        finally:
+            shutil.rmtree(work_dir, ignore_errors=True)
 
     def _build_argv(self, pdf: Path, work_dir: Path) -> list[str]:
         argv = [self.command, "-p", str(pdf), "-o", str(work_dir), "-m", self.method]
@@ -118,19 +126,36 @@ class MinerURunner:
         return argv
 
 
-def _default_run_process(argv: list[str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(argv, capture_output=True, text=True, check=False)  # noqa: S603
+def _default_run_process(
+    argv: list[str], timeout: int | None
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(  # noqa: S603
+        argv, capture_output=True, text=True, check=False, timeout=timeout
+    )
 
 
-def _locate_middle_json(work_dir: Path) -> Path | None:
-    """Find MinerU's middle JSON without hardcoding its nested layout.
+def _select_middle_json(work_dir: Path, pdf: Path) -> Path:
+    """Find the one MinerU middle JSON without hardcoding its nested layout.
 
     MinerU's output directory structure varies across versions (``<name>/auto/``
     and similar), so the file is located by suffix instead of a fixed path.
+    Multiple matches are refused rather than silently picking one, because
+    downstream would then parse an arbitrary file.
     """
 
     matches = sorted(work_dir.rglob(f"*{MINERU_MIDDLE_JSON_SUFFIX}"))
-    return matches[0] if matches else None
+    if not matches:
+        raise MinerURunError(
+            f"MinerU produced no *{MINERU_MIDDLE_JSON_SUFFIX} for {pdf.name}. "
+            f"Searched under {work_dir}."
+        )
+    if len(matches) > 1:
+        names = ", ".join(match.name for match in matches)
+        raise MinerURunError(
+            f"MinerU produced multiple *{MINERU_MIDDLE_JSON_SUFFIX} for {pdf.name}: "
+            f"{names}. Cannot pick one safely."
+        )
+    return matches[0]
 
 
 def _stage_artifacts(
@@ -146,9 +171,7 @@ def _stage_artifacts(
     output_dir.mkdir(parents=True, exist_ok=True)
     source_dir = middle_json.parent
     mineru_stem = middle_json.name[: -len(MINERU_MIDDLE_JSON_SUFFIX)]
-
-    staged_middle = output_dir / f"{stem}{MINERU_MIDDLE_JSON_SUFFIX}"
-    shutil.copy2(middle_json, staged_middle)
+    written: list[Path] = []
 
     def stage_file(suffix: str) -> Path | None:
         candidate = source_dir / f"{mineru_stem}{suffix}"
@@ -156,22 +179,42 @@ def _stage_artifacts(
             return None
         target = output_dir / f"{stem}{suffix}"
         shutil.copy2(candidate, target)
+        written.append(target)
         return target
 
-    images_dir: Path | None = None
-    source_images = source_dir / "images"
-    if source_images.is_dir():
-        images_dir = output_dir / "images"
-        if images_dir.exists():
-            shutil.rmtree(images_dir)
-        shutil.copytree(source_images, images_dir)
+    try:
+        staged_middle = output_dir / f"{stem}{MINERU_MIDDLE_JSON_SUFFIX}"
+        shutil.copy2(middle_json, staged_middle)
+        written.append(staged_middle)
+
+        markdown = stage_file(".md")
+        layout_pdf = stage_file("_layout.pdf")
+        span_pdf = stage_file("_span.pdf")
+        content_list = stage_file("_content_list.json")
+
+        images_dir: Path | None = None
+        source_images = source_dir / "images"
+        if source_images.is_dir():
+            images_dir = output_dir / "images"
+            if images_dir.exists():
+                shutil.rmtree(images_dir)
+            shutil.copytree(source_images, images_dir)
+            written.append(images_dir)
+    except OSError:
+        # Don't leave a half-staged parsed dir behind on a copy failure.
+        for path in written:
+            if path.is_dir():
+                shutil.rmtree(path, ignore_errors=True)
+            else:
+                path.unlink(missing_ok=True)
+        raise
 
     return MinerURunResult(
         middle_json=staged_middle,
         command=command,
-        markdown=stage_file(".md"),
-        layout_pdf=stage_file("_layout.pdf"),
-        span_pdf=stage_file("_span.pdf"),
-        content_list=stage_file("_content_list.json"),
+        markdown=markdown,
+        layout_pdf=layout_pdf,
+        span_pdf=span_pdf,
+        content_list=content_list,
         images_dir=images_dir,
     )

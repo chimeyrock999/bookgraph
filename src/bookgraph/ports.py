@@ -32,5 +32,10 @@ class WikiBackend(ABC):
     name: str
 
     @abstractmethod
-    def ingest_sections(self, sections: list[Section], workspace: Path) -> None:
+    def compile_book(self, sections: list[Section], output_dir: Path) -> Path:
         raise NotImplementedError
+
+    def ingest_sections(self, sections: list[Section], workspace: Path) -> None:
+        """Backward-compatible staging hook kept until old callers are removed."""
+
+        self.compile_book(sections, workspace)

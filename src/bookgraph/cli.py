@@ -5,6 +5,7 @@ from typing import Annotated
 
 import typer
 
+from bookgraph.books import build_book_registration, register_book
 from bookgraph.workspace import WorkspacePaths, default_config
 
 app = typer.Typer(help="BookGraph: pluggable document-to-graph-wiki pipeline.")
@@ -39,6 +40,35 @@ def init(
     if not workspace.config.exists():
         workspace.config.write_text(default_config(workspace))
     typer.echo(f"Initialized BookGraph workspace at {workspace.root}")
+
+
+@app.command("add-book")
+def add_book(
+    workspace_path: Annotated[Path, typer.Argument(help="BookGraph workspace/output root path.")],
+    pdf_path: Annotated[Path, typer.Argument(help="PDF book path to register.")],
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Print the registration contract without writing files."),
+    ] = False,
+) -> None:
+    """Register a PDF book in the workspace without running parsers or segmenters."""
+
+    workspace = WorkspacePaths(workspace_path.expanduser().resolve())
+    try:
+        registration = build_book_registration(workspace, pdf_path)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+    if dry_run:
+        typer.echo(f"Would register book {registration.book_id}")
+        typer.echo(f"Manifest: {registration.manifest_path}")
+        typer.echo("No parser or segmenter was run.")
+        return
+
+    register_book(registration)
+    typer.echo(f"Registered book {registration.book_id}")
+    typer.echo(f"Manifest: {registration.manifest_path}")
+    typer.echo("No parser or segmenter was run.")
 
 
 @app.command()

@@ -13,10 +13,11 @@ from bookgraph.defaults import (
     default_segmenter_registry,
     default_wiki_backend_registry,
 )
-from bookgraph.documents import write_document
+from bookgraph.documents import read_document, write_document
 from bookgraph.parsers.markitdown import MissingParserDependencyError
 from bookgraph.parsers.routing import UnsupportedSourceError, select_parser_name
 from bookgraph.plugins import PluginRegistry
+from bookgraph.sections import write_sections
 from bookgraph.utils import doc_id_from_path, validate_slug_id
 from bookgraph.workspace import WorkspacePaths, default_config
 
@@ -326,35 +327,35 @@ def segment(
         typer.Option(
             "--segmenter",
             "-s",
-            help="Segmenter plugin requested for the future backend.",
+            help="Segmenter plugin name.",
         ),
     ] = "heading",
-    dry_run: Annotated[
-        bool,
-        typer.Option("--dry-run", help="Print the interface contract without writing files."),
-    ] = False,
 ) -> None:
-    """Declare the segmentation interface without running segmenters."""
+    """Segment a parsed document into human reading sections under sources/sections/."""
 
     workspace = WorkspacePaths(workspace_path.expanduser().resolve())
     resolved_doc_id = _validate_id(doc_id, "doc_id")
-    segmenter_name = _validate_plugin_name(default_segmenter_registry(), segmenter)
-    payload: dict[str, object] = {
-        "command": "segment",
-        "status": "placeholder",
-        "doc_id": resolved_doc_id,
-        "segmenter": segmenter_name,
-        "inputs": {"document": str(workspace.sources_parsed / resolved_doc_id / "document.json")},
-        "outputs": {
-            "sections_manifest": str(
-                workspace.sources_sections / resolved_doc_id / "sections.jsonl"
-            ),
-            "sections_dir": str(workspace.sources_sections / resolved_doc_id),
-        },
-        "backend_not_run": True,
-    }
-    path = None if dry_run else _write_placeholder(workspace, f"segment-{resolved_doc_id}", payload)
-    _print_placeholder("segment", path)
+    registry = default_segmenter_registry()
+    segmenter_name = _validate_plugin_name(registry, segmenter)
+
+    document_path = workspace.sources_parsed / resolved_doc_id / "document.json"
+    if not document_path.is_file():
+        raise typer.BadParameter(
+            f"Parsed document not found: {document_path}. Run 'bookgraph parse' first."
+        )
+
+    document = read_document(document_path)
+    sections = registry.get(segmenter_name).segment(document)
+    output_dir = workspace.sources_sections / resolved_doc_id
+    try:
+        output = write_sections(sections, output_dir)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+    typer.echo(f"segmenter: {segmenter_name}")
+    typer.echo(f"doc_id: {resolved_doc_id}")
+    typer.echo(f"sections: {len(sections)}")
+    typer.echo(f"manifest: {output.manifest}")
 
 
 @wiki_app.command("compile")

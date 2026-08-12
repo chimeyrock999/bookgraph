@@ -211,7 +211,7 @@ Rules:
 
 ## `sources/sections/<doc_id>/sections.jsonl`
 
-Owner: the segment stage (`bookgraph.sections.write_sections`; future `bookgraph segment` command).
+Owner: the segment stage (`bookgraph segment` command / `bookgraph.sections.write_sections`).
 
 Canonical machine-readable section manifest. One JSON object per line, each
 mirroring `bookgraph.models.Section`:

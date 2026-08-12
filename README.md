@@ -142,10 +142,11 @@ Implemented:
 - MinerU runner that invokes MinerU on a raw PDF and stages its `*_middle.json`
 - Section writer core (`write_sections`): `sections.jsonl` + `<section_id>.md`
   reading units from segmenter output, plus a `document.json` reader
+- CLI `segment` command: parses `document.json` through a segmenter and writes
+  the section artifacts under `sources/sections/<doc_id>/`
 
 Planned next:
 
-- CLI `segment` command wiring the segmenter + section writer end to end
 - PDF metadata/bookmark detector
 - `bookgraph.toml` config loading so CLI defaults come from the workspace
 - reading plan store

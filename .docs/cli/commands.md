@@ -229,11 +229,56 @@ blocks: <block_count>
 document: <workspace>/sources/parsed/<doc_id>/document.json
 ```
 
+## `bookgraph segment`
+
+**Status:** Implemented.
+
+Segment a parsed document into human reading sections.
+
+```bash
+bookgraph segment /path/to/workspace <doc_id>
+bookgraph segment /path/to/workspace <doc_id> --segmenter heading
+```
+
+### Inputs
+
+- `workspace_path`: workspace/output root.
+- `doc_id`: parsed document id under `sources/parsed/<doc_id>/`.
+- `--segmenter/-s`: segmenter plugin name, validated against the segmenter registry. Default: `heading`.
+
+Reads `sources/parsed/<doc_id>/document.json` (fails if missing).
+
+### Writes
+
+```text
+sources/sections/<doc_id>/sections.jsonl
+sources/sections/<doc_id>/<section_id>.md
+```
+
+See `artifacts.md` for the section artifact schemas. Duplicate section ids fail
+the command rather than overwriting.
+
+### Must not do
+
+- Must not parse.
+- Must not compile wiki.
+- Must not update reading progress.
+- Must not run MCP server/tools.
+
+### Prints
+
+```text
+segmenter: <segmenter_name>
+doc_id: <doc_id>
+sections: <section_count>
+manifest: <workspace>/sources/sections/<doc_id>/sections.jsonl
+```
+
 ## Placeholder command contracts
 
 The commands below expose the CLI interface and write placeholder request
 artifacts under `runs/cli-placeholders/`. They intentionally do **not** call the
-backend parser/segmenter/wiki/reading-plan implementations yet.
+backend parser/wiki/reading-plan implementations yet.
 
 ### `bookgraph parse-book`
 
@@ -280,30 +325,6 @@ Placeholder declares:
   - optional `<book_id>_content_list.json`
   - optional `images/`
 - future final output: `sources/parsed/<book_id>/document.json`
-- `backend_not_run: true`
-
-### `bookgraph segment`
-
-**Status:** Implemented as CLI placeholder.
-
-```bash
-bookgraph segment /path/to/workspace <doc_id>
-bookgraph segment /path/to/workspace <doc_id> --segmenter heading
-bookgraph segment /path/to/workspace <doc_id> --dry-run
-```
-
-`--segmenter` is validated against the segmenter plugin registry; typoed plugin names fail before a placeholder is written.
-
-Writes, unless `--dry-run`:
-
-```text
-runs/cli-placeholders/segment-<doc_id>.json
-```
-
-Placeholder declares:
-
-- input: `sources/parsed/<doc_id>/document.json`
-- future outputs: `sources/sections/<doc_id>/sections.jsonl`, section Markdown files
 - `backend_not_run: true`
 
 ### `bookgraph wiki compile`

@@ -1,16 +1,22 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import typer
 
 from bookgraph.books import build_book_registration, register_book
-from bookgraph.defaults import default_parser_registry
+from bookgraph.defaults import (
+    default_parser_registry,
+    default_segmenter_registry,
+    default_wiki_backend_registry,
+)
 from bookgraph.documents import write_document
 from bookgraph.parsers.markitdown import MissingParserDependencyError
 from bookgraph.parsers.routing import UnsupportedSourceError, select_parser_name
+from bookgraph.plugins import PluginRegistry
 from bookgraph.utils import doc_id_from_path, validate_slug_id
 from bookgraph.workspace import WorkspacePaths, default_config
 
@@ -19,6 +25,39 @@ wiki_app = typer.Typer(help="Wiki backend command interfaces.")
 reading_plan_app = typer.Typer(help="Reading-plan command interfaces.")
 app.add_typer(wiki_app, name="wiki")
 app.add_typer(reading_plan_app, name="reading-plan")
+
+_SOURCE_TYPE_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+
+
+def _validate_id(value: str, field_name: str) -> str:
+    try:
+        return validate_slug_id(value, field_name=field_name)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+
+def _validate_plugin_name(registry: PluginRegistry[Any], name: str) -> str:
+    try:
+        registry.get(name)
+    except KeyError as exc:
+        available = ", ".join(registry.names())
+        raise typer.BadParameter(f"{exc.args[0]} Available: {available}") from exc
+    return name
+
+
+def _registered_original_path(workspace: WorkspacePaths, book_id: str, manifest: Path) -> Path:
+    source_type = "pdf"
+    if manifest.is_file():
+        try:
+            payload = json.loads(manifest.read_text())
+        except (OSError, json.JSONDecodeError) as exc:
+            raise typer.BadParameter(f"Invalid book manifest: {manifest}") from exc
+        raw_source_type = payload.get("source_type")
+        if isinstance(raw_source_type, str):
+            if not _SOURCE_TYPE_PATTERN.fullmatch(raw_source_type):
+                raise typer.BadParameter(f"Invalid source_type in book manifest: {raw_source_type}")
+            source_type = raw_source_type
+    return workspace.sources_inbox / book_id / f"original.{source_type}"
 
 
 def _resolve_workspace_path(path: Path | None, output: Path | None) -> Path:
@@ -147,14 +186,7 @@ def parse(
         available = ", ".join(registry.names())
         raise typer.BadParameter(f"{exc.args[0]} Available: {available}") from exc
 
-    try:
-        resolved_doc_id = (
-            validate_slug_id(doc_id, field_name="doc_id")
-            if doc_id
-            else _doc_id_for_source(source_path)
-        )
-    except ValueError as exc:
-        raise typer.BadParameter(str(exc)) from exc
+    resolved_doc_id = _validate_id(doc_id, "doc_id") if doc_id else _doc_id_for_source(source_path)
     parsed_dir = workspace.sources_parsed / resolved_doc_id
     try:
         document = plugin.parse(source_path, parsed_dir)
@@ -242,11 +274,10 @@ def parse_book(
     """Declare the registered-book parse interface without invoking parser backends."""
 
     workspace = WorkspacePaths(workspace_path.expanduser().resolve())
-    try:
-        resolved_book_id = validate_slug_id(book_id, field_name="book_id")
-    except ValueError as exc:
-        raise typer.BadParameter(str(exc)) from exc
+    resolved_book_id = _validate_id(book_id, "book_id")
+    parser_name = _validate_plugin_name(default_parser_registry(), parser)
     book_manifest = workspace.sources_inbox / resolved_book_id / "book.json"
+    original_source = _registered_original_path(workspace, resolved_book_id, book_manifest)
     parsed_dir = workspace.sources_parsed / resolved_book_id
     middle_json = parsed_dir / f"{resolved_book_id}_middle.json"
     if timeout_seconds is not None and timeout_seconds < 0:
@@ -263,10 +294,10 @@ def parse_book(
             "backend": backend,
             "timeout_seconds": resolved_timeout,
         },
-        "parser": parser,
+        "parser": parser_name,
         "inputs": {
             "book_manifest": str(book_manifest),
-            "original_pdf": str(workspace.sources_inbox / resolved_book_id / "original.pdf"),
+            "original_source": str(original_source),
         },
         "intermediate_outputs": {
             "parsed_dir": str(parsed_dir),
@@ -306,15 +337,13 @@ def segment(
     """Declare the segmentation interface without running segmenters."""
 
     workspace = WorkspacePaths(workspace_path.expanduser().resolve())
-    try:
-        resolved_doc_id = validate_slug_id(doc_id, field_name="doc_id")
-    except ValueError as exc:
-        raise typer.BadParameter(str(exc)) from exc
+    resolved_doc_id = _validate_id(doc_id, "doc_id")
+    segmenter_name = _validate_plugin_name(default_segmenter_registry(), segmenter)
     payload: dict[str, object] = {
         "command": "segment",
         "status": "placeholder",
         "doc_id": resolved_doc_id,
-        "segmenter": segmenter,
+        "segmenter": segmenter_name,
         "inputs": {"document": str(workspace.sources_parsed / resolved_doc_id / "document.json")},
         "outputs": {
             "sections_manifest": str(
@@ -344,21 +373,19 @@ def wiki_compile(
     """Declare the wiki compile interface without invoking wiki backends."""
 
     workspace = WorkspacePaths(workspace_path.expanduser().resolve())
-    try:
-        resolved_doc_id = validate_slug_id(doc_id, field_name="doc_id")
-    except ValueError as exc:
-        raise typer.BadParameter(str(exc)) from exc
+    resolved_doc_id = _validate_id(doc_id, "doc_id")
+    backend_name = _validate_plugin_name(default_wiki_backend_registry(), backend)
     payload: dict[str, object] = {
         "command": "wiki compile",
         "status": "placeholder",
         "doc_id": resolved_doc_id,
-        "backend": backend,
+        "backend": backend_name,
         "inputs": {
             "sections_manifest": str(
                 workspace.sources_sections / resolved_doc_id / "sections.jsonl"
             )
         },
-        "outputs": {"wiki_book_dir": str(workspace.wiki_root / "books" / resolved_doc_id)},
+        "outputs": {"wiki_book_dir": str(workspace.wiki_books / resolved_doc_id)},
         "backend_not_run": True,
     }
     path = None if dry_run else _write_placeholder(
@@ -387,11 +414,10 @@ def reading_plan_create(
     """Declare the reading-plan create interface without building progress state."""
 
     workspace = WorkspacePaths(workspace_path.expanduser().resolve())
-    try:
-        resolved_doc_id = validate_slug_id(doc_id, field_name="doc_id")
-        resolved_plan_id = validate_slug_id(plan_id or resolved_doc_id, field_name="plan_id")
-    except ValueError as exc:
-        raise typer.BadParameter(str(exc)) from exc
+    resolved_doc_id = _validate_id(doc_id, "doc_id")
+    resolved_plan_id = _validate_id(plan_id or resolved_doc_id, "plan_id")
+    if daily_sections < 1:
+        raise typer.BadParameter("daily_sections must be at least 1")
     payload: dict[str, object] = {
         "command": "reading-plan create",
         "status": "placeholder",
@@ -424,10 +450,7 @@ def reading_plan_next(
     """Declare the reading-plan next-section interface without reading progress state."""
 
     workspace = WorkspacePaths(workspace_path.expanduser().resolve())
-    try:
-        resolved_plan_id = validate_slug_id(plan_id, field_name="plan_id")
-    except ValueError as exc:
-        raise typer.BadParameter(str(exc)) from exc
+    resolved_plan_id = _validate_id(plan_id, "plan_id")
     payload: dict[str, object] = {
         "command": "reading-plan next",
         "status": "placeholder",
@@ -458,10 +481,7 @@ def reading_plan_mark_read(
     """Declare the mark-read interface without mutating progress state."""
 
     workspace = WorkspacePaths(workspace_path.expanduser().resolve())
-    try:
-        resolved_plan_id = validate_slug_id(plan_id, field_name="plan_id")
-    except ValueError as exc:
-        raise typer.BadParameter(str(exc)) from exc
+    resolved_plan_id = _validate_id(plan_id, "plan_id")
     payload: dict[str, object] = {
         "command": "reading-plan mark-read",
         "status": "placeholder",

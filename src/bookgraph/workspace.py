@@ -35,6 +35,10 @@ class WorkspacePaths:
         return self.wiki_root / "concepts"
 
     @property
+    def wiki_books(self) -> Path:
+        return self.wiki_root / "books"
+
+    @property
     def wiki_comparisons(self) -> Path:
         return self.wiki_root / "comparisons"
 
@@ -60,6 +64,7 @@ class WorkspacePaths:
             self.sources_parsed,
             self.sources_sections,
             self.wiki_concepts,
+            self.wiki_books,
             self.wiki_comparisons,
             self.wiki_daily,
             self.indexes_root,
@@ -76,6 +81,7 @@ class WorkspacePaths:
             "sources.sections": self.sources_sections,
             "wiki.root": self.wiki_root,
             "wiki.concepts": self.wiki_concepts,
+            "wiki.books": self.wiki_books,
             "wiki.comparisons": self.wiki_comparisons,
             "wiki.daily": self.wiki_daily,
             "indexes.root": self.indexes_root,

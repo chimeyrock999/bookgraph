@@ -72,6 +72,7 @@ sources.parsed
 sources.sections
 wiki.root
 wiki.concepts
+wiki.books
 wiki.comparisons
 wiki.daily
 indexes.root
@@ -260,6 +261,8 @@ Options:
 - `--timeout-seconds`: subprocess timeout reserved for the future runner. Default: `3600`; pass `0` to reserve no timeout.
 - `--parser/-p`: parser reserved after runner output is staged. Default: `mineru-middle-json`.
 
+`--parser` is validated against the parser plugin registry; typoed plugin names fail before a placeholder is written.
+
 Writes, unless `--dry-run`:
 
 ```text
@@ -268,7 +271,7 @@ runs/cli-placeholders/parse-book-<book_id>.json
 
 Placeholder declares:
 
-- inputs: `sources/inbox/<book_id>/book.json`, `sources/inbox/<book_id>/original.pdf`
+- inputs: `sources/inbox/<book_id>/book.json`, `sources/inbox/<book_id>/original.<source_type>`
 - future runner outputs staged flat under `sources/parsed/<book_id>/`:
   - `<book_id>_middle.json`
   - optional `<book_id>.md`
@@ -288,6 +291,8 @@ bookgraph segment /path/to/workspace <doc_id>
 bookgraph segment /path/to/workspace <doc_id> --segmenter heading
 bookgraph segment /path/to/workspace <doc_id> --dry-run
 ```
+
+`--segmenter` is validated against the segmenter plugin registry; typoed plugin names fail before a placeholder is written.
 
 Writes, unless `--dry-run`:
 
@@ -311,6 +316,8 @@ bookgraph wiki compile /path/to/workspace <doc_id> --backend llmwiki
 bookgraph wiki compile /path/to/workspace <doc_id> --dry-run
 ```
 
+`--backend` is validated against the wiki-backend plugin registry; typoed plugin names fail before a placeholder is written.
+
 Writes, unless `--dry-run`:
 
 ```text
@@ -332,6 +339,8 @@ bookgraph reading-plan create /path/to/workspace <doc_id>
 bookgraph reading-plan create /path/to/workspace <doc_id> --plan-id ddia --daily-sections 1
 bookgraph reading-plan create /path/to/workspace <doc_id> --dry-run
 ```
+
+`--daily-sections` must be at least `1`.
 
 Writes, unless `--dry-run`:
 

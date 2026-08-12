@@ -39,7 +39,7 @@ class BookRegistration:
 
     @property
     def wiki_path(self) -> Path:
-        return self.workspace.wiki_root / "books" / self.book_id
+        return self.workspace.wiki_books / self.book_id
 
     def manifest(self) -> dict[str, object]:
         return {

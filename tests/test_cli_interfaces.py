@@ -51,6 +51,10 @@ def test_parse_book_writes_only_placeholder_contract(tmp_path: Path) -> None:
         "timeout_seconds": 7200,
     }
     assert payload["parser"] == "mineru-middle-json"
+    assert payload["inputs"] == {
+        "book_manifest": str(tmp_path / "sources" / "inbox" / "deep-work" / "book.json"),
+        "original_source": str(tmp_path / "sources" / "inbox" / "deep-work" / "original.pdf"),
+    }
     assert payload["intermediate_outputs"] == {
         "parsed_dir": str(tmp_path / "sources" / "parsed" / "deep-work"),
         "middle_json": str(
@@ -71,6 +75,22 @@ def test_parse_book_writes_only_placeholder_contract(tmp_path: Path) -> None:
     assert payload["backend_not_run"] is True
     assert not (tmp_path / "sources" / "parsed" / "deep-work").exists()
     assert "Backend not run" in result.output
+
+
+def test_parse_book_uses_manifest_source_type_for_original_source(tmp_path: Path) -> None:
+    runner = _init_workspace(tmp_path)
+    manifest = tmp_path / "sources" / "inbox" / "deep-work" / "book.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(json.dumps({"source_type": "epub"}))
+
+    result = runner.invoke(app, ["parse-book", str(tmp_path), "deep-work"])
+
+    assert result.exit_code == 0, result.output
+    payload = _placeholder(tmp_path, "parse-book-deep-work")
+    assert payload["inputs"] == {
+        "book_manifest": str(manifest),
+        "original_source": str(manifest.parent / "original.epub"),
+    }
 
 
 def test_segment_writes_only_placeholder_contract(tmp_path: Path) -> None:
@@ -173,3 +193,42 @@ def test_parse_book_rejects_negative_timeout(tmp_path: Path) -> None:
 
     assert result.exit_code != 0
     assert "timeout_seconds must be non-negative" in result.output
+
+
+def test_placeholder_commands_validate_plugin_names(tmp_path: Path) -> None:
+    runner = _init_workspace(tmp_path)
+
+    parse = runner.invoke(
+        app,
+        ["parse-book", str(tmp_path), "deep-work", "--parser", "mineru-middlejson"],
+    )
+    segment = runner.invoke(
+        app,
+        ["segment", str(tmp_path), "deep-work", "--segmenter", "headng"],
+    )
+    wiki = runner.invoke(
+        app,
+        ["wiki", "compile", str(tmp_path), "deep-work", "--backend", "missing"],
+    )
+
+    assert parse.exit_code != 0
+    assert "Unknown parser plugin" in parse.output
+    assert "mineru-middle-json" in parse.output
+    assert segment.exit_code != 0
+    assert "Unknown segmenter plugin" in segment.output
+    assert "heading" in segment.output
+    assert wiki.exit_code != 0
+    assert "Unknown wiki backend plugin" in wiki.output
+    assert "llmwiki" in wiki.output
+
+
+def test_reading_plan_create_rejects_non_positive_daily_sections(tmp_path: Path) -> None:
+    runner = _init_workspace(tmp_path)
+
+    result = runner.invoke(
+        app,
+        ["reading-plan", "create", str(tmp_path), "deep-work", "--daily-sections", "0"],
+    )
+
+    assert result.exit_code != 0
+    assert "daily_sections must be at least 1" in result.output

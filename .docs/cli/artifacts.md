@@ -160,6 +160,38 @@ sources/parsed/<doc_id>/*_span.pdf           # MinerU span debug PDF, future
 
 If a parser writes side artifacts, it should reference them from `document.metadata` when useful.
 
+## Placeholder request artifacts
+
+Owner: CLI interface commands that reserve a future backend operation without
+running it.
+
+Path:
+
+```text
+runs/cli-placeholders/<command>-<id>.json
+```
+
+Common schema:
+
+```json
+{
+  "command": "segment",
+  "status": "placeholder",
+  "doc_id": "deep-work",
+  "inputs": {},
+  "outputs": {},
+  "backend_not_run": true
+}
+```
+
+Rules:
+
+- Placeholder artifacts are coordination contracts, not completed stage outputs.
+- They must not be written into `sources/parsed`, `sources/sections`, `wiki`, or
+  `reading_plans`.
+- `backend_not_run` must be `true`.
+- Backend agents can use these files to see the agreed command inputs/outputs.
+
 ## Future artifacts
 
 Do not implement these without updating this file.

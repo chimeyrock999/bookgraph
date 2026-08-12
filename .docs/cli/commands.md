@@ -228,36 +228,132 @@ blocks: <block_count>
 document: <workspace>/sources/parsed/<doc_id>/document.json
 ```
 
-## Planned command contracts
+## Placeholder command contracts
 
-Do not implement these without first expanding this file.
+The commands below expose the CLI interface and write placeholder request
+artifacts under `runs/cli-placeholders/`. They intentionally do **not** call the
+backend parser/segmenter/wiki/reading-plan implementations yet.
 
 ### `bookgraph parse-book`
 
-Potential owner: parser/orchestration.
+**Status:** Implemented as CLI placeholder.
 
-Purpose: parse a registered book from `sources/inbox/<book_id>/book.json`, update parser status, and write `sources/parsed/<book_id>/document.json`.
+```bash
+bookgraph parse-book /path/to/workspace <book_id>
+bookgraph parse-book /path/to/workspace <book_id> --parser mineru-runner
+bookgraph parse-book /path/to/workspace <book_id> --dry-run
+```
 
-Open questions:
+Writes, unless `--dry-run`:
 
-- Should it call a raw PDF runner or require pre-existing MinerU output?
-- How is parser selection read from `bookgraph.toml`?
-- How are run logs written under `runs/`?
+```text
+runs/cli-placeholders/parse-book-<book_id>.json
+```
+
+Placeholder declares:
+
+- input: `sources/inbox/<book_id>/book.json`
+- future output: `sources/parsed/<book_id>/document.json`
+- `backend_not_run: true`
 
 ### `bookgraph segment`
 
-Potential owner: segmenter.
+**Status:** Implemented as CLI placeholder.
 
-Purpose: convert `sources/parsed/<doc_id>/document.json` to human reading sections under `sources/sections/<doc_id>/`.
+```bash
+bookgraph segment /path/to/workspace <doc_id>
+bookgraph segment /path/to/workspace <doc_id> --segmenter heading
+bookgraph segment /path/to/workspace <doc_id> --dry-run
+```
+
+Writes, unless `--dry-run`:
+
+```text
+runs/cli-placeholders/segment-<doc_id>.json
+```
+
+Placeholder declares:
+
+- input: `sources/parsed/<doc_id>/document.json`
+- future outputs: `sources/sections/<doc_id>/sections.jsonl`, section Markdown files
+- `backend_not_run: true`
 
 ### `bookgraph wiki compile`
 
-Potential owner: wiki backend.
+**Status:** Implemented as CLI placeholder.
 
-Purpose: compile sections into linked Markdown/wiki artifacts under `wiki/`.
+```bash
+bookgraph wiki compile /path/to/workspace <doc_id>
+bookgraph wiki compile /path/to/workspace <doc_id> --backend llmwiki
+bookgraph wiki compile /path/to/workspace <doc_id> --dry-run
+```
 
-### `bookgraph reading-plan *`
+Writes, unless `--dry-run`:
 
-Potential owner: reading plan/MCP.
+```text
+runs/cli-placeholders/wiki-compile-<doc_id>.json
+```
 
-Purpose: create/update daily reading progress state under `reading_plans/`.
+Placeholder declares:
+
+- input: `sources/sections/<doc_id>/sections.jsonl`
+- future output: `wiki/books/<doc_id>/`
+- `backend_not_run: true`
+
+### `bookgraph reading-plan create`
+
+**Status:** Implemented as CLI placeholder.
+
+```bash
+bookgraph reading-plan create /path/to/workspace <doc_id>
+bookgraph reading-plan create /path/to/workspace <doc_id> --plan-id ddia --daily-sections 1
+bookgraph reading-plan create /path/to/workspace <doc_id> --dry-run
+```
+
+Writes, unless `--dry-run`:
+
+```text
+runs/cli-placeholders/reading-plan-create-<plan_id>.json
+```
+
+Placeholder declares:
+
+- input: `sources/sections/<doc_id>/sections.jsonl`
+- future output: `reading_plans/<plan_id>.json`
+- `backend_not_run: true`
+
+### `bookgraph reading-plan next`
+
+**Status:** Implemented as CLI placeholder.
+
+```bash
+bookgraph reading-plan next /path/to/workspace <plan_id>
+bookgraph reading-plan next /path/to/workspace <plan_id> --dry-run
+```
+
+Writes, unless `--dry-run`:
+
+```text
+runs/cli-placeholders/reading-plan-next-<plan_id>.json
+```
+
+### `bookgraph reading-plan mark-read`
+
+**Status:** Implemented as CLI placeholder.
+
+```bash
+bookgraph reading-plan mark-read /path/to/workspace <plan_id>
+bookgraph reading-plan mark-read /path/to/workspace <plan_id> --section-id <section_id>
+bookgraph reading-plan mark-read /path/to/workspace <plan_id> --dry-run
+```
+
+Writes, unless `--dry-run`:
+
+```text
+runs/cli-placeholders/reading-plan-mark-read-<plan_id>.json
+```
+
+## Future backend contracts
+
+The placeholder commands above reserve the interfaces. Do not wire real backend
+execution into them without first expanding this file and the artifact contracts.

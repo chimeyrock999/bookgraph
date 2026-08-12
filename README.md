@@ -38,6 +38,7 @@ MCP server plugins
 ```text
 src/bookgraph/
   cli.py                    # Typer CLI
+  workspace.py              # Workspace/output path contract
   models.py                 # CanonicalBlock, Document, Section
   ports.py                  # Parser / Segmenter / WikiBackend interfaces
   plugins.py                # Name-based plugin registry
@@ -52,10 +53,18 @@ src/bookgraph/
 
 ## Workspace layout
 
-Create a workspace:
+Create a workspace/output directory:
 
 ```bash
-bookgraph /path/to/workspace
+bookgraph init /path/to/workspace
+# or
+bookgraph init --output /path/to/workspace
+```
+
+Inspect the canonical output paths:
+
+```bash
+bookgraph paths /path/to/workspace
 ```
 
 It creates:
@@ -87,7 +96,7 @@ Implemented:
 - MinerU `*_middle.json` parser adapter skeleton
 - Heading-based segmenter
 - llmwiki staging backend
-- CLI workspace initializer
+- CLI workspace initializer with explicit `--output` alias and `paths` inspector
 
 Planned next:
 

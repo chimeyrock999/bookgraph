@@ -238,11 +238,25 @@ backend parser/segmenter/wiki/reading-plan implementations yet.
 
 **Status:** Implemented as CLI placeholder.
 
+Declare the book-level raw PDF parse interface. This is aligned with the MinerU
+runner contract from PR #1, but it still does **not** invoke MinerU or parse the
+produced middle JSON.
+
 ```bash
 bookgraph parse-book /path/to/workspace <book_id>
-bookgraph parse-book /path/to/workspace <book_id> --parser mineru-runner
+bookgraph parse-book /path/to/workspace <book_id> --runner mineru --method auto
+bookgraph parse-book /path/to/workspace <book_id> --runner-command mineru --backend pipeline
+bookgraph parse-book /path/to/workspace <book_id> --parser mineru-middle-json
 bookgraph parse-book /path/to/workspace <book_id> --dry-run
 ```
+
+Options:
+
+- `--runner`: raw-source runner reserved for the future first step. Default: `mineru`.
+- `--runner-command`: executable name reserved for the future runner. Default: `mineru`.
+- `--method/-m`: MinerU method reserved for the future runner. Default: `auto`.
+- `--backend/-b`: optional MinerU backend reserved for the future runner.
+- `--parser/-p`: parser reserved after runner output is staged. Default: `mineru-middle-json`.
 
 Writes, unless `--dry-run`:
 
@@ -252,8 +266,15 @@ runs/cli-placeholders/parse-book-<book_id>.json
 
 Placeholder declares:
 
-- input: `sources/inbox/<book_id>/book.json`
-- future output: `sources/parsed/<book_id>/document.json`
+- inputs: `sources/inbox/<book_id>/book.json`, `sources/inbox/<book_id>/original.pdf`
+- future runner outputs staged flat under `sources/parsed/<book_id>/`:
+  - `<book_id>_middle.json`
+  - optional `<book_id>.md`
+  - optional `<book_id>_layout.pdf`
+  - optional `<book_id>_span.pdf`
+  - optional `<book_id>_content_list.json`
+  - optional `images/`
+- future final output: `sources/parsed/<book_id>/document.json`
 - `backend_not_run: true`
 
 ### `bookgraph segment`

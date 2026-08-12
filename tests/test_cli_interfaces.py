@@ -22,13 +22,49 @@ def _placeholder(tmp_path: Path, name: str) -> dict[str, object]:
 def test_parse_book_writes_only_placeholder_contract(tmp_path: Path) -> None:
     runner = _init_workspace(tmp_path)
 
-    result = runner.invoke(app, ["parse-book", str(tmp_path), "deep-work", "--parser", "mineru"])
+    result = runner.invoke(
+        app,
+        [
+            "parse-book",
+            str(tmp_path),
+            "deep-work",
+            "--runner",
+            "mineru",
+            "--method",
+            "ocr",
+            "--backend",
+            "pipeline",
+        ],
+    )
 
     assert result.exit_code == 0, result.output
     payload = _placeholder(tmp_path, "parse-book-deep-work")
     assert payload["command"] == "parse-book"
     assert payload["book_id"] == "deep-work"
-    assert payload["parser"] == "mineru"
+    assert payload["runner"] == {
+        "name": "mineru",
+        "command": "mineru",
+        "method": "ocr",
+        "backend": "pipeline",
+    }
+    assert payload["parser"] == "mineru-middle-json"
+    assert payload["intermediate_outputs"] == {
+        "parsed_dir": str(tmp_path / "sources" / "parsed" / "deep-work"),
+        "middle_json": str(
+            tmp_path / "sources" / "parsed" / "deep-work" / "deep-work_middle.json"
+        ),
+        "markdown": str(tmp_path / "sources" / "parsed" / "deep-work" / "deep-work.md"),
+        "layout_pdf": str(
+            tmp_path / "sources" / "parsed" / "deep-work" / "deep-work_layout.pdf"
+        ),
+        "span_pdf": str(
+            tmp_path / "sources" / "parsed" / "deep-work" / "deep-work_span.pdf"
+        ),
+        "content_list": str(
+            tmp_path / "sources" / "parsed" / "deep-work" / "deep-work_content_list.json"
+        ),
+        "images_dir": str(tmp_path / "sources" / "parsed" / "deep-work" / "images"),
+    }
     assert payload["backend_not_run"] is True
     assert not (tmp_path / "sources" / "parsed" / "deep-work").exists()
     assert "Backend not run" in result.output

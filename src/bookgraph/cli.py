@@ -199,10 +199,34 @@ def parse_book(
         str,
         typer.Argument(help="Registered book id from sources/inbox/<book_id>."),
     ],
+    runner: Annotated[
+        str,
+        typer.Option("--runner", help="Runner requested for the future raw-source step."),
+    ] = "mineru",
+    runner_command: Annotated[
+        str,
+        typer.Option("--runner-command", help="Executable name for the future runner."),
+    ] = "mineru",
+    method: Annotated[
+        str,
+        typer.Option("--method", "-m", help="MinerU method reserved for the future runner."),
+    ] = "auto",
+    backend: Annotated[
+        str | None,
+        typer.Option(
+            "--backend",
+            "-b",
+            help="Optional MinerU backend reserved for the future runner.",
+        ),
+    ] = None,
     parser: Annotated[
         str,
-        typer.Option("--parser", "-p", help="Parser plugin requested for the future backend."),
-    ] = "auto",
+        typer.Option(
+            "--parser",
+            "-p",
+            help="Parser plugin reserved after runner output is staged.",
+        ),
+    ] = "mineru-middle-json",
     dry_run: Annotated[
         bool,
         typer.Option("--dry-run", help="Print the interface contract without writing files."),
@@ -216,13 +240,33 @@ def parse_book(
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
     book_manifest = workspace.sources_inbox / resolved_book_id / "book.json"
+    parsed_dir = workspace.sources_parsed / resolved_book_id
+    middle_json = parsed_dir / f"{resolved_book_id}_middle.json"
     payload: dict[str, object] = {
         "command": "parse-book",
         "status": "placeholder",
         "book_id": resolved_book_id,
+        "runner": {
+            "name": runner,
+            "command": runner_command,
+            "method": method,
+            "backend": backend,
+        },
         "parser": parser,
-        "inputs": {"book_manifest": str(book_manifest)},
-        "outputs": {"document": str(workspace.sources_parsed / resolved_book_id / "document.json")},
+        "inputs": {
+            "book_manifest": str(book_manifest),
+            "original_pdf": str(workspace.sources_inbox / resolved_book_id / "original.pdf"),
+        },
+        "intermediate_outputs": {
+            "parsed_dir": str(parsed_dir),
+            "middle_json": str(middle_json),
+            "markdown": str(parsed_dir / f"{resolved_book_id}.md"),
+            "layout_pdf": str(parsed_dir / f"{resolved_book_id}_layout.pdf"),
+            "span_pdf": str(parsed_dir / f"{resolved_book_id}_span.pdf"),
+            "content_list": str(parsed_dir / f"{resolved_book_id}_content_list.json"),
+            "images_dir": str(parsed_dir / "images"),
+        },
+        "outputs": {"document": str(parsed_dir / "document.json")},
         "backend_not_run": True,
     }
     path = None if dry_run else _write_placeholder(

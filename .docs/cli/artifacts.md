@@ -151,12 +151,20 @@ Parser commands may write side artifacts only under `sources/parsed/<doc_id>/`.
 Allowed examples:
 
 ```text
-sources/parsed/<doc_id>/<doc_id>.md          # staged markdown from MarkItDown
-sources/parsed/<doc_id>/assets/...           # extracted images/assets
-sources/parsed/<doc_id>/*_middle.json        # copied or generated MinerU output, future
-sources/parsed/<doc_id>/*_layout.pdf         # MinerU layout debug PDF, future
-sources/parsed/<doc_id>/*_span.pdf           # MinerU span debug PDF, future
+sources/parsed/<doc_id>/<doc_id>.md                  # staged markdown from MarkItDown or MinerU
+sources/parsed/<doc_id>/assets/...                   # extracted images/assets
+sources/parsed/<doc_id>/<doc_id>_middle.json         # staged MinerU middle JSON
+sources/parsed/<doc_id>/<doc_id>_layout.pdf          # MinerU layout debug PDF
+sources/parsed/<doc_id>/<doc_id>_span.pdf            # MinerU span debug PDF
+sources/parsed/<doc_id>/<doc_id>_content_list.json   # MinerU content-list JSON
+sources/parsed/<doc_id>/images/...                   # MinerU extracted images
 ```
+
+MinerU runner staging contract, once wired by a future backend command:
+
+- `MinerURunner.run(original_pdf, sources/parsed/<doc_id>)` invokes the MinerU CLI.
+- It stages artifacts flat under `sources/parsed/<doc_id>/` using `<doc_id>` as the filename stem.
+- It does not produce `document.json`; `mineru-middle-json` remains the parser that turns `<doc_id>_middle.json` into canonical blocks.
 
 If a parser writes side artifacts, it should reference them from `document.metadata` when useful.
 
@@ -175,10 +183,18 @@ Common schema:
 
 ```json
 {
-  "command": "segment",
+  "command": "parse-book",
   "status": "placeholder",
-  "doc_id": "deep-work",
+  "book_id": "deep-work",
+  "runner": {
+    "name": "mineru",
+    "command": "mineru",
+    "method": "auto",
+    "backend": null
+  },
+  "parser": "mineru-middle-json",
   "inputs": {},
+  "intermediate_outputs": {},
   "outputs": {},
   "backend_not_run": true
 }

@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
-from bookgraph.models import CanonicalBlock, Document
+from bookgraph.models import BlockType, CanonicalBlock, Document
 from bookgraph.ports import DocumentParser
+from bookgraph.utils import doc_id_from_path
 
 
 class MinerUMiddleJsonParser(DocumentParser):
@@ -39,15 +40,20 @@ class MinerUMiddleJsonParser(DocumentParser):
                     )
                 )
         return Document(
-            doc_id=source.stem.removesuffix("_middle"),
-            title=source.stem,
+            doc_id=doc_id_from_path(source),
+            title=_document_title(blocks) or source.stem,
             blocks=blocks,
+            metadata={"parser": self.name, "source_path": str(source)},
         )
 
 
-def _map_mineru_block_type(value: str) -> str:
+def _document_title(blocks: list[CanonicalBlock]) -> str | None:
+    return next((block.text for block in blocks if block.type == "title" and block.text), None)
+
+
+def _map_mineru_block_type(value: str) -> BlockType:
     if value in {"title", "text", "list", "table", "image", "chart"}:
-        return value
+        return cast(BlockType, value)
     if value == "interline_equation":
         return "equation"
     return "unknown"

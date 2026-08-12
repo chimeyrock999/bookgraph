@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Annotated
 
 import typer
 
 from bookgraph.books import build_book_registration, register_book
+from bookgraph.defaults import default_parser_registry
+from bookgraph.documents import write_document
+from bookgraph.parsers.markitdown import MissingParserDependencyError
+from bookgraph.parsers.routing import UnsupportedSourceError, select_parser_name
+from bookgraph.utils import doc_id_from_path
 from bookgraph.workspace import WorkspacePaths, default_config
 
 app = typer.Typer(help="BookGraph: pluggable document-to-graph-wiki pipeline.")
@@ -80,3 +86,77 @@ def paths(
     workspace = WorkspacePaths(path.expanduser().resolve())
     for name, location in workspace.as_mapping().items():
         typer.echo(f"{name}: {location}")
+
+
+def _doc_id_for_source(source: Path) -> str:
+    """Prefer a registered book id so parser output lands in the book's directory."""
+
+    manifest = source.parent / "book.json"
+    if manifest.is_file():
+        try:
+            book_id = json.loads(manifest.read_text()).get("book_id")
+        except (OSError, json.JSONDecodeError, AttributeError):
+            book_id = None
+        if isinstance(book_id, str) and book_id:
+            return book_id
+    return doc_id_from_path(source)
+
+
+@app.command()
+def parsers() -> None:
+    """List available parser plugins."""
+
+    for name in default_parser_registry().names():
+        typer.echo(name)
+
+
+@app.command()
+def parse(
+    source: Annotated[Path, typer.Argument(help="Source document to parse.")],
+    output: Annotated[
+        Path | None,
+        typer.Option("--output", "-o", help="Workspace root (default: current directory)."),
+    ] = None,
+    parser: Annotated[
+        str | None,
+        typer.Option("--parser", "-p", help="Parser plugin name; detected from file type."),
+    ] = None,
+    doc_id: Annotated[
+        str | None,
+        typer.Option("--doc-id", help="Override the document id used for output paths and ids."),
+    ] = None,
+) -> None:
+    """Parse a source document into canonical blocks under sources/parsed/."""
+
+    source_path = source.expanduser().resolve()
+    if not source_path.is_file():
+        raise typer.BadParameter(f"Source file not found: {source_path}")
+
+    workspace = WorkspacePaths((output or Path.cwd()).expanduser().resolve())
+    registry = default_parser_registry()
+    try:
+        parser_name = parser or select_parser_name(source_path)
+        plugin = registry.get(parser_name)
+    except UnsupportedSourceError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    except KeyError as exc:
+        available = ", ".join(registry.names())
+        raise typer.BadParameter(f"{exc.args[0]} Available: {available}") from exc
+
+    resolved_doc_id = doc_id or _doc_id_for_source(source_path)
+    parsed_dir = workspace.sources_parsed / resolved_doc_id
+    try:
+        document = plugin.parse(source_path, parsed_dir)
+    except MissingParserDependencyError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+    if document.doc_id != resolved_doc_id:
+        document = document.model_copy(update={"doc_id": resolved_doc_id})
+
+    document_path = write_document(document, parsed_dir)
+
+    typer.echo(f"parser: {parser_name}")
+    typer.echo(f"doc_id: {document.doc_id}")
+    typer.echo(f"title: {document.title}")
+    typer.echo(f"blocks: {len(document.blocks)}")
+    typer.echo(f"document: {document_path}")

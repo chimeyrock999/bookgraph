@@ -14,8 +14,9 @@ Input docs
   ↓
 Parser plugins
   - MinerU adapter for complex PDFs / OCR / formula / table-heavy docs
-  - MarkItDown adapter for Office/simple documents (planned)
-  - direct Markdown adapter (planned)
+  - MarkItDown adapter for Office/HTML/text documents (optional extra)
+  - direct Markdown adapter
+  - file type routing picks the adapter, `--parser` overrides it
   ↓
 Canonical document model
   ↓
@@ -44,8 +45,12 @@ src/bookgraph/
   ports.py                  # Parser / Segmenter / WikiBackend interfaces
   plugins.py                # Name-based plugin registry
   defaults.py               # Built-in plugin registrations
+  documents.py              # document.json writer
   parsers/
     mineru.py               # MinerU *_middle.json adapter
+    markdown.py             # Markdown -> canonical blocks (shared by Markdown-producing parsers)
+    markitdown.py           # MarkItDown adapter (lazy optional dependency)
+    routing.py              # File type -> parser plugin name
   segmenters/
     heading.py              # Heading/title-block segmenter
   wiki_backends/
@@ -80,6 +85,21 @@ bookgraph add-book /path/to/workspace /path/to/book.pdf --dry-run
 `sources/inbox/<book_id>/original.pdf` and writes `sources/inbox/<book_id>/book.json`
 with placeholder `parser`, `segmenter`, and `wiki_backend` fields set to `null`.
 
+Parse a source document into canonical blocks:
+
+```bash
+bookgraph parsers                                    # list parser plugins
+bookgraph parse notes.md -o /path/to/workspace       # parser picked by file type
+bookgraph parse book_middle.json -o /path/to/workspace
+bookgraph parse report.docx -o /path/to/workspace    # needs: uv sync --extra parsers
+bookgraph parse odd.bin -o /path/to/workspace --parser markdown
+```
+
+Output lands in `sources/parsed/<doc_id>/document.json`. `<doc_id>` comes from the
+neighbouring `book.json` when the source sits in a registered book directory, from
+`--doc-id`, or from the filename. PDFs need an explicit parser choice: parse MinerU's
+`*_middle.json` for complex books, or pass `--parser markitdown` for simple text PDFs.
+
 It creates:
 
 ```text
@@ -112,10 +132,14 @@ Implemented:
 - CLI workspace initializer with explicit `--output` alias and `paths` inspector
 - CLI-only `add-book` contract that registers a PDF source without running parser/segmenter
 
+- Markdown and MarkItDown parser adapters plus file type based parser routing
+- CLI `parse` / `parsers` commands writing `sources/parsed/<doc_id>/document.json`
+
 Planned next:
 
-- MarkItDown parser adapter
+- MinerU runner plugin (invoke MinerU instead of only consuming its output)
 - PDF metadata/bookmark detector
+- `bookgraph.toml` config loading so CLI defaults come from the workspace
 - section manifest writer (`sections.jsonl`)
 - reading plan store
 - FastMCP server exposing `get_next_section`, `get_section`, `search`, `mark_read`

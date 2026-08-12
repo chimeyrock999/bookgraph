@@ -89,8 +89,9 @@ def default_config(paths: WorkspacePaths) -> str:
 output_root = "{paths.root}"
 
 [parsers]
-default_pdf = "mineru"
+default_pdf = "mineru-middle-json"
 default_office = "markitdown"
+default_markdown = "markdown"
 
 [segmenter]
 default = "heading"

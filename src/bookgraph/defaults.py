@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from bookgraph.parsers.markdown import MarkdownParser
+from bookgraph.parsers.markitdown import MarkItDownParser
 from bookgraph.parsers.mineru import MinerUMiddleJsonParser
 from bookgraph.plugins import PluginRegistry
 from bookgraph.ports import DocumentParser, DocumentSegmenter, WikiBackend
@@ -10,6 +12,8 @@ from bookgraph.wiki_backends.llmwiki import LlmWikiBackend
 def default_parser_registry() -> PluginRegistry[DocumentParser]:
     registry: PluginRegistry[DocumentParser] = PluginRegistry(kind="parser")
     registry.register(MinerUMiddleJsonParser())
+    registry.register(MarkdownParser())
+    registry.register(MarkItDownParser())
     return registry
 
 

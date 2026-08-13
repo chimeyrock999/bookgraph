@@ -286,14 +286,61 @@ block with wiki-style links:
 The backend is intentionally stateless and book-local. It does **not** materialize
 or reconcile `wiki/concepts/<concept_slug>.md`, does not store hidden backlink
 state in Markdown, and does not own cross-book concept joins. Cross-book concept
-nodes/mentions/backlinks belong to the index/query layer (for example future
-`indexes/bookgraph.db` tables such as `concept_nodes` and `concept_mentions`) and
-should be rendered from that index if/when concept pages are materialized.
+nodes/mentions/backlinks belong to the index/query layer: the `concept_mentions`
+table and `concept_nodes` view in `indexes/bookgraph.db`, from which the
+`wiki/concepts/<concept_slug>.md` pages below are rendered by `bookgraph index
+concepts` (see `index.md` for the schema and `commands.md` for the command).
 
-Concept extraction here is intentionally local and deterministic: no LLMs,
-embeddings, or external services. It uses section titles, heading paths,
-title-case phrases, and long domain-looking terms from the current document's
-section text to emit wikilinks only.
+Concept extraction is intentionally local and deterministic: no LLMs, embeddings,
+or external services. It uses section titles, heading paths, title-case phrases,
+and long domain-looking terms from a document's section text only. This extractor
+lives in a shared module (`bookgraph.concepts`: `extract_concepts` + `ConceptEntry`)
+used by **both** the `markdown-graph` wiki backend (for in-page wikilinks) and the
+index stage (for `concept_mentions`), so the same slug/title is produced on both
+sides. `sections.jsonl` is the single input; neither side reads the other's output.
+
+## `wiki/concepts/<concept_slug>.md`
+
+Owner: the index stage (`bookgraph index concepts` command / `bookgraph.index`).
+
+One Markdown page per distinct concept, aggregated **across every indexed book**
+and rendered from `indexes/bookgraph.db` (`concept_nodes` + `concept_mentions`).
+This is the cross-book counterpart to the in-page `## Linked concepts` wikilinks
+the `markdown-graph` backend emits: those link *to* `[[<slug>|Title]]`; this page
+*is* that target and lists the backlinks.
+
+```text
+wiki/concepts/
+  <concept_slug>.md      # e.g. schema-evolution.md
+```
+
+Page shape — a title, a one-line summary, then backlinks grouped by book in
+reading order:
+
+```markdown
+# Schema Evolution
+
+Mentioned in 2 books · 5 sections.
+
+## Deep Work
+- [Storage](../books/deep-work/sections/deep-work.a.md)
+
+## Designing Data-Intensive Applications
+- [Encoding and Evolution](../books/ddia/sections/ddia.ch-4.md)
+```
+
+Properties:
+
+- **Derived and fully rebuildable** — never a source of truth. `bookgraph index
+  concepts` rewrites the whole `wiki/concepts/` directory from the database, so it
+  reflects exactly the concepts of the currently indexed documents.
+- **Cross-book, so not per-document**: unlike `index build <doc_id>` (which is
+  per-doc), concept pages need every book's mentions, so they are (re)rendered by
+  the separate global `index concepts` pass, run after the relevant books are
+  built. Concept *data* (`concept_mentions`) is still populated per-doc by `index
+  build`; only the page rendering is global.
+- `<concept_slug>` is the deterministic slug from `bookgraph.concepts`
+  (`[a-z0-9]+(?:-[a-z0-9]+)*`), matching the `[[<slug>|…]]` targets in book pages.
 
 ## `indexes/bookgraph.db`
 

@@ -13,6 +13,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
+from bookgraph.graph import SectionGraph, build_section_graph, graph_path, read_graph
 from bookgraph.indexes import SectionIndex, index_path, read_index, tokenize
 from bookgraph.models import ReadingPlan, Section
 from bookgraph.reading_plans import mark_section_read, next_sections, read_reading_plan
@@ -93,6 +94,49 @@ class SearchResult(BaseModel):
 
     query: str
     hits: list[SearchHit]
+
+
+class SectionRef(BaseModel):
+    """A lightweight pointer to a section (no body text)."""
+
+    id: str
+    title: str
+    level: int
+
+
+class OutlineNode(BaseModel):
+    """One entry in a document's outline: a section and its hierarchy links."""
+
+    id: str
+    title: str
+    level: int
+    parent_id: str | None = None
+    child_ids: list[str] = Field(default_factory=list)
+
+
+class Outline(BaseModel):
+    """A document's section outline in reading order."""
+
+    doc_id: str
+    nodes: list[OutlineNode]
+
+
+class RelatedSections(BaseModel):
+    """A section's structural neighbours in the document graph."""
+
+    doc_id: str
+    section_id: str
+    parent: SectionRef | None = None
+    prev: SectionRef | None = None
+    next: SectionRef | None = None
+    children: list[SectionRef] = Field(default_factory=list)
+
+
+class SectionContext(BaseModel):
+    """A section's full content together with its graph neighbourhood."""
+
+    section: SectionView
+    related: RelatedSections
 
 
 def _section_markdown_path(workspace: WorkspacePaths, doc_id: str, section_id: str) -> Path:
@@ -332,3 +376,78 @@ def search_sections(
 
     hits.sort(key=lambda hit: (-hit.score, hit.doc_id, hit.section_id))
     return SearchResult(query=query, hits=hits[:limit])
+
+
+def _load_graph(workspace: WorkspacePaths, doc_id: str) -> SectionGraph:
+    """Load a document's section graph, preferring the persisted index.
+
+    Uses ``indexes/graph/<doc_id>.json`` when present and self-consistent, and
+    otherwise rebuilds the graph from ``sections.jsonl`` — so the graph/context
+    tools work before ``bookgraph index build`` has run, and a stale/corrupt graph
+    file degrades to the authoritative sections manifest rather than serving wrong
+    structure (mirrors :func:`_hits_for_doc`).
+    """
+
+    _validate_id(doc_id, "doc_id")
+    path = graph_path(workspace, doc_id)
+    if path.is_file():
+        try:
+            graph = read_graph(path)
+        except (OSError, ValueError):
+            graph = None
+        if graph is not None and graph.doc_id == doc_id:
+            return graph
+    return build_section_graph(doc_id, _load_doc_sections(workspace, doc_id))
+
+
+def get_outline(workspace: WorkspacePaths, doc_id: str) -> Outline:
+    """Return a document's section outline (hierarchy) in reading order."""
+
+    graph = _load_graph(workspace, doc_id)
+    return Outline(
+        doc_id=doc_id,
+        nodes=[
+            OutlineNode(
+                id=node.id,
+                title=node.title,
+                level=node.level,
+                parent_id=node.parent_id,
+                child_ids=list(node.child_ids),
+            )
+            for node in graph.nodes
+        ],
+    )
+
+
+def get_related(workspace: WorkspacePaths, doc_id: str, section_id: str) -> RelatedSections:
+    """Return a section's structural neighbours: parent, prev, next, and children."""
+
+    graph = _load_graph(workspace, doc_id)
+    by_id = {node.id: node for node in graph.nodes}
+    node = by_id.get(section_id)
+    if node is None:
+        raise SectionNotFoundError(f"Section '{section_id}' not found in document '{doc_id}'.")
+
+    def ref(neighbour_id: str | None) -> SectionRef | None:
+        neighbour = by_id.get(neighbour_id) if neighbour_id is not None else None
+        if neighbour is None:
+            return None
+        return SectionRef(id=neighbour.id, title=neighbour.title, level=neighbour.level)
+
+    return RelatedSections(
+        doc_id=doc_id,
+        section_id=section_id,
+        parent=ref(node.parent_id),
+        prev=ref(node.prev_id),
+        next=ref(node.next_id),
+        children=[child for child_id in node.child_ids if (child := ref(child_id)) is not None],
+    )
+
+
+def get_context(workspace: WorkspacePaths, doc_id: str, section_id: str) -> SectionContext:
+    """Return a section's full content plus its graph neighbourhood."""
+
+    # Resolve the section first so a missing id raises before any graph work.
+    section = get_section(workspace, doc_id, section_id)
+    related = get_related(workspace, doc_id, section_id)
+    return SectionContext(section=section, related=related)

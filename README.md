@@ -9,30 +9,69 @@ servers are replaceable components behind small ports.
 
 ## Architecture
 
-```text
-Input docs
-  ↓
-Parser plugins
-  - MinerU adapter for complex PDFs / OCR / formula / table-heavy docs
-  - MarkItDown adapter for Office/HTML/text documents (optional extra)
-  - direct Markdown adapter
-  - file type routing picks the adapter, `--parser` overrides it
-  ↓
-Canonical document model
-  ↓
-Segmenter plugins
-  - heading segmenter (MVP)
-  - TOC/bookmark segmenter (planned)
-  - token/page fallback segmenter (planned)
-  ↓
-Wiki backend plugins
-  - llm-wiki-compiler staging adapter (MVP)
-  - custom markdown graph backend (planned)
-  ↓
-MCP server plugins
-  - reading tools: get_next_section / get_section / search / mark_read (`bookgraph mcp`)
-  - graph/context tools (planned)
+The pipeline is a chain of pluggable stages behind small ports. Each stage writes
+a canonical artifact the next stage reads, and the MCP server serves reading and
+graph/context tools straight off the segmented sections plus the indexes.
+
+```mermaid
+flowchart TD
+    docs["Input docs<br/>PDF · DOCX · HTML · Markdown · MinerU JSON"]
+
+    docs --> P
+
+    subgraph P["Parser plugins — bookgraph parse"]
+        direction LR
+        P1["mineru-middle-json"]
+        P2["markitdown<br/>(optional extra)"]
+        P3["markdown"]
+    end
+
+    P --> DOC["Canonical document<br/>sources/parsed/&lt;doc&gt;/document.json"]
+    DOC --> S
+
+    subgraph S["Segmenter plugins — bookgraph segment"]
+        direction LR
+        S1["heading"]
+        S2["bookmark"]
+        S3["token/page fallback<br/>(planned)"]:::planned
+    end
+
+    S --> SEC["Reading sections<br/>sources/sections/&lt;doc&gt;/*.jsonl + .md"]
+
+    SEC --> IDX
+    SEC --> RP["Reading plan<br/>reading_plans/&lt;plan&gt;.json"]
+    SEC --> W
+
+    subgraph IDX["Index stage — bookgraph index build"]
+        direction LR
+        IDX1["search index<br/>indexes/sections/"]
+        IDX2["section graph<br/>indexes/graph/"]
+    end
+
+    subgraph W["Wiki backend plugins — bookgraph wiki compile"]
+        direction LR
+        W1["llmwiki staging<br/>(placeholder)"]:::planned
+        W2["markdown graph backend<br/>(planned)"]:::planned
+    end
+
+    W --> WIKI["Linked wiki<br/>wiki/ (planned)"]:::planned
+
+    IDX --> MCP
+    SEC --> MCP
+    RP --> MCP
+
+    subgraph MCP["MCP server — bookgraph mcp"]
+        direction LR
+        MCP1["reading<br/>get_next_section · get_section · mark_read"]
+        MCP2["search"]
+        MCP3["graph/context<br/>get_outline · get_related · get_context"]
+    end
+
+    classDef planned stroke-dasharray:5,opacity:0.65;
 ```
+
+Dashed nodes are planned/placeholder; everything else is implemented. File type
+routing picks the parser adapter, and `--parser` overrides it.
 
 ## Module layout
 
@@ -58,6 +97,7 @@ src/bookgraph/
     routing.py              # File type -> parser plugin name
   segmenters/
     heading.py              # Heading/title-block segmenter
+    bookmark.py             # PDF bookmark/outline segmenter (heading fallback)
   wiki_backends/
     llmwiki.py              # Stage section markdown for llm-wiki-compiler
   mcp/
@@ -163,17 +203,18 @@ Implemented:
   `reading_plans/<plan_id>.json`
 - TOC/bookmark-aware segmenter (`--segmenter bookmark`) fed by registered PDF
   bookmarks with heading fallback
-- FastMCP server (`bookgraph mcp`, optional `mcp` extra) exposing
-  `get_next_section`, `get_section`, `search`, `mark_read` over the sections and
-  reading-plan artifacts
+- FastMCP server (`bookgraph mcp`, optional `mcp` extra) exposing reading tools
+  (`get_next_section`, `get_section`, `mark_read`), `search`, and graph/context
+  tools (`get_outline`, `get_related`, `get_context`) over the sections,
+  reading-plan, and index artifacts
 - Inverted search index (`bookgraph index build`) under
   `indexes/sections/<doc_id>.json` backing MCP `search`, with a live-scan
   fallback for unindexed documents
 - Section graph (`bookgraph index build`) under `indexes/graph/<doc_id>.json`
-  capturing heading hierarchy + reading sequence, built alongside the search
-  index
+  capturing heading hierarchy + reading sequence, backing the graph/context MCP
+  tools, with an on-the-fly rebuild from sections when unindexed
 
 Planned next:
 
-- Graph/context MCP tools (`get_outline` / `get_related` / `get_context`) served
-  from the section graph
+- Cross-document / semantic edges in the section graph (beyond hierarchy +
+  sequence) to widen graph/context results

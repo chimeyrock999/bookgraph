@@ -12,7 +12,7 @@ from bookgraph.cli._app import app
 def mcp(
     workspace_path: Annotated[Path, typer.Argument(help="BookGraph workspace/output root path.")],
 ) -> None:
-    """Serve the workspace over MCP (stdio): get_next_section, get_section, search, mark_read."""
+    """Serve the workspace over MCP (stdio): reading, search, and graph/context tools."""
 
     try:
         from bookgraph.mcp.server import create_server

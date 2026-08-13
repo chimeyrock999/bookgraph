@@ -138,7 +138,8 @@ bookgraph add-book /path/to/workspace /path/to/book.pdf --dry-run
 `sources/inbox/<book_id>/original.pdf` and writes `sources/inbox/<book_id>/book.json`
 with placeholder `parser`, `segmenter`, and `wiki_backend` fields set to `null`.
 
-Parse a source document into canonical blocks:
+Parse a source document into canonical blocks, or parse a registered raw PDF book
+through the MinerU runner in one command:
 
 ```bash
 bookgraph parsers                                    # list parser plugins
@@ -146,12 +147,16 @@ bookgraph parse notes.md -o /path/to/workspace       # parser picked by file typ
 bookgraph parse book_middle.json -o /path/to/workspace
 bookgraph parse report.docx -o /path/to/workspace    # needs: uv sync --extra parsers
 bookgraph parse odd.bin -o /path/to/workspace --parser markdown
+bookgraph parse-book /path/to/workspace <book_id> --backend pipeline  # needs: uv sync --extra mineru
 ```
 
 Output lands in `sources/parsed/<doc_id>/document.json`. `<doc_id>` comes from the
 neighbouring `book.json` when the source sits in a registered book directory, from
-`--doc-id`, or from the filename. PDFs need an explicit parser choice: parse MinerU's
-`*_middle.json` for complex books, or pass `--parser markitdown` for simple text PDFs.
+`--doc-id`, or from the filename. For raw registered PDFs, `bookgraph parse-book`
+invokes MinerU, stages the generated middle JSON under `sources/parsed/<book_id>/`,
+then writes `document.json` via the `mineru-middle-json` parser. Direct `bookgraph
+parse` on a raw PDF still needs an explicit parser choice, such as `--parser
+markitdown` for simple text PDFs.
 
 It creates:
 
@@ -184,13 +189,14 @@ Implemented:
 - Pluggable `PluginRegistry`
 - Parser/segmenter/wiki backend ports
 - MinerU `*_middle.json` parser adapter skeleton
-- Heading-based segmenter
-- llmwiki staging backend
+- Heading-based segmenter with deterministic duplicate-slug suffixes
+- llmwiki staging backend and real `bookgraph wiki compile` command
 - CLI workspace initializer with explicit `--output` alias and `paths` inspector
 - CLI-only `add-book` contract that registers a PDF source without running parser/segmenter
 - Markdown and MarkItDown parser adapters plus file type based parser routing
 - CLI `parse` / `parsers` commands writing `sources/parsed/<doc_id>/document.json`
-- MinerU runner that invokes MinerU on a raw PDF and stages its `*_middle.json`
+- MinerU runner, exposed through `bookgraph parse-book`, that invokes MinerU on a
+  registered raw PDF and stages its `*_middle.json`
 - PDF metadata/bookmark detector used during book registration
 - Section writer core (`write_sections`): `sections.jsonl` + `<section_id>.md`
   reading units from segmenter output, plus a `document.json` reader

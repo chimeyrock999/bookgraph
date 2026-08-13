@@ -509,19 +509,15 @@ is only ever matched against loaded plan/section data, never used as a raw path.
 > graph file whose stored `doc_id` does not match its filename is treated as stale
 > and rebuilt from the manifest.
 
-## Placeholder command contracts
-
-The commands below expose the CLI interface and write placeholder request
-artifacts under `runs/cli-placeholders/`. They intentionally do **not** call the
-backend parser/wiki implementations yet.
+## Book-level parse / wiki compile contracts
 
 ### `bookgraph parse-book`
 
-**Status:** Implemented as CLI placeholder.
+**Status:** Implemented.
 
-Declare the book-level raw PDF parse interface. This is aligned with the MinerU
-runner contract from PR #1, but it still does **not** invoke MinerU or parse the
-produced middle JSON.
+Run the registered-book parse pipeline: invoke the configured raw-source runner,
+stage its outputs under `sources/parsed/<book_id>/`, then parse the staged MinerU
+middle JSON into the canonical `document.json`.
 
 ```bash
 bookgraph parse-book /path/to/workspace <book_id>
@@ -534,37 +530,44 @@ bookgraph parse-book /path/to/workspace <book_id> --dry-run
 
 Options:
 
-- `--runner`: raw-source runner reserved for the future first step. Default: `mineru`.
-- `--runner-command`: executable name reserved for the future runner. Default: `mineru`.
-- `--method/-m`: MinerU method reserved for the future runner. Default: `auto`.
-- `--backend/-b`: optional MinerU backend reserved for the future runner.
-- `--timeout-seconds`: subprocess timeout reserved for the future runner. Default: `3600`; pass `0` to reserve no timeout.
-- `--parser/-p`: parser reserved after runner output is staged. Default: `mineru-middle-json`.
+- `--runner`: raw-source runner. Default: `[mineru].runner` (`mineru`).
+- `--runner-command`: executable name. Default: `[mineru].command` (`mineru`).
+- `--method/-m`: MinerU method. Default: `[mineru].method` (`auto`).
+- `--backend/-b`: optional MinerU backend. Default: `[mineru].backend`.
+- `--timeout-seconds`: subprocess timeout. Default: config; pass `0` for no timeout.
+- `--parser/-p`: parser after runner output is staged. Default: `[parsers].default_pdf` (`mineru-middle-json`).
 
-`--parser` is validated against the parser plugin registry; typoed plugin names fail before a placeholder is written.
+`--parser` is validated against the parser plugin registry; typoed plugin names fail before the runner is invoked.
 
-Writes, unless `--dry-run`:
+Writes:
+
+```text
+sources/parsed/<book_id>/
+  document.json
+  <book_id>_middle.json
+  optional <book_id>.md / *_layout.pdf / *_span.pdf / *_content_list.json / images/
+```
+
+Dry run still writes a placeholder request artifact under:
 
 ```text
 runs/cli-placeholders/parse-book-<book_id>.json
 ```
 
-Placeholder declares:
+Prints:
 
-- inputs: `sources/inbox/<book_id>/book.json`, `sources/inbox/<book_id>/original.<source_type>`
-- future runner outputs staged flat under `sources/parsed/<book_id>/`:
-  - `<book_id>_middle.json`
-  - optional `<book_id>.md`
-  - optional `<book_id>_layout.pdf`
-  - optional `<book_id>_span.pdf`
-  - optional `<book_id>_content_list.json`
-  - optional `images/`
-- future final output: `sources/parsed/<book_id>/document.json`
-- `backend_not_run: true`
+```text
+runner: <runner>
+parser: <parser_name>
+doc_id: <book_id>
+title: <document_title>
+blocks: <block_count>
+document: <workspace>/sources/parsed/<book_id>/document.json
+```
 
 ### `bookgraph wiki compile`
 
-**Status:** Implemented as CLI placeholder.
+**Status:** Implemented.
 
 ```bash
 bookgraph wiki compile /path/to/workspace <doc_id>
@@ -572,21 +575,31 @@ bookgraph wiki compile /path/to/workspace <doc_id> --backend llmwiki
 bookgraph wiki compile /path/to/workspace <doc_id> --dry-run
 ```
 
-`--backend` is validated against the wiki-backend plugin registry; typoed plugin names fail before a placeholder is written.
+`--backend` is validated against the wiki-backend plugin registry; typoed plugin names fail before sections are read.
 
-Writes, unless `--dry-run`:
+Reads:
+
+```text
+sources/sections/<doc_id>/sections.jsonl
+```
+
+Writes:
+
+```text
+wiki/books/<doc_id>/
+```
+
+Dry run still writes a placeholder request artifact under:
 
 ```text
 runs/cli-placeholders/wiki-compile-<doc_id>.json
 ```
 
-Placeholder declares:
+Prints:
 
-- input: `sources/sections/<doc_id>/sections.jsonl`
-- future output: `wiki/books/<doc_id>/`
-- `backend_not_run: true`
-
-## Future backend contracts
-
-The placeholder commands above reserve the interfaces. Do not wire real backend
-execution into them without first expanding this file and the artifact contracts.
+```text
+backend: <backend_name>
+doc_id: <doc_id>
+sections: <section_count>
+wiki: <workspace>/wiki/books/<doc_id>
+```

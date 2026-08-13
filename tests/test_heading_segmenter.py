@@ -85,3 +85,30 @@ def test_heading_segmenter_wraps_intro_text_before_first_heading() -> None:
     assert [section.title for section in sections] == ["A Paper — Front Matter", "Introduction"]
     assert sections[0].text == "Abstract text."
     assert sections[0].next_id == "paper.introduction"
+
+
+def test_heading_segmenter_suffixes_duplicate_section_slugs() -> None:
+    document = Document(
+        doc_id="paper",
+        title="A Paper",
+        blocks=[
+            CanonicalBlock(id="b1", type="title", text="Summary", level=1, page_idx=1),
+            CanonicalBlock(id="b2", type="text", text="First summary.", page_idx=1),
+            CanonicalBlock(id="b3", type="title", text="Summary", level=1, page_idx=2),
+            CanonicalBlock(id="b4", type="text", text="Second summary.", page_idx=2),
+            CanonicalBlock(id="b5", type="title", text="Summary", level=1, page_idx=3),
+            CanonicalBlock(id="b6", type="text", text="Third summary.", page_idx=3),
+        ],
+    )
+
+    sections = HeadingSegmenter(target_level=1).segment(document)
+
+    assert [section.id for section in sections] == [
+        "paper.summary",
+        "paper.summary-2",
+        "paper.summary-3",
+    ]
+    assert sections[0].next_id == "paper.summary-2"
+    assert sections[1].prev_id == "paper.summary"
+    assert sections[1].next_id == "paper.summary-3"
+    assert sections[2].prev_id == "paper.summary-2"

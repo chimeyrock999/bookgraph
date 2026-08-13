@@ -155,5 +155,12 @@ def _render_concept_page(
                 title_cache[mention.doc_id] = _doc_title(workspace, mention.doc_id)
             lines += ["", f"## {title_cache[mention.doc_id]}", ""]
         link = f"../books/{mention.doc_id}/sections/{mention.section_id}.md"
-        lines.append(f"- [{mention.title}]({link})")
+        # A Tier-2 backlink carries the agent's per-mention gloss and an
+        # (agent-verified) marker; a plain Tier-1 backlink is just the section link.
+        suffix = ""
+        if mention.gloss:
+            suffix += f" — {mention.gloss}"
+        if mention.source == "agent":
+            suffix += " (agent-verified)"
+        lines.append(f"- [{mention.title}]({link}){suffix}")
     return "\n".join(lines) + "\n"

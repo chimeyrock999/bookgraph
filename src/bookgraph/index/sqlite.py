@@ -6,7 +6,10 @@ One workspace-wide database at ``indexes/bookgraph.db`` holds:
 - ``sections_fts`` — an FTS5 full-text table backing ``search`` (ranked ``bm25``).
 - ``section_graph`` — hierarchy + sequence edges backing the graph/context tools.
 - ``concept_mentions`` — per-section concept backlinks (+ the ``concept_nodes``
-  view aggregating them across books) backing ``get_concept``.
+  view aggregating them across books) backing ``get_concept``. Each row carries a
+  ``gloss`` and a ``source`` (``auto``/``agent``) from the Tier-1/Tier-2 merge.
+- ``section_annotations`` — per-section Tier-2 summaries/provenance (not a concept
+  edge). Not a required table, so a pre-feature database still reads cleanly.
 
 See ``docs/cli/index.md`` for the schema and build/query contract.
 """
@@ -20,7 +23,7 @@ from pathlib import Path
 from typing import TypeVar
 from urllib.parse import quote
 
-from bookgraph.concepts import extract_concepts
+from bookgraph.annotations import merge_section_concepts, read_annotations_for_doc
 from bookgraph.graph import SectionGraph, SectionNode, build_section_graph
 from bookgraph.index.base import (
     Concept,
@@ -30,7 +33,7 @@ from bookgraph.index.base import (
     IndexSearchHit,
     IndexUnavailableError,
 )
-from bookgraph.models import Section
+from bookgraph.models import Section, SectionAnnotation
 from bookgraph.workspace import WorkspacePaths
 
 DB_FILENAME = "bookgraph.db"
@@ -72,6 +75,8 @@ CREATE TABLE IF NOT EXISTS concept_mentions (
     concept_title TEXT NOT NULL,
     doc_id        TEXT NOT NULL,
     section_id    TEXT NOT NULL,
+    gloss         TEXT NOT NULL DEFAULT '',
+    source        TEXT NOT NULL DEFAULT 'auto',
     PRIMARY KEY (doc_id, section_id, concept_slug)
 );
 CREATE INDEX IF NOT EXISTS concept_mentions_slug ON concept_mentions (concept_slug);
@@ -82,7 +87,24 @@ SELECT concept_slug           AS slug,
        COUNT(*)                AS mention_count
 FROM concept_mentions
 GROUP BY concept_slug;
+CREATE TABLE IF NOT EXISTS section_annotations (
+    doc_id     TEXT NOT NULL,
+    section_id TEXT NOT NULL,
+    summary    TEXT NOT NULL DEFAULT '',
+    model      TEXT,
+    created_at TEXT,
+    PRIMARY KEY (doc_id, section_id)
+);
 """
+
+# Columns added to ``concept_mentions`` after its first release. A database created
+# by an older build lacks them; ``_ensure_columns`` adds any that are missing so the
+# next build writes the full shape. Each is ``NOT NULL DEFAULT`` so existing rows
+# backfill without a data migration.
+_CONCEPT_MENTION_ADDED_COLUMNS = {
+    "gloss": "TEXT NOT NULL DEFAULT ''",
+    "source": "TEXT NOT NULL DEFAULT 'auto'",
+}
 
 
 def db_path(workspace: WorkspacePaths) -> Path:
@@ -106,9 +128,11 @@ class SqliteIndexBackend(IndexBackend):
         # db is a single file, unlike the old per-document JSON indexes).
         conn = sqlite3.connect(path, timeout=30.0)
         conn.row_factory = sqlite3.Row
+        annotations = read_annotations_for_doc(workspace.annotations_root, doc_id)
         try:
             _ensure_schema(conn)
-            return _build_document(conn, doc_id, title, sections)
+            _ensure_columns(conn)
+            return _build_document(conn, doc_id, title, sections, annotations)
         except sqlite3.OperationalError as exc:
             if "locked" in str(exc).lower():
                 raise IndexUnavailableError(
@@ -174,6 +198,8 @@ class SqliteIndexBackend(IndexBackend):
                     doc_id=row["doc_id"],
                     section_id=row["section_id"],
                     title=row["title"],
+                    gloss=row["gloss"],
+                    source=row["source"],
                 )
                 for row in _concept_mentions(conn, slug)
             ]
@@ -190,6 +216,8 @@ class SqliteIndexBackend(IndexBackend):
                         doc_id=row["doc_id"],
                         section_id=row["section_id"],
                         title=row["title"],
+                        gloss=row["gloss"],
+                        source=row["source"],
                     )
                 )
             return [
@@ -207,8 +235,23 @@ class SqliteIndexBackend(IndexBackend):
         return _read(
             workspace,
             empty,
-            lambda conn: [_to_node(row) for row in _section_concepts(conn, doc_id, section_id)],
+            lambda conn: [
+                ConceptNode(
+                    slug=row["slug"],
+                    title=row["title"],
+                    doc_count=row["doc_count"],
+                    mention_count=row["mention_count"],
+                    gloss=row["gloss"],
+                    source=row["source"],
+                )
+                for row in _section_concepts(conn, doc_id, section_id)
+            ],
         )
+
+    def section_annotation(
+        self, workspace: WorkspacePaths, doc_id: str, section_id: str
+    ) -> str | None:
+        return _read(workspace, None, lambda conn: _section_annotation(conn, doc_id, section_id))
 
     def location(self, workspace: WorkspacePaths) -> str:
         return str(db_path(workspace))
@@ -285,8 +328,28 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
         ) from exc
 
 
+def _ensure_columns(conn: sqlite3.Connection) -> None:
+    """Add any post-release ``concept_mentions`` columns missing from an older db.
+
+    Idempotent and guarded: it reads ``PRAGMA table_info`` and issues
+    ``ALTER TABLE … ADD COLUMN`` only for absent columns, so a current-schema database
+    is untouched and a pre-``gloss``/``source`` one is upgraded in place. Only
+    ``concept_mentions`` needs this; every other table (including the newer
+    ``section_annotations``) is created whole by ``CREATE TABLE IF NOT EXISTS``.
+    """
+
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(concept_mentions)")}
+    for column, definition in _CONCEPT_MENTION_ADDED_COLUMNS.items():
+        if column not in existing:
+            conn.execute(f"ALTER TABLE concept_mentions ADD COLUMN {column} {definition}")
+
+
 def _build_document(
-    conn: sqlite3.Connection, doc_id: str, title: str, sections: list[Section]
+    conn: sqlite3.Connection,
+    doc_id: str,
+    title: str,
+    sections: list[Section],
+    annotations: dict[str, SectionAnnotation],
 ) -> int:
     graph = build_section_graph(doc_id, sections)
     graph_rows = [
@@ -304,15 +367,24 @@ def _build_document(
         for ordinal, node in enumerate(graph.nodes)
     ]
     concept_rows = [
-        (concept.slug, concept.title, doc_id, section_id)
-        for concept in extract_concepts(sections)
-        for section_id in concept.section_ids
+        (edge.slug, edge.title, doc_id, edge.section_id, edge.gloss, edge.source)
+        for edge in merge_section_concepts(sections, annotations)
+    ]
+    # Scope stored summaries to sections that still exist, mirroring concept_rows:
+    # a stale annotation left over from a re-segment (its section id is gone) must not
+    # keep re-inserting a dead section_annotations row on every rebuild.
+    section_ids = {section.id for section in sections}
+    annotation_rows = [
+        (doc_id, annotation.section_id, annotation.summary, annotation.model, annotation.created_at)
+        for annotation in annotations.values()
+        if annotation.section_id in section_ids
     ]
     with conn:  # one transaction: BEGIN/COMMIT, or ROLLBACK on error
         conn.execute("DELETE FROM doc_catalog WHERE doc_id = ?", (doc_id,))
         conn.execute("DELETE FROM sections_fts WHERE doc_id = ?", (doc_id,))
         conn.execute("DELETE FROM section_graph WHERE doc_id = ?", (doc_id,))
         conn.execute("DELETE FROM concept_mentions WHERE doc_id = ?", (doc_id,))
+        conn.execute("DELETE FROM section_annotations WHERE doc_id = ?", (doc_id,))
         conn.executemany(
             "INSERT INTO sections_fts (doc_id, section_id, title, text) VALUES (?, ?, ?, ?)",
             [(doc_id, section.id, section.title, section.text) for section in sections],
@@ -325,8 +397,14 @@ def _build_document(
         )
         conn.executemany(
             "INSERT INTO concept_mentions "
-            "(concept_slug, concept_title, doc_id, section_id) VALUES (?, ?, ?, ?)",
+            "(concept_slug, concept_title, doc_id, section_id, gloss, source) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
             concept_rows,
+        )
+        conn.executemany(
+            "INSERT INTO section_annotations "
+            "(doc_id, section_id, summary, model, created_at) VALUES (?, ?, ?, ?, ?)",
+            annotation_rows,
         )
         conn.execute(
             "INSERT INTO doc_catalog (doc_id, title, section_count) VALUES (?, ?, ?)",
@@ -426,7 +504,8 @@ def _section_concepts(
     # ordered most-connected first.
     return conn.execute(
         "SELECT cn.slug AS slug, cn.title AS title, "
-        "       cn.doc_count AS doc_count, cn.mention_count AS mention_count "
+        "       cn.doc_count AS doc_count, cn.mention_count AS mention_count, "
+        "       cm.gloss AS gloss, cm.source AS source "
         "FROM concept_mentions cm "
         "JOIN concept_nodes cn ON cn.slug = cm.concept_slug "
         "WHERE cm.doc_id = ? AND cm.section_id = ? "
@@ -435,13 +514,24 @@ def _section_concepts(
     ).fetchall()
 
 
+def _section_annotation(conn: sqlite3.Connection, doc_id: str, section_id: str) -> str | None:
+    # The stored Tier-2 summary for a section. Returns None when unannotated, or when
+    # the table predates this feature (the SELECT raises "no such table" and the
+    # read-only wrapper degrades to the None default rather than surfacing it).
+    row = conn.execute(
+        "SELECT summary FROM section_annotations WHERE doc_id = ? AND section_id = ?",
+        (doc_id, section_id),
+    ).fetchone()
+    return row["summary"] if row is not None else None
+
+
 def _all_concept_mentions(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     # Every concept's mentions in one query, grouped/ordered so callers can bucket
     # them by slug — same per-concept order as ``_concept_mentions`` (by document,
     # then reading position). Backs the single-pass ``concepts()``.
     return conn.execute(
         "SELECT cm.concept_slug AS slug, cm.doc_id AS doc_id, cm.section_id AS section_id, "
-        "       COALESCE(sg.title, cm.section_id) AS title "
+        "       COALESCE(sg.title, cm.section_id) AS title, cm.gloss AS gloss, cm.source AS source "
         "FROM concept_mentions cm "
         "LEFT JOIN section_graph sg "
         "  ON sg.doc_id = cm.doc_id AND sg.section_id = cm.section_id "
@@ -454,7 +544,7 @@ def _concept_mentions(conn: sqlite3.Connection, slug: str) -> list[sqlite3.Row]:
     # group by document, ordered within a document by reading position.
     return conn.execute(
         "SELECT cm.doc_id AS doc_id, cm.section_id AS section_id, "
-        "       COALESCE(sg.title, cm.section_id) AS title "
+        "       COALESCE(sg.title, cm.section_id) AS title, cm.gloss AS gloss, cm.source AS source "
         "FROM concept_mentions cm "
         "LEFT JOIN section_graph sg "
         "  ON sg.doc_id = cm.doc_id AND sg.section_id = cm.section_id "

@@ -64,20 +64,34 @@ class IndexSearchHit(BaseModel):
 
 
 class ConceptMention(BaseModel):
-    """One place a concept is mentioned — a backlink into a specific section."""
+    """One place a concept is mentioned — a backlink into a specific section.
+
+    ``gloss`` is a per-mention note (non-empty only for agent-annotated mentions) and
+    ``source`` is ``"auto"`` (deterministic Tier-1) or ``"agent"`` (Tier-2 annotation).
+    """
 
     doc_id: str
     section_id: str
     title: str
+    gloss: str = ""
+    source: str = "auto"
 
 
 class ConceptNode(BaseModel):
-    """A concept aggregated across every indexed document."""
+    """A concept aggregated across every indexed document.
+
+    ``gloss`` / ``source`` are populated only by the **section-scoped** query
+    (``section_concepts``), where a concept has exactly one mention in the section and
+    so a single gloss/source; the cross-book aggregate listings leave them at their
+    defaults (``""`` / ``"auto"``), where a per-mention gloss/source has no meaning.
+    """
 
     slug: str
     title: str
     doc_count: int
     mention_count: int
+    gloss: str = ""
+    source: str = "auto"
 
 
 class Concept(BaseModel):
@@ -169,6 +183,18 @@ class IndexBackend(ABC):
 
         Ordered most-connected first. Empty when the section (or its document) is
         not indexed — concepts have no live-scan fallback.
+        """
+
+    @abstractmethod
+    def section_annotation(
+        self, workspace: WorkspacePaths, doc_id: str, section_id: str
+    ) -> str | None:
+        """The stored Tier-2 summary for a section, or ``None`` when there is none.
+
+        Reads the built index (the ``section_annotations`` table), so it reflects the
+        last ``index build`` — unlike the MCP ``get_context`` tool, which reads the
+        annotation file directly for an immediate, pre-rebuild summary. ``None`` when
+        the section is unannotated, unindexed, or the table predates this feature.
         """
 
     @abstractmethod

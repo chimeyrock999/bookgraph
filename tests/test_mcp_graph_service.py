@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from bookgraph.annotations import read_annotation
 from bookgraph.index.sqlite import SqliteIndexBackend, db_path
 from bookgraph.mcp import service
 from bookgraph.mcp.service import (
@@ -329,3 +330,101 @@ def test_list_plans_is_empty_without_any_plans(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path)
 
     assert service.list_plans(workspace).plans == []
+
+
+def test_annotate_section_accepts_a_dotted_section_id_and_round_trips(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+
+    result = service.annotate_section(
+        workspace,
+        "ddia",
+        "ddia.ch-1",
+        [service.ConceptInput(title="Log Structured Merge", gloss="core")],
+        summary="what this section says",
+    )
+
+    assert result.doc_id == "ddia"
+    assert result.section_id == "ddia.ch-1"
+    assert result.concept_count == 1
+    path = workspace.annotations_root / "ddia" / "ddia.ch-1.json"
+    assert Path(result.path) == path
+    assert path.is_file()
+    reloaded = read_annotation(path)
+    assert reloaded.summary == "what this section says"
+    assert reloaded.concepts[0].slug == "log-structured-merge"
+
+
+def test_annotate_section_rejects_an_unknown_section_by_membership(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+
+    with pytest.raises(SectionNotFoundError):
+        service.annotate_section(workspace, "ddia", "ddia.ghost", [])
+    # nothing written for the rejected id
+    assert not (workspace.annotations_root / "ddia" / "ddia.ghost.json").exists()
+
+
+def test_annotate_section_rejects_a_traversal_section_id(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+
+    # A traversal value matches no section, so membership validation rejects it before
+    # it is ever used as a path component.
+    with pytest.raises(SectionNotFoundError):
+        service.annotate_section(workspace, "ddia", "../escape", [])
+
+
+def test_annotate_section_rejects_a_traversal_doc_id(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+
+    with pytest.raises(InvalidIdError):
+        service.annotate_section(workspace, "../escape", "ddia.ch-1", [])
+
+
+def test_annotate_section_rejects_an_untitled_concept(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+
+    with pytest.raises(ReadingServiceError):
+        service.annotate_section(
+            workspace, "ddia", "ddia.ch-1", [service.ConceptInput(title="!!!")]
+        )
+
+
+def test_get_context_shows_summary_immediately_before_any_rebuild(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path, build_index=True)
+
+    service.annotate_section(workspace, "ddia", "ddia.ch-1", [], summary="immediate summary")
+
+    # No rebuild yet: summary is read straight from the annotation file.
+    context = service.get_context(workspace, "ddia", "ddia.ch-1")
+    assert context.summary == "immediate summary"
+
+
+def test_get_context_reflects_gloss_and_source_after_rebuild(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path, build_index=True)
+
+    service.annotate_section(
+        workspace,
+        "ddia",
+        "ddia.ch-1",
+        [service.ConceptInput(title="Log Structured Merge", gloss="core idea")],
+    )
+    # Before rebuild the concepts are still the auto set (source auto).
+    before = service.get_context(workspace, "ddia", "ddia.ch-1")
+    assert all(c.source == "auto" for c in before.concepts)
+
+    SqliteIndexBackend().build_document(workspace, "ddia", "DDIA", _sections())
+
+    after = service.get_context(workspace, "ddia", "ddia.ch-1")
+    assert [(c.slug, c.source, c.gloss) for c in after.concepts] == [
+        ("log-structured-merge", "agent", "core idea")
+    ]
+
+
+def test_empty_annotation_removes_concepts_after_rebuild(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path, build_index=True)
+    # ddia.ch-1 has body "storage" → an auto concept before annotation.
+    assert service.get_context(workspace, "ddia", "ddia.ch-1").concepts
+
+    service.annotate_section(workspace, "ddia", "ddia.ch-1", [])
+    SqliteIndexBackend().build_document(workspace, "ddia", "DDIA", _sections())
+
+    assert service.get_context(workspace, "ddia", "ddia.ch-1").concepts == []

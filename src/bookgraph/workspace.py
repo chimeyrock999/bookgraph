@@ -51,6 +51,10 @@ class WorkspacePaths:
         return self.root / "indexes"
 
     @property
+    def annotations_root(self) -> Path:
+        return self.root / "annotations"
+
+    @property
     def reading_plans_root(self) -> Path:
         return self.root / "reading_plans"
 
@@ -68,6 +72,7 @@ class WorkspacePaths:
             self.wiki_comparisons,
             self.wiki_daily,
             self.indexes_root,
+            self.annotations_root,
             self.reading_plans_root,
             self.runs_root,
         ]
@@ -85,6 +90,7 @@ class WorkspacePaths:
             "wiki.comparisons": self.wiki_comparisons,
             "wiki.daily": self.wiki_daily,
             "indexes.root": self.indexes_root,
+            "annotations.root": self.annotations_root,
             "reading_plans.root": self.reading_plans_root,
             "runs.root": self.runs_root,
         }

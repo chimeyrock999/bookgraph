@@ -250,6 +250,28 @@ def test_concepts_are_rebuilt_per_document_and_isolated(tmp_path: Path) -> None:
     assert backend.get_concept(workspace, "replication") is None
 
 
+def test_concepts_bulk_matches_per_node_get_concept(tmp_path: Path) -> None:
+    workspace = WorkspacePaths(tmp_path)
+    backend = SqliteIndexBackend()
+    backend.build_document(
+        workspace, "ddia", "DDIA", [_section("ddia.a", "Schema Evolution", "x", doc_id="ddia")]
+    )
+    backend.build_document(
+        workspace, "deep-work", "Deep Work", [_section("deep-work.a", "Schema Evolution", "x")]
+    )
+
+    # The single-pass concepts() must equal resolving each node individually.
+    bulk = backend.concepts(workspace)
+    per_node = [
+        backend.get_concept(workspace, node.slug) for node in backend.concept_nodes(workspace)
+    ]
+    assert [c.model_dump() for c in bulk] == [c.model_dump() for c in per_node if c is not None]
+
+
+def test_concepts_is_empty_without_an_index(tmp_path: Path) -> None:
+    assert SqliteIndexBackend().concepts(WorkspacePaths(tmp_path)) == []
+
+
 def test_get_concept_returns_none_for_unknown_slug(tmp_path: Path) -> None:
     workspace = WorkspacePaths(tmp_path)
     backend = SqliteIndexBackend()

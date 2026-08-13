@@ -61,6 +61,7 @@ def index_build(
             )
 
     backend = default_index_backend()
+    indexed_any = False
     try:
         for current_doc in doc_ids:
             manifest = workspace.sources_sections / current_doc / "sections.jsonl"
@@ -75,13 +76,18 @@ def index_build(
 
             title = _doc_title(workspace, current_doc)
             count = backend.build_document(workspace, current_doc, title, sections)
+            indexed_any = True
             typer.echo(f"doc_id: {current_doc}")
             typer.echo(f"sections: {count}")
     except IndexUnavailableError as exc:
         raise typer.BadParameter(str(exc)) from exc
-
-    typer.echo(f"backend: {backend.name}")
-    typer.echo(f"index: {backend.location(workspace)}")
+    finally:
+        # Report where the db is even if a later document aborts the run, so a
+        # partial build (earlier docs already written) still tells the caller the
+        # index location instead of silently swallowing it.
+        if indexed_any:
+            typer.echo(f"backend: {backend.name}")
+            typer.echo(f"index: {backend.location(workspace)}")
 
 
 @index_app.command("concepts")
@@ -92,8 +98,8 @@ def index_concepts(
 
     workspace = WorkspacePaths(workspace_path.expanduser().resolve())
     backend = default_index_backend()
-    nodes = backend.concept_nodes(workspace)
-    if not nodes:
+    concepts = backend.concepts(workspace)
+    if not concepts:
         raise typer.BadParameter(
             f"No concepts in {backend.location(workspace)}. Run 'bookgraph index build' first."
         )
@@ -106,11 +112,8 @@ def index_concepts(
     title_cache: dict[str, str] = {}
     written = 0
     missing_links = 0
-    for node in nodes:
-        concept = backend.get_concept(workspace, node.slug)
-        if concept is None:  # concurrent rebuild dropped it; skip
-            continue
-        (concepts_dir / f"{node.slug}.md").write_text(
+    for concept in concepts:
+        (concepts_dir / f"{concept.node.slug}.md").write_text(
             _render_concept_page(workspace, concept, title_cache)
         )
         written += 1

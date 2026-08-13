@@ -108,6 +108,23 @@ def test_index_concepts_renders_cross_book_pages(tmp_path: Path) -> None:
     assert "../books/deep-work/sections/deep-work.a.md" in body
 
 
+def test_index_build_reports_location_on_partial_failure(tmp_path: Path) -> None:
+    workspace = _init_workspace(tmp_path)
+    # "aaa" is valid and indexed first; "zzz" has a corrupt manifest that aborts the
+    # run mid-loop — the summary must still report where the (partial) index lives.
+    write_sections(
+        [_section("aaa.a", "aaa", "Storage", "text")], workspace.sources_sections / "aaa"
+    )
+    (workspace.sources_sections / "zzz").mkdir(parents=True, exist_ok=True)
+    (workspace.sources_sections / "zzz" / "sections.jsonl").write_text("{ not json\n")
+
+    result = runner.invoke(app, ["index", "build", str(tmp_path)])
+
+    assert result.exit_code != 0
+    assert "doc_id: aaa" in result.output  # the earlier document was indexed
+    assert "index:" in result.output  # ...and its location is still reported
+
+
 def test_index_concepts_warns_when_book_pages_not_compiled(tmp_path: Path) -> None:
     workspace = _init_workspace(tmp_path)
     write_sections(

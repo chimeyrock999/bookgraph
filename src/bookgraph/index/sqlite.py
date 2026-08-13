@@ -15,7 +15,9 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Callable
 from pathlib import Path
+from typing import TypeVar
 from urllib.parse import quote
 
 from bookgraph.concepts import extract_concepts
@@ -99,22 +101,32 @@ class SqliteIndexBackend(IndexBackend):
     ) -> int:
         path = db_path(workspace)
         path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(path)
+        # A 30s busy timeout lets a concurrent build's write transaction finish
+        # rather than immediately raising "database is locked" (the workspace-wide
+        # db is a single file, unlike the old per-document JSON indexes).
+        conn = sqlite3.connect(path, timeout=30.0)
         conn.row_factory = sqlite3.Row
         try:
             _ensure_schema(conn)
             return _build_document(conn, doc_id, title, sections)
+        except sqlite3.OperationalError as exc:
+            if "locked" in str(exc).lower():
+                raise IndexUnavailableError(
+                    "The index database is locked by a concurrent build; retry once "
+                    "it finishes. Index builds must not run in parallel on one "
+                    "workspace."
+                ) from exc
+            raise
         finally:
             conn.close()
 
     def indexed_doc_ids(self, workspace: WorkspacePaths) -> set[str]:
-        conn = _open_read_only(workspace)
-        if conn is None:
-            return set()
-        try:
-            return {row["doc_id"] for row in conn.execute("SELECT doc_id FROM doc_catalog")}
-        finally:
-            conn.close()
+        empty: set[str] = set()
+        return _read(
+            workspace,
+            empty,
+            lambda conn: {row["doc_id"] for row in conn.execute("SELECT doc_id FROM doc_catalog")},
+        )
 
     def search(
         self,
@@ -123,11 +135,11 @@ class SqliteIndexBackend(IndexBackend):
         doc_ids: list[str] | None,
         limit: int,
     ) -> list[IndexSearchHit]:
-        conn = _open_read_only(workspace)
-        if conn is None:
-            return []
-        try:
-            return [
+        empty: list[IndexSearchHit] = []
+        return _read(
+            workspace,
+            empty,
+            lambda conn: [
                 IndexSearchHit(
                     doc_id=row["doc_id"],
                     section_id=row["section_id"],
@@ -137,49 +149,23 @@ class SqliteIndexBackend(IndexBackend):
                     score=-row["rank"],
                 )
                 for row in _search(conn, terms, doc_ids, limit)
-            ]
-        except sqlite3.Error:
-            return []  # a db that turns unusable mid-read degrades to "not indexed"
-        finally:
-            conn.close()
+            ],
+        )
 
     def load_graph(self, workspace: WorkspacePaths, doc_id: str) -> SectionGraph | None:
-        conn = _open_read_only(workspace)
-        if conn is None:
-            return None
-        try:
+        def query(conn: sqlite3.Connection) -> SectionGraph | None:
             if not _is_indexed(conn, doc_id):
                 return None
             return _load_graph(conn, doc_id)
-        except sqlite3.Error:
-            return None  # a db that turns unusable mid-read degrades to "not indexed"
-        finally:
-            conn.close()
+
+        return _read(workspace, None, query)
 
     def concept_nodes(self, workspace: WorkspacePaths) -> list[ConceptNode]:
-        conn = _open_read_only(workspace)
-        if conn is None:
-            return []
-        try:
-            return [
-                ConceptNode(
-                    slug=row["slug"],
-                    title=row["title"],
-                    doc_count=row["doc_count"],
-                    mention_count=row["mention_count"],
-                )
-                for row in _concept_nodes(conn)
-            ]
-        except sqlite3.Error:
-            return []  # a db without the concept schema (or unusable) has no concepts
-        finally:
-            conn.close()
+        empty: list[ConceptNode] = []
+        return _read(workspace, empty, lambda conn: [_to_node(row) for row in _concept_nodes(conn)])
 
     def get_concept(self, workspace: WorkspacePaths, slug: str) -> Concept | None:
-        conn = _open_read_only(workspace)
-        if conn is None:
-            return None
-        try:
+        def query(conn: sqlite3.Connection) -> Concept | None:
             node = _concept_node(conn, slug)
             if node is None:
                 return None
@@ -192,34 +178,73 @@ class SqliteIndexBackend(IndexBackend):
                 for row in _concept_mentions(conn, slug)
             ]
             return Concept(node=node, mentions=mentions)
-        except sqlite3.Error:
-            return None  # a db without the concept schema (or unusable) has no concepts
-        finally:
-            conn.close()
+
+        return _read(workspace, None, query)
+
+    def concepts(self, workspace: WorkspacePaths) -> list[Concept]:
+        def query(conn: sqlite3.Connection) -> list[Concept]:
+            mentions_by_slug: dict[str, list[ConceptMention]] = {}
+            for row in _all_concept_mentions(conn):
+                mentions_by_slug.setdefault(row["slug"], []).append(
+                    ConceptMention(
+                        doc_id=row["doc_id"],
+                        section_id=row["section_id"],
+                        title=row["title"],
+                    )
+                )
+            return [
+                Concept(node=node, mentions=mentions_by_slug.get(node.slug, []))
+                for node in (_to_node(row) for row in _concept_nodes(conn))
+            ]
+
+        empty: list[Concept] = []
+        return _read(workspace, empty, query)
 
     def section_concepts(
         self, workspace: WorkspacePaths, doc_id: str, section_id: str
     ) -> list[ConceptNode]:
-        conn = _open_read_only(workspace)
-        if conn is None:
-            return []
-        try:
-            return [
-                ConceptNode(
-                    slug=row["slug"],
-                    title=row["title"],
-                    doc_count=row["doc_count"],
-                    mention_count=row["mention_count"],
-                )
-                for row in _section_concepts(conn, doc_id, section_id)
-            ]
-        except sqlite3.Error:
-            return []  # a db without the concept schema (or unusable) has no concepts
-        finally:
-            conn.close()
+        empty: list[ConceptNode] = []
+        return _read(
+            workspace,
+            empty,
+            lambda conn: [_to_node(row) for row in _section_concepts(conn, doc_id, section_id)],
+        )
 
     def location(self, workspace: WorkspacePaths) -> str:
         return str(db_path(workspace))
+
+
+_T = TypeVar("_T")
+
+
+def _read(
+    workspace: WorkspacePaths, empty: _T, query: Callable[[sqlite3.Connection], _T]
+) -> _T:
+    """Run ``query`` on a read-only connection, degrading to ``empty``.
+
+    Centralizes the open / guard / close contract shared by every read method: an
+    absent, corrupt, or schema-incomplete database — or one that turns unusable
+    mid-read — yields ``empty`` rather than raising.
+    """
+
+    conn = _open_read_only(workspace)
+    if conn is None:
+        return empty
+    try:
+        return query(conn)
+    except sqlite3.Error:
+        return empty
+    finally:
+        conn.close()
+
+
+def _to_node(row: sqlite3.Row) -> ConceptNode:
+    return ConceptNode(
+        slug=row["slug"],
+        title=row["title"],
+        doc_count=row["doc_count"],
+        mention_count=row["mention_count"],
+    )
 
 
 def _open_read_only(workspace: WorkspacePaths) -> sqlite3.Connection | None:
@@ -252,6 +277,8 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
     try:
         conn.executescript(_SCHEMA)
     except sqlite3.OperationalError as exc:  # the FTS5 virtual table is what fails
+        if "locked" in str(exc).lower():
+            raise  # a busy/locked db is not an FTS5 problem — let the caller handle it
         raise IndexUnavailableError(
             "SQLite was built without the FTS5 extension required for the search "
             f"index ({exc}). Rebuild Python against a SQLite with FTS5."
@@ -405,6 +432,20 @@ def _section_concepts(
         "WHERE cm.doc_id = ? AND cm.section_id = ? "
         "ORDER BY cn.doc_count DESC, cn.mention_count DESC, cn.slug",
         (doc_id, section_id),
+    ).fetchall()
+
+
+def _all_concept_mentions(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    # Every concept's mentions in one query, grouped/ordered so callers can bucket
+    # them by slug — same per-concept order as ``_concept_mentions`` (by document,
+    # then reading position). Backs the single-pass ``concepts()``.
+    return conn.execute(
+        "SELECT cm.concept_slug AS slug, cm.doc_id AS doc_id, cm.section_id AS section_id, "
+        "       COALESCE(sg.title, cm.section_id) AS title "
+        "FROM concept_mentions cm "
+        "LEFT JOIN section_graph sg "
+        "  ON sg.doc_id = cm.doc_id AND sg.section_id = cm.section_id "
+        "ORDER BY cm.concept_slug, cm.doc_id, sg.ord, cm.section_id"
     ).fetchall()
 
 

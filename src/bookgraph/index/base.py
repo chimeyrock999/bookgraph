@@ -146,6 +146,21 @@ class IndexBackend(ABC):
         absent until it is built.
         """
 
+    def concepts(self, workspace: WorkspacePaths) -> list[Concept]:
+        """Every concept with its cross-book mentions, most-connected first.
+
+        Same ordering as :meth:`concept_nodes`. The default resolves each node via
+        :meth:`get_concept`; backends should override with a single-pass query when
+        they can, to avoid one round trip per concept.
+        """
+
+        concepts: list[Concept] = []
+        for node in self.concept_nodes(workspace):
+            concept = self.get_concept(workspace, node.slug)
+            if concept is not None:
+                concepts.append(concept)
+        return concepts
+
     @abstractmethod
     def section_concepts(
         self, workspace: WorkspacePaths, doc_id: str, section_id: str

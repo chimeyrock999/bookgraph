@@ -233,14 +233,16 @@ guarded migration on open: it reads `PRAGMA table_info(concept_mentions)` and is
 `ALTER TABLE … ADD COLUMN` only for columns that are missing (both with `NOT NULL
 DEFAULT` so existing rows backfill), and `CREATE TABLE IF NOT EXISTS section_annotations`.
 
-- A pre-change database keeps serving reads: the query SELECTs use
-  `COALESCE`-style defaults, so `get_concept` / `get_context.concepts` return the
-  existing auto mentions with an empty gloss and `source='auto'` until a rebuild adds
-  the columns. (Reads never migrate — only `index build` writes.)
-- **Migration note:** to pick up gloss/source and stored summaries, run
-  `bookgraph index build <doc_id>` once per document. Until a document is rebuilt its
-  concept reads degrade to the pre-change shape (empty gloss, `source='auto'`), never a
-  crash.
+- A pre-change database never crashes: its `concept_mentions` lacks the `gloss` /
+  `source` columns, so the concept-read SELECTs (which now name those columns) hit
+  "no such column" and the read-only wrapper degrades that read to **empty** — the same
+  graceful "not indexed" path used for a corrupt/partial database. So on an un-rebuilt
+  old database `get_concept` / `get_context.concepts` return empty rather than raising.
+  (Reads never migrate — only `index build` writes.)
+- **Migration note:** to restore concept reads and pick up gloss/source + stored
+  summaries, run `bookgraph index build <doc_id>` once per document — that is what adds
+  the columns and re-populates the rows. Until a document is rebuilt its concept reads
+  are empty (never a crash); search and the graph tools are unaffected.
 
 `bookgraph index concepts <workspace>` — a **global** pass (not per-document):
 

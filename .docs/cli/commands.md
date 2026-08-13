@@ -410,6 +410,8 @@ from the sections manifest into one workspace-wide SQLite database
 - a **search** full-text index (FTS5 `sections_fts`) backing `search`;
 - a **structural graph** (`section_graph`) — hierarchy + sequence edges — backing
   the graph/context tools;
+- a **concept graph** (`concept_mentions`, aggregated by the `concept_nodes` view)
+  — cross-book concept backlinks, populated per document and backing `get_concept`;
 - a **`doc_catalog`** row marking each document as indexed.
 
 See `.docs/cli/index.md` for the full schema and query contract.
@@ -429,9 +431,9 @@ bookgraph index build /path/to/workspace --doc-id ddia   # index one document
 
 - `indexes/bookgraph.db` — the workspace-wide SQLite index. Each document is
   (re)built idempotently and atomically into `doc_catalog` + `sections_fts` +
-  `section_graph` (delete-then-insert per `doc_id`); other documents' rows are
-  never touched. Fully regenerable from `sections.jsonl` and safe to delete and
-  rebuild (see `.docs/cli/index.md`).
+  `section_graph` + `concept_mentions` (delete-then-insert per `doc_id`); other
+  documents' rows are never touched. Fully regenerable from `sections.jsonl` and
+  safe to delete and rebuild (see `.docs/cli/index.md`).
 
 ### Must not do
 
@@ -447,6 +449,46 @@ bookgraph index build /path/to/workspace --doc-id ddia   # index one document
 
 - No `--doc-id` and nothing segmented → `No segmented documents under …`.
 - `--doc-id` given but its `sections.jsonl` is missing → `Sections manifest not found`.
+
+## `bookgraph index concepts`
+
+**Status:** Planned (this contract).
+
+Render the cross-book concept pages from the index. This is a **global** pass over
+every indexed document (concept pages aggregate across books, so unlike `index
+build` it is not per-document).
+
+```bash
+bookgraph index concepts /path/to/workspace
+```
+
+### Inputs
+
+- `workspace_path`: workspace/output root. Must already exist and have a built
+  `indexes/bookgraph.db`.
+
+### Writes
+
+- `wiki/concepts/<concept_slug>.md` — one page per concept, with cross-book
+  backlinks, rendered from `concept_nodes` + `concept_mentions`. Rewrites the whole
+  `wiki/concepts/` directory so it reflects exactly the currently indexed concepts
+  (see `.docs/cli/artifacts.md`).
+
+### Must not do
+
+- Must not parse, segment, build the index, or compile `wiki/books/` — it owns only
+  `wiki/concepts/`.
+- Must not read wiki output; concepts come from the index (itself derived from
+  `sections.jsonl`).
+
+### Prints
+
+- The number of concept pages written and the `wiki/concepts/` output directory.
+
+### Errors
+
+- No `indexes/bookgraph.db` / no indexed documents → an actionable message telling
+  the user to run `index build` first.
 
 ## `bookgraph mcp`
 
@@ -489,6 +531,12 @@ telling the user to `uv sync --extra mcp`.
   id/title/level reference).
 - `get_context(doc_id, section_id)` → a section's full reading content (as
   `get_section`) together with its graph neighbourhood (as `get_related`).
+- `get_concept(concept)` → a cross-book concept lookup: the concept node (`slug`,
+  `title`, `doc_count`, `mention_count`) plus its backlink mentions
+  (`doc_id`, `section_id`, `title`) across every indexed book, grouped by
+  document. Returns empty when the slug is unknown. Backed by `concept_nodes` /
+  `concept_mentions`; no live-scan fallback (a document's concepts exist only once
+  it is built).
 
 ### Reads / writes
 

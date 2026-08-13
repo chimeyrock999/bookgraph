@@ -14,6 +14,7 @@ from bookgraph.documents import read_document
 from bookgraph.sections import write_sections
 from bookgraph.segmenters.bookmark import BookmarkSegmenter, PdfBookmark
 from bookgraph.segmenters.heading import HeadingSegmenter
+from bookgraph.segmenters.token_page import TokenPageSegmenter
 from bookgraph.workspace import WorkspacePaths
 
 
@@ -39,6 +40,16 @@ def segment(
             ),
         ),
     ] = None,
+    max_tokens: Annotated[
+        int | None,
+        typer.Option(
+            "--max-tokens",
+            help=(
+                "Maximum tokens per token-page section. Defaults to "
+                "[segmenter].max_tokens."
+            ),
+        ),
+    ] = None,
 ) -> None:
     """Segment a parsed document into human reading sections under sources/sections/."""
 
@@ -50,6 +61,9 @@ def segment(
     resolved_target_level = config.segmenter.target_level if target_level is None else target_level
     if resolved_target_level < 1:
         raise typer.BadParameter("target_level must be at least 1")
+    resolved_max_tokens = config.segmenter.max_tokens if max_tokens is None else max_tokens
+    if resolved_max_tokens < 1:
+        raise typer.BadParameter("max_tokens must be at least 1")
 
     document_path = workspace.sources_parsed / resolved_doc_id / "document.json"
     if not document_path.is_file():
@@ -69,6 +83,8 @@ def segment(
             bookmarks=_load_bookmarks(workspace, resolved_doc_id),
             split_level=resolved_target_level,
         )
+    if isinstance(segmenter_plugin, TokenPageSegmenter):
+        segmenter_plugin = TokenPageSegmenter(max_tokens=resolved_max_tokens)
     sections = segmenter_plugin.segment(document)
     output_dir = workspace.sources_sections / resolved_doc_id
     try:
@@ -78,6 +94,8 @@ def segment(
 
     typer.echo(f"segmenter: {segmenter_name}")
     typer.echo(f"target_level: {resolved_target_level}")
+    if isinstance(segmenter_plugin, TokenPageSegmenter):
+        typer.echo(f"max_tokens: {resolved_max_tokens}")
     typer.echo(f"doc_id: {resolved_doc_id}")
     typer.echo(f"sections: {len(sections)}")
     typer.echo(f"manifest: {output.manifest}")

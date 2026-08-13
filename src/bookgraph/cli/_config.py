@@ -33,6 +33,7 @@ class MinerUConfig:
 class SegmenterConfig:
     default: str = "heading"
     target_level: int = 2
+    max_tokens: int = 800
 
 
 @dataclass(frozen=True)
@@ -84,6 +85,7 @@ def load_config(workspace: WorkspacePaths) -> BookGraphConfig:
         segmenter=SegmenterConfig(
             default=_string_at(payload, ["segmenter", "default"], "heading"),
             target_level=_positive_int_at(payload, ["segmenter", "target_level"], 2),
+            max_tokens=_positive_int_at(payload, ["segmenter", "max_tokens"], 800),
         ),
         wiki=WikiConfig(backend=_string_at(payload, ["wiki", "backend"], "llmwiki")),
         reading_plan=ReadingPlanConfig(

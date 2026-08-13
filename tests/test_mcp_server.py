@@ -48,12 +48,15 @@ def test_build_server_registers_the_reading_and_query_tools(tmp_path: Path) -> N
 
     assert server.name == "bookgraph"
     assert sorted(tool.name for tool in tools) == [
+        "create_plan",
         "get_concept",
         "get_context",
         "get_next_section",
         "get_outline",
         "get_related",
         "get_section",
+        "list_documents",
+        "list_plans",
         "mark_read",
         "search",
     ]

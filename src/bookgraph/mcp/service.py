@@ -8,6 +8,7 @@ so they can be unit-tested directly; the MCP server is a thin wrapper in
 
 from __future__ import annotations
 
+import json
 from collections import Counter
 from pathlib import Path
 
@@ -16,7 +17,13 @@ from pydantic import BaseModel, Field
 from bookgraph.graph import SectionGraph, build_section_graph
 from bookgraph.index import default_index_backend, tokenize
 from bookgraph.models import ReadingPlan, Section
-from bookgraph.reading_plans import mark_section_read, next_sections, read_reading_plan
+from bookgraph.reading_plans import (
+    create_reading_plan,
+    mark_section_read,
+    next_sections,
+    read_reading_plan,
+    write_reading_plan,
+)
 from bookgraph.sections import read_sections
 from bookgraph.utils import ID_PATTERN, validate_slug_id
 from bookgraph.workspace import WorkspacePaths
@@ -504,3 +511,144 @@ def get_concept(workspace: WorkspacePaths, concept: str) -> ConceptView:
             for mention in result.mentions
         ],
     )
+
+
+# --- Workspace orientation & reading-plan management -----------------------------
+#
+# Self-serve tools so a reading agent connected over MCP can discover what there is
+# to read (``list_documents``) and start/track a reading plan (``create_plan`` /
+# ``list_plans``) without a human running the CLI first. They reuse the same pure
+# reading-plan logic as ``cli/reading_plan.py``.
+
+
+class DocumentRef(BaseModel):
+    """A segmented document available to read."""
+
+    doc_id: str
+    title: str
+    section_count: int
+
+
+class DocumentList(BaseModel):
+    """The workspace's segmented documents."""
+
+    documents: list[DocumentRef] = Field(default_factory=list)
+
+
+class CreatedPlan(BaseModel):
+    """Outcome of creating a reading plan."""
+
+    plan_id: str
+    doc_id: str
+    daily_sections: int
+    section_count: int
+    path: str
+
+
+class PlanRef(BaseModel):
+    """A reading plan with its completion progress."""
+
+    plan_id: str
+    doc_id: str
+    completed: int
+    total: int
+    done: bool
+
+
+class PlanList(BaseModel):
+    """The workspace's reading plans."""
+
+    plans: list[PlanRef] = Field(default_factory=list)
+
+
+def _document_title(workspace: WorkspacePaths, doc_id: str) -> str:
+    """The parsed document's title, falling back to ``doc_id``."""
+
+    path = workspace.sources_parsed / doc_id / "document.json"
+    try:
+        payload = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return doc_id
+    title = payload.get("title") if isinstance(payload, dict) else None
+    return title if isinstance(title, str) and title else doc_id
+
+
+def list_documents(workspace: WorkspacePaths) -> DocumentList:
+    """List the workspace's segmented documents (what an agent can read)."""
+
+    documents: list[DocumentRef] = []
+    for doc_id in _segmented_doc_ids(workspace):
+        try:
+            sections = _load_doc_sections(workspace, doc_id)
+        except SectionsNotFoundError:
+            continue  # a manifest that vanished/broke between listing and read
+        documents.append(
+            DocumentRef(
+                doc_id=doc_id,
+                title=_document_title(workspace, doc_id),
+                section_count=len(sections),
+            )
+        )
+    return DocumentList(documents=documents)
+
+
+def create_plan(
+    workspace: WorkspacePaths,
+    doc_id: str,
+    plan_id: str | None = None,
+    daily_sections: int = 1,
+) -> CreatedPlan:
+    """Create (and persist) a reading plan for a segmented document.
+
+    ``plan_id`` defaults to ``doc_id``. Mirrors ``bookgraph reading-plan create``.
+    """
+
+    resolved_doc_id = _validate_id(doc_id, "doc_id")
+    resolved_plan_id = _validate_id(plan_id or resolved_doc_id, "plan_id")
+    if daily_sections < 1:
+        raise ReadingServiceError("daily_sections must be at least 1")
+
+    sections = _load_doc_sections(workspace, resolved_doc_id)
+    try:
+        plan = create_reading_plan(
+            sections,
+            plan_id=resolved_plan_id,
+            doc_id=resolved_doc_id,
+            daily_sections=daily_sections,
+        )
+    except ValueError as exc:
+        raise ReadingServiceError(str(exc)) from exc
+
+    path = workspace.reading_plans_root / f"{resolved_plan_id}.json"
+    write_reading_plan(plan, path)
+    return CreatedPlan(
+        plan_id=plan.plan_id,
+        doc_id=plan.doc_id,
+        daily_sections=plan.daily_sections,
+        section_count=len(plan.section_ids),
+        path=str(path),
+    )
+
+
+def list_plans(workspace: WorkspacePaths) -> PlanList:
+    """List the workspace's reading plans with completion progress."""
+
+    root = workspace.reading_plans_root
+    plans: list[PlanRef] = []
+    for path in sorted(root.glob("*.json")) if root.is_dir() else []:
+        try:
+            plan = read_reading_plan(path)
+        except (OSError, ValueError):
+            continue  # skip an unreadable/corrupt plan rather than fail the listing
+        total = len(plan.section_ids)
+        completed = len(plan.completed)
+        plans.append(
+            PlanRef(
+                plan_id=plan.plan_id,
+                doc_id=plan.doc_id,
+                completed=completed,
+                total=total,
+                done=total > 0 and completed >= total,
+            )
+        )
+    return PlanList(plans=plans)

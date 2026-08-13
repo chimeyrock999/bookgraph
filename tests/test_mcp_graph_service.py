@@ -239,3 +239,67 @@ def test_get_context_has_no_concepts_without_an_index(tmp_path: Path) -> None:
     context = service.get_context(workspace, "ddia", "ddia.ch-1")
 
     assert context.concepts == []
+
+
+def test_list_documents_reports_segmented_docs(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+
+    listing = service.list_documents(workspace)
+
+    assert [d.doc_id for d in listing.documents] == ["ddia"]
+    doc = listing.documents[0]
+    assert doc.section_count == 4
+    assert doc.title == "ddia"  # no parsed document.json → falls back to doc_id
+
+
+def test_list_documents_is_empty_without_segmented_docs(tmp_path: Path) -> None:
+    workspace = WorkspacePaths(tmp_path)
+
+    assert service.list_documents(workspace).documents == []
+
+
+def test_create_plan_writes_a_readable_plan(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+
+    created = service.create_plan(workspace, "ddia", daily_sections=2)
+
+    assert created.plan_id == "ddia"
+    assert created.doc_id == "ddia"
+    assert created.daily_sections == 2
+    assert created.section_count == 4
+    # round-trips through list_plans and the next-section tool
+    plans = service.list_plans(workspace)
+    assert [(p.plan_id, p.completed, p.total, p.done) for p in plans.plans] == [
+        ("ddia", 0, 4, False)
+    ]
+    nxt = service.get_next_section(workspace, "ddia")
+    assert [s.id for s in nxt.sections] == ["ddia.part-1", "ddia.ch-1"]
+
+
+def test_create_plan_custom_plan_id(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+
+    created = service.create_plan(workspace, "ddia", plan_id="my-plan")
+
+    assert created.plan_id == "my-plan"
+    assert (workspace.reading_plans_root / "my-plan.json").is_file()
+
+
+def test_create_plan_rejects_an_unsegmented_doc(tmp_path: Path) -> None:
+    workspace = WorkspacePaths(tmp_path)
+
+    with pytest.raises(SectionsNotFoundError):
+        service.create_plan(workspace, "missing")
+
+
+def test_create_plan_rejects_an_invalid_doc_id(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+
+    with pytest.raises(InvalidIdError):
+        service.create_plan(workspace, "../escape")
+
+
+def test_list_plans_is_empty_without_any_plans(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+
+    assert service.list_plans(workspace).plans == []

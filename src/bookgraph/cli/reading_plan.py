@@ -100,6 +100,29 @@ def reading_plan_create(
     typer.echo(f"reading_plan: {path}")
 
 
+@reading_plan_app.command("list")
+def reading_plan_list(
+    workspace_path: Annotated[Path, typer.Argument(help="BookGraph workspace/output root path.")],
+) -> None:
+    """List reading plans in the workspace with their completion progress."""
+
+    workspace = WorkspacePaths(workspace_path.expanduser().resolve())
+    root = workspace.reading_plans_root
+    paths = sorted(root.glob("*.json")) if root.is_dir() else []
+    printed = 0
+    for path in paths:
+        try:
+            plan = read_reading_plan(path)
+        except (OSError, ValueError):
+            continue  # skip an unreadable/corrupt plan rather than fail the listing
+        typer.echo(
+            f"{plan.plan_id}\t{plan.doc_id}\t{len(plan.completed)}/{len(plan.section_ids)}"
+        )
+        printed += 1
+    if printed == 0:
+        typer.echo("reading_plans: (none)")
+
+
 @reading_plan_app.command("next")
 def reading_plan_next(
     workspace_path: Annotated[Path, typer.Argument(help="BookGraph workspace/output root path.")],

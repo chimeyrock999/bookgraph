@@ -46,6 +46,7 @@ flowchart TD
         direction LR
         IDX1["FTS5 search<br/>indexes/bookgraph.db"]
         IDX2["section graph<br/>indexes/bookgraph.db"]
+        IDX3["concept graph<br/>indexes/bookgraph.db"]
     end
 
     subgraph W["Wiki backend plugins — bookgraph wiki compile"]
@@ -55,6 +56,7 @@ flowchart TD
     end
 
     W --> WIKI["Linked wiki<br/>wiki/books/ + wikilinks"]
+    IDX --> WIKIC["Concept pages<br/>wiki/concepts/<br/>(bookgraph index concepts)"]
 
     IDX --> MCP
     SEC --> MCP
@@ -65,6 +67,7 @@ flowchart TD
         MCP1["reading<br/>get_next_section · get_section · mark_read"]
         MCP2["search"]
         MCP3["graph/context<br/>get_outline · get_related · get_context"]
+        MCP4["concepts<br/>get_concept"]
     end
 
     classDef planned stroke-dasharray:5,opacity:0.65;
@@ -72,6 +75,15 @@ flowchart TD
 
 Dashed nodes are planned/placeholder; everything else is implemented. File type
 routing picks the parser adapter, and `--parser` overrides it.
+
+The **wiki output** (`wiki/`) and the **MCP server** are two independent, parallel
+consumers of the same upstream — the sections manifest and the index — not a chain.
+MCP serves reading/query programmatically straight from `sources/sections/`,
+`indexes/bookgraph.db`, and `reading_plans/`; it never reads the wiki files. The
+wiki is the human / external-LLM-facing rendering (book pages via `wiki compile`,
+cross-book concept pages via `index concepts`). The two stay consistent because
+both derive concepts from the same shared extractor (`bookgraph.concepts`), not
+because one reads the other.
 
 ## Module layout
 
@@ -89,8 +101,9 @@ src/bookgraph/
   pdf_metadata.py           # cheap PDF metadata/bookmark inspection
   reading_plans.py          # reading plan store (create/next/mark-read core)
   graph.py                  # section graph model + builder (hierarchy + sequence)
+  concepts.py               # shared deterministic concept extractor (wiki + index)
   index/
-    base.py                 # IndexBackend port + IndexSearchHit + tokenizer
+    base.py                 # IndexBackend port + hits/concept models + tokenizer
     sqlite.py               # default backend: SQLite/FTS5 (indexes/bookgraph.db)
   parsers/
     mineru.py               # MinerU *_middle.json adapter
@@ -102,7 +115,7 @@ src/bookgraph/
     bookmark.py             # PDF bookmark/outline segmenter (heading fallback)
   wiki_backends/
     llmwiki.py              # Stage section markdown for llm-wiki-compiler
-    markdown_graph.py       # Linked markdown wiki: book pages + wikilinks
+    markdown_graph.py       # Linked markdown wiki: book pages + wikilinks (uses concepts.py)
   mcp/
     service.py              # Reading/query logic (FastMCP-free, unit-tested)
     server.py               # FastMCP server wrapper (optional `mcp` extra)
@@ -216,19 +229,25 @@ Implemented:
 - TOC/bookmark-aware segmenter (`--segmenter bookmark`) fed by registered PDF
   bookmarks with heading fallback
 - FastMCP server (`bookgraph mcp`, optional `mcp` extra) exposing reading tools
-  (`get_next_section`, `get_section`, `mark_read`), `search`, and graph/context
-  tools (`get_outline`, `get_related`, `get_context`) over the sections,
-  reading-plan, and index artifacts
+  (`get_next_section`, `get_section`, `mark_read`), `search`, graph/context tools
+  (`get_outline`, `get_related`, `get_context`), and the cross-book concept tool
+  (`get_concept`) over the sections, reading-plan, and index artifacts
 - SQLite index (`bookgraph index build`) in `indexes/bookgraph.db` behind a
   pluggable `IndexBackend` port (default: SQLite/FTS5): an FTS5 `bm25` search
   table backing MCP `search` (with cross-document search and a live-scan fallback
   for unindexed documents) and a section-graph table capturing heading hierarchy
   + reading sequence, backing the graph/context tools (rebuilt from sections when
   unindexed)
+- Cross-book concept graph in `indexes/bookgraph.db` (`concept_mentions` table +
+  `concept_nodes` view), populated per document by `index build` from a shared
+  deterministic concept extractor (also used by the `markdown-graph` wiki backend),
+  backing the MCP `get_concept` tool; `bookgraph index concepts` renders cross-book
+  `wiki/concepts/<slug>.md` backlink pages from it
 
 Planned next:
 
 - Cross-document / semantic edges in the section graph (beyond hierarchy +
   sequence) to widen graph/context results
+- Richer / LLM-assisted concept extraction beyond the deterministic first pass
 - Alternative `IndexBackend` implementations (e.g. a vector/embedding store) via
   the same port

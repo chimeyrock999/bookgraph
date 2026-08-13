@@ -474,6 +474,11 @@ bookgraph index concepts /path/to/workspace
   `wiki/concepts/` directory so it reflects exactly the currently indexed concepts
   (see `.docs/cli/artifacts.md`).
 
+> Backlinks point into `wiki/books/<doc_id>/sections/`, which is materialized by
+> `bookgraph wiki compile <doc_id> --backend markdown-graph`, not by this command.
+> Run `wiki compile` for each book so the links resolve; `index concepts` prints a
+> `warning:` line counting any backlinks whose book page has not been compiled yet.
+
 ### Must not do
 
 - Must not parse, segment, build the index, or compile `wiki/books/` — it owns only
@@ -484,6 +489,8 @@ bookgraph index concepts /path/to/workspace
 ### Prints
 
 - The number of concept pages written and the `wiki/concepts/` output directory.
+- A `warning:` line when any backlink targets a `wiki/books/` section page that has
+  not been compiled yet, pointing the user to `bookgraph wiki compile`.
 
 ### Errors
 
@@ -530,7 +537,9 @@ telling the user to `uv sync --extra mcp`.
   graph: `parent`, `prev`, `next`, and `children` (each a lightweight
   id/title/level reference).
 - `get_context(doc_id, section_id)` → a section's full reading content (as
-  `get_section`) together with its graph neighbourhood (as `get_related`).
+  `get_section`), its graph neighbourhood (as `get_related`), and its `concepts`
+  (each with `slug`, `title`, and cross-book `doc_count` / `mention_count`) so a
+  reader can pivot into `get_concept`. Concepts are empty for an unindexed document.
 - `get_concept(concept)` → a cross-book concept lookup: the concept node (`slug`,
   `title`, `doc_count`, `mention_count`) plus its backlink mentions
   (`doc_id`, `section_id`, `title`) across every indexed book, grouped by

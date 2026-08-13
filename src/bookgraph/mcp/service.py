@@ -42,6 +42,10 @@ class SectionNotFoundError(ReadingServiceError):
     """A requested section id does not exist in a document."""
 
 
+class ConceptNotFoundError(ReadingServiceError):
+    """A requested concept slug is not present in the index."""
+
+
 class SectionView(BaseModel):
     """A section's full reading content plus provenance and its Markdown path."""
 
@@ -132,11 +136,39 @@ class RelatedSections(BaseModel):
     children: list[SectionRef] = Field(default_factory=list)
 
 
+class ConceptRef(BaseModel):
+    """A lightweight concept pointer with its cross-book reach (no backlinks)."""
+
+    slug: str
+    title: str
+    doc_count: int
+    mention_count: int
+
+
 class SectionContext(BaseModel):
-    """A section's full content together with its graph neighbourhood."""
+    """A section's full content, its graph neighbourhood, and its concepts."""
 
     section: SectionView
     related: RelatedSections
+    concepts: list[ConceptRef] = Field(default_factory=list)
+
+
+class ConceptMentionView(BaseModel):
+    """One backlink: a section (in some book) that mentions a concept."""
+
+    doc_id: str
+    section_id: str
+    title: str
+
+
+class ConceptView(BaseModel):
+    """A concept aggregated across books, with its cross-book backlinks."""
+
+    slug: str
+    title: str
+    doc_count: int
+    mention_count: int
+    mentions: list[ConceptMentionView] = Field(default_factory=list)
 
 
 def _section_markdown_path(workspace: WorkspacePaths, doc_id: str, section_id: str) -> Path:
@@ -426,9 +458,49 @@ def get_related(workspace: WorkspacePaths, doc_id: str, section_id: str) -> Rela
 
 
 def get_context(workspace: WorkspacePaths, doc_id: str, section_id: str) -> SectionContext:
-    """Return a section's full content plus its graph neighbourhood."""
+    """Return a section's full content, graph neighbourhood, and its concepts.
+
+    The concepts let a reader pivot from the current section to where each concept
+    is discussed elsewhere (via ``get_concept``). They are empty for a document that
+    has not been indexed (concepts have no live-scan fallback).
+    """
 
     # Resolve the section first so a missing id raises before any graph work.
     section = get_section(workspace, doc_id, section_id)
     related = get_related(workspace, doc_id, section_id)
-    return SectionContext(section=section, related=related)
+    concepts = [
+        ConceptRef(
+            slug=node.slug,
+            title=node.title,
+            doc_count=node.doc_count,
+            mention_count=node.mention_count,
+        )
+        for node in default_index_backend().section_concepts(workspace, doc_id, section_id)
+    ]
+    return SectionContext(section=section, related=related, concepts=concepts)
+
+
+def get_concept(workspace: WorkspacePaths, concept: str) -> ConceptView:
+    """Return a concept and its cross-book backlink mentions from the index."""
+
+    slug = _validate_id(concept, "concept")
+    result = default_index_backend().get_concept(workspace, slug)
+    if result is None:
+        raise ConceptNotFoundError(
+            f"Concept '{slug}' not found. Run 'bookgraph index build' then "
+            "'bookgraph index concepts'."
+        )
+    return ConceptView(
+        slug=result.node.slug,
+        title=result.node.title,
+        doc_count=result.node.doc_count,
+        mention_count=result.node.mention_count,
+        mentions=[
+            ConceptMentionView(
+                doc_id=mention.doc_id,
+                section_id=mention.section_id,
+                title=mention.title,
+            )
+            for mention in result.mentions
+        ],
+    )

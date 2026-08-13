@@ -16,6 +16,7 @@ from fastmcp.exceptions import ToolError
 
 from bookgraph.mcp import service
 from bookgraph.mcp.service import (
+    ConceptView,
     MarkReadResult,
     NextSection,
     Outline,
@@ -89,10 +90,19 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
 
     @mcp.tool
     def get_context(doc_id: str, section_id: str) -> SectionContext:
-        """Return a section's full content plus its graph neighbourhood."""
+        """Return a section's full content, graph neighbourhood, and its concepts."""
 
         try:
             return service.get_context(workspace, doc_id, section_id)
+        except ReadingServiceError as exc:
+            raise ToolError(str(exc)) from exc
+
+    @mcp.tool
+    def get_concept(concept: str) -> ConceptView:
+        """Return a concept and its cross-book backlink mentions across all books."""
+
+        try:
+            return service.get_concept(workspace, concept)
         except ReadingServiceError as exc:
             raise ToolError(str(exc)) from exc
 

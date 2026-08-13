@@ -41,13 +41,14 @@ def _workspace(tmp_path: Path) -> WorkspacePaths:
     return workspace
 
 
-def test_build_server_registers_the_four_reading_tools(tmp_path: Path) -> None:
+def test_build_server_registers_the_reading_and_query_tools(tmp_path: Path) -> None:
     server = build_server(_workspace(tmp_path))
 
     tools = asyncio.run(server.list_tools())
 
     assert server.name == "bookgraph"
     assert sorted(tool.name for tool in tools) == [
+        "get_concept",
         "get_context",
         "get_next_section",
         "get_outline",

@@ -9,6 +9,9 @@ service or CLI layers.
 from __future__ import annotations
 
 from bookgraph.index.base import (
+    Concept,
+    ConceptMention,
+    ConceptNode,
     IndexBackend,
     IndexSearchHit,
     IndexUnavailableError,
@@ -36,6 +39,9 @@ def default_index_backend() -> IndexBackend:
 
 __all__ = [
     "DEFAULT_INDEX_BACKEND",
+    "Concept",
+    "ConceptMention",
+    "ConceptNode",
     "IndexBackend",
     "IndexSearchHit",
     "IndexUnavailableError",

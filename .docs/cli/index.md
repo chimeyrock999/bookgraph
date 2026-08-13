@@ -196,6 +196,10 @@ stage's output.
   (cross-document search) and each hit carries its `doc_id`.
 - **`get_outline` / `get_related` / `get_context`**: read `section_graph` for the
   requested `doc_id`, reconstructing children via the `parent_id` inverse.
+  `get_context` additionally returns the section's own concepts (from
+  `concept_mentions`, each with its cross-book `doc_count` / `mention_count`) so a
+  reader can pivot from the current section into `get_concept`; these are empty for
+  an unindexed document (concepts have no live-scan fallback).
 - **`get_concept(concept)`**: looks a concept up by slug in `concept_nodes`, then
   reads its `concept_mentions` across **every** indexed book. Returns the node
   (`slug`, `title`, `doc_count`, `mention_count`) plus its backlink mentions

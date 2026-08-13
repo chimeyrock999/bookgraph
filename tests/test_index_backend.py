@@ -203,6 +203,116 @@ def test_load_graph_returns_none_for_a_document_not_in_the_catalog(tmp_path: Pat
     assert backend.load_graph(workspace, "ddia") is None
 
 
+def test_concepts_are_extracted_and_aggregated_across_books(tmp_path: Path) -> None:
+    workspace = WorkspacePaths(tmp_path)
+    backend = SqliteIndexBackend()
+    backend.build_document(
+        workspace, "ddia", "DDIA", [_section("ddia.a", "Schema Evolution", "x", doc_id="ddia")]
+    )
+    backend.build_document(
+        workspace,
+        "deep-work",
+        "Deep Work",
+        [_section("deep-work.a", "Schema Evolution", "x")],
+    )
+
+    nodes = {node.slug: node for node in backend.concept_nodes(workspace)}
+    assert "schema-evolution" in nodes
+    assert nodes["schema-evolution"].doc_count == 2
+    assert nodes["schema-evolution"].mention_count == 2
+
+    concept = backend.get_concept(workspace, "schema-evolution")
+    assert concept is not None
+    assert concept.node.title == "Schema Evolution"
+    assert sorted(m.doc_id for m in concept.mentions) == ["ddia", "deep-work"]
+    # The section title travels with each backlink.
+    assert all(m.title == "Schema Evolution" for m in concept.mentions)
+
+
+def test_concepts_are_rebuilt_per_document_and_isolated(tmp_path: Path) -> None:
+    workspace = WorkspacePaths(tmp_path)
+    backend = SqliteIndexBackend()
+    backend.build_document(
+        workspace, "ddia", "DDIA", [_section("ddia.a", "Replication", "x", doc_id="ddia")]
+    )
+    backend.build_document(
+        workspace, "other", "Other", [_section("other.a", "Sharding", "x", doc_id="other")]
+    )
+    # Re-segment ddia with a different concept.
+    backend.build_document(
+        workspace, "ddia", "DDIA", [_section("ddia.a", "Consensus", "x", doc_id="ddia")]
+    )
+
+    slugs = {node.slug for node in backend.concept_nodes(workspace)}
+    assert "consensus" in slugs  # new concept present
+    assert "replication" not in slugs  # old concept dropped on rebuild
+    assert "sharding" in slugs  # untouched document survives
+    assert backend.get_concept(workspace, "replication") is None
+
+
+def test_concepts_bulk_matches_per_node_get_concept(tmp_path: Path) -> None:
+    workspace = WorkspacePaths(tmp_path)
+    backend = SqliteIndexBackend()
+    backend.build_document(
+        workspace, "ddia", "DDIA", [_section("ddia.a", "Schema Evolution", "x", doc_id="ddia")]
+    )
+    backend.build_document(
+        workspace, "deep-work", "Deep Work", [_section("deep-work.a", "Schema Evolution", "x")]
+    )
+
+    # The single-pass concepts() must equal resolving each node individually.
+    bulk = backend.concepts(workspace)
+    per_node = [
+        backend.get_concept(workspace, node.slug) for node in backend.concept_nodes(workspace)
+    ]
+    assert [c.model_dump() for c in bulk] == [c.model_dump() for c in per_node if c is not None]
+
+
+def test_concepts_is_empty_without_an_index(tmp_path: Path) -> None:
+    assert SqliteIndexBackend().concepts(WorkspacePaths(tmp_path)) == []
+
+
+def test_get_concept_returns_none_for_unknown_slug(tmp_path: Path) -> None:
+    workspace = WorkspacePaths(tmp_path)
+    backend = SqliteIndexBackend()
+    backend.build_document(
+        workspace, "ddia", "DDIA", [_section("ddia.a", "Replication", "x", doc_id="ddia")]
+    )
+
+    assert backend.get_concept(workspace, "not-a-concept") is None
+
+
+def test_concept_queries_degrade_when_no_index_exists(tmp_path: Path) -> None:
+    workspace = WorkspacePaths(tmp_path)
+    backend = SqliteIndexBackend()
+
+    assert backend.concept_nodes(workspace) == []
+    assert backend.get_concept(workspace, "anything") is None
+
+
+def test_concept_queries_degrade_on_a_pre_concept_schema_db(tmp_path: Path) -> None:
+    # A database built before the concept tables existed (core tables only) must
+    # still serve; concept queries just return empty rather than raising.
+    workspace = WorkspacePaths(tmp_path)
+    _partial_db(
+        workspace,
+        [
+            "CREATE TABLE doc_catalog "
+            "(doc_id TEXT PRIMARY KEY, title TEXT NOT NULL, section_count INTEGER NOT NULL)",
+            "CREATE VIRTUAL TABLE sections_fts USING fts5("
+            "doc_id UNINDEXED, section_id UNINDEXED, title, text)",
+            "CREATE TABLE section_graph (doc_id TEXT NOT NULL, section_id TEXT NOT NULL, "
+            "ord INTEGER NOT NULL, level INTEGER NOT NULL, title TEXT NOT NULL, "
+            "heading_path TEXT NOT NULL, parent_id TEXT, prev_id TEXT, next_id TEXT, "
+            "PRIMARY KEY (doc_id, section_id))",
+        ],
+    )
+    backend = SqliteIndexBackend()
+
+    assert backend.concept_nodes(workspace) == []
+    assert backend.get_concept(workspace, "anything") is None
+
+
 def _partial_db(workspace: WorkspacePaths, statements: list[str]) -> None:
     """Create a bookgraph.db with only the given schema statements (no full build)."""
 

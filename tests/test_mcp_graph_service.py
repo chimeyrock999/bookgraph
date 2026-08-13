@@ -6,7 +6,12 @@ import pytest
 
 from bookgraph.index.sqlite import SqliteIndexBackend, db_path
 from bookgraph.mcp import service
-from bookgraph.mcp.service import InvalidIdError, SectionNotFoundError, SectionsNotFoundError
+from bookgraph.mcp.service import (
+    ConceptNotFoundError,
+    InvalidIdError,
+    SectionNotFoundError,
+    SectionsNotFoundError,
+)
 from bookgraph.models import Section
 from bookgraph.sections import read_sections, write_sections
 from bookgraph.workspace import WorkspacePaths
@@ -169,3 +174,68 @@ def test_graph_tools_reject_non_slug_doc_ids(tmp_path: Path, bad_id: str) -> Non
         service.get_related(workspace, bad_id, "ddia.ch-1")
     with pytest.raises(InvalidIdError):
         service.get_context(workspace, bad_id, "ddia.ch-1")
+
+
+def test_get_concept_returns_cross_book_backlinks(tmp_path: Path) -> None:
+    workspace = WorkspacePaths(tmp_path)
+    backend = SqliteIndexBackend()
+    backend.build_document(
+        workspace,
+        "ddia",
+        "DDIA",
+        [Section(id="ddia.a", doc_id="ddia", title="Schema Evolution", level=1,
+                 heading_path=["Schema Evolution"], text="x")],
+    )
+    backend.build_document(
+        workspace,
+        "deep-work",
+        "Deep Work",
+        [Section(id="deep-work.a", doc_id="deep-work", title="Schema Evolution", level=1,
+                 heading_path=["Schema Evolution"], text="x")],
+    )
+
+    concept = service.get_concept(workspace, "schema-evolution")
+
+    assert concept.slug == "schema-evolution"
+    assert concept.doc_count == 2
+    assert concept.mention_count == 2
+    assert sorted(m.doc_id for m in concept.mentions) == ["ddia", "deep-work"]
+
+
+def test_get_concept_raises_for_unknown_slug(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path, build_index=True)
+
+    with pytest.raises(ConceptNotFoundError):
+        service.get_concept(workspace, "not-a-concept")
+
+
+def test_get_concept_rejects_invalid_slug(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path, build_index=True)
+
+    with pytest.raises(InvalidIdError):
+        service.get_concept(workspace, "../escape")
+
+
+def test_get_context_includes_the_sections_concepts(tmp_path: Path) -> None:
+    workspace = WorkspacePaths(tmp_path)
+    sections = [
+        Section(id="ddia.a", doc_id="ddia", title="Schema Evolution", level=1,
+                heading_path=["Schema Evolution"], text="x")
+    ]
+    write_sections(sections, workspace.sources_sections / "ddia")
+    SqliteIndexBackend().build_document(workspace, "ddia", "DDIA", sections)
+
+    context = service.get_context(workspace, "ddia", "ddia.a")
+
+    node = next(c for c in context.concepts if c.slug == "schema-evolution")
+    assert node.title == "Schema Evolution"
+    assert node.doc_count == 1
+    assert node.mention_count == 1
+
+
+def test_get_context_has_no_concepts_without_an_index(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path, build_index=False)
+
+    context = service.get_context(workspace, "ddia", "ddia.ch-1")
+
+    assert context.concepts == []

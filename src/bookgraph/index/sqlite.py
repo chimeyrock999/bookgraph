@@ -8,7 +8,7 @@ One workspace-wide database at ``indexes/bookgraph.db`` holds:
 - ``concept_mentions`` — per-section concept backlinks (+ the ``concept_nodes``
   view aggregating them across books) backing ``get_concept``.
 
-See ``.docs/cli/index.md`` for the schema and build/query contract.
+See ``docs/cli/index.md`` for the schema and build/query contract.
 """
 
 from __future__ import annotations

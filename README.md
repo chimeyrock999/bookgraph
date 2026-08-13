@@ -38,6 +38,22 @@ What makes it different from a typical RAG pipeline:
   MCP serving are replaceable behind small interfaces, so heavy tools like
   MinerU, MarkItDown, llm-wiki-compiler, and FastMCP stay optional adapters.
 
+## External tools used
+
+BookGraph keeps heavyweight integrations optional and wraps them behind local
+ports/adapters:
+
+- [MinerU](https://github.com/opendatalab/MinerU) — raw PDF parsing/layout
+  extraction, staged as MinerU `*_middle.json` before conversion to
+  `document.json`.
+- [MarkItDown](https://github.com/microsoft/markitdown) — optional Office/HTML/etc.
+  to Markdown conversion for the `markitdown` parser adapter.
+- [llm-wiki-compiler](https://github.com/atomicstrata/llm-wiki-compiler) — optional
+  wiki compiler target; BookGraph's `llmwiki` backend stages section Markdown for
+  this workflow.
+- [FastMCP](https://github.com/jlowin/fastmcp) — optional MCP server framework used
+  by `bookgraph mcp` when the `mcp` extra is installed.
+
 ## Architecture
 
 The pipeline is a chain of pluggable stages behind small ports. Each stage writes
@@ -151,10 +167,16 @@ src/bookgraph/
     server.py               # FastMCP server wrapper (optional `mcp` extra)
 ```
 
-## CLI contracts
+## Documentation
 
-CLI behavior and filesystem artifact contracts live in `.docs/cli/`. Update those contracts on
-`main` before implementing or changing CLI behavior so other agents can coordinate safely.
+Public docs live in `docs/`:
+
+- `docs/cli/` — user-facing CLI guides plus filesystem/command contracts.
+- `docs/mcp/` — user-facing agent/MCP setup guides.
+- `docs/design/` — maintainer-facing design notes, invariants, and runtime contracts.
+
+Update the relevant doc on `main` before implementing or changing CLI/artifact
+behavior so other agents can coordinate safely.
 
 ## Workspace layout
 

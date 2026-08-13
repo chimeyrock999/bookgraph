@@ -106,4 +106,4 @@ Optional navigation tools:
   names in sync when either skill changes.
 - Other agents can copy this directory to their own skill/procedure location or
   load this file as repository instructions.
-- Full setup details live in `.docs/mcp/reading-agent.md`.
+- Full setup details live in `docs/mcp/reading-agent.md`.

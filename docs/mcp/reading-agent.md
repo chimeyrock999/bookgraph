@@ -7,7 +7,7 @@ between "workspace prepared" and "agent reading".
 
 The MCP server (`bookgraph mcp`) serves one workspace over stdio and exposes only
 the tools below; it never reads the wiki files — it serves from
-`sources/sections/` + `indexes/bookgraph.db` (see `.docs/cli/index.md`).
+`sources/sections/` + `indexes/bookgraph.db` (see `docs/cli/index.md`).
 
 ## 1. Prepare a workspace (one-time, per corpus)
 
@@ -96,7 +96,7 @@ exactly where the last left off and keeps every annotation ever written.
 
 ## The reinforcement loop
 
-The concept graph has two tiers (see `.docs/cli/annotations.md`):
+The concept graph has two tiers (see `docs/cli/annotations.md`):
 
 - **Tier 1 (auto):** a deterministic tokenizer extracts concepts at `index build` time,
   so the graph is never empty — but it is "dumb" (false positives, missed concepts).

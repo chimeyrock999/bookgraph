@@ -25,7 +25,7 @@ bookgraph mcp /path/to/workspace     # stdio; add to your MCP client config
 ```
 
 If the tools aren't available, tell the user to start/connect that server (see
-`.docs/mcp/reading-agent.md`).
+`docs/mcp/reading-agent.md`).
 
 **If the document isn't ingested yet** (`list_documents` is empty or missing it),
 it must be prepared once via the CLI — you can run these if the user asks:
@@ -89,5 +89,5 @@ Operational details live in `docs/cli/parse-book-large-pdfs.md`.
   else is read-only.
 - Concepts require `bookgraph index build`; `search` and the graph tools also work
   before indexing (live scan), just with rougher ranking.
-- Full tool reference: `.docs/cli/commands.md`; setup + client config:
-  `.docs/mcp/reading-agent.md`.
+- Full tool reference: `docs/cli/commands.md`; setup + client config:
+  `docs/mcp/reading-agent.md`.

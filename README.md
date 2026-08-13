@@ -41,12 +41,13 @@ src/bookgraph/
   cli/                      # Typer CLI (one module per pipeline stage)
   books.py                  # CLI-only book registration contract
   workspace.py              # Workspace/output path contract
-  models.py                 # CanonicalBlock, Document, Section
+  models.py                 # CanonicalBlock, Document, Section, ReadingPlan
   ports.py                  # Parser / Segmenter / WikiBackend interfaces
   plugins.py                # Name-based plugin registry
   defaults.py               # Built-in plugin registrations
   documents.py              # document.json reader/writer
   sections.py               # sections.jsonl + <section_id>.md reader/writer
+  pdf_metadata.py           # cheap PDF metadata/bookmark inspection
   reading_plans.py          # reading plan store (create/next/mark-read core)
   parsers/
     mineru.py               # MinerU *_middle.json adapter
@@ -120,6 +121,10 @@ runs/                # run logs/artifacts
 bookgraph.toml       # workspace config
 ```
 
+`bookgraph.toml` supplies workspace defaults for parser routing, MinerU runner
+settings, segmenter selection/heading target level, wiki backend, and reading
+plan daily batch size. Explicit CLI flags still win over config defaults.
+
 ## Development
 
 ```bash
@@ -138,20 +143,21 @@ Implemented:
 - llmwiki staging backend
 - CLI workspace initializer with explicit `--output` alias and `paths` inspector
 - CLI-only `add-book` contract that registers a PDF source without running parser/segmenter
-
 - Markdown and MarkItDown parser adapters plus file type based parser routing
 - CLI `parse` / `parsers` commands writing `sources/parsed/<doc_id>/document.json`
 - MinerU runner that invokes MinerU on a raw PDF and stages its `*_middle.json`
+- PDF metadata/bookmark detector used during book registration
 - Section writer core (`write_sections`): `sections.jsonl` + `<section_id>.md`
   reading units from segmenter output, plus a `document.json` reader
 - CLI `segment` command: parses `document.json` through a segmenter and writes
   the section artifacts under `sources/sections/<doc_id>/`
+- `bookgraph.toml` config loading for parser/MinerU/segmenter/wiki/reading-plan
+  defaults
 - Reading-plan store (`bookgraph.reading_plans`) and CLI `reading-plan
   create`/`next`/`mark-read`: daily reading progression state under
   `reading_plans/<plan_id>.json`
 
 Planned next:
 
-- PDF metadata/bookmark detector
-- `bookgraph.toml` config loading so CLI defaults come from the workspace
+- TOC/bookmark-aware segmenter fed by registered PDF bookmarks
 - FastMCP server exposing `get_next_section`, `get_section`, `search`, `mark_read`

@@ -57,5 +57,5 @@ strict = true
 packages = ["bookgraph"]
 
 [[tool.mypy.overrides]]
-module = ["markitdown.*"]
+module = ["markitdown.*", "pypdf.*"]
 ignore_missing_imports = true

@@ -14,7 +14,7 @@ from bookgraph.cli._shared import (
     _write_placeholder,
 )
 from bookgraph.defaults import default_wiki_backend_registry
-from bookgraph.wiki_backends.llmwiki import read_sections_manifest
+from bookgraph.sections import read_sections
 from bookgraph.workspace import WorkspacePaths
 
 
@@ -58,7 +58,7 @@ def wiki_compile(
     if not sections_manifest.is_file():
         raise typer.BadParameter(f"Sections manifest not found: {sections_manifest}")
     try:
-        sections = read_sections_manifest(sections_manifest)
+        sections = read_sections(sections_manifest)
         backend_plugin = default_wiki_backend_registry().get(backend_name)
         output_dir = backend_plugin.compile_book(sections, wiki_book_dir)
     except ValueError as exc:

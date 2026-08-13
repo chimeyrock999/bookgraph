@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from bookgraph.models import Section
@@ -23,18 +22,6 @@ class LlmWikiBackend(WikiBackend):
         index_path = output_dir / "README.md"
         index_path.write_text(_render_index(output_dir.name, sections))
         return output_dir
-
-
-def read_sections_manifest(manifest: Path) -> list[Section]:
-    sections: list[Section] = []
-    for line_number, raw_line in enumerate(manifest.read_text().splitlines(), start=1):
-        if not raw_line.strip():
-            continue
-        try:
-            sections.append(Section.model_validate(json.loads(raw_line)))
-        except (json.JSONDecodeError, ValueError) as exc:
-            raise ValueError(f"Invalid section in {manifest}:{line_number}: {exc}") from exc
-    return sections
 
 
 def _render_index(doc_id: str, sections: list[Section]) -> str:

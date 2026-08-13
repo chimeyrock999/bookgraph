@@ -34,6 +34,13 @@ def test_add_book_declares_contract_without_running_pipeline(tmp_path: Path) -> 
         "source_path": str(pdf.resolve()),
         "workspace_path": str(workspace.resolve()),
         "status": "registered",
+        "pdf": {
+            "title": None,
+            "author": None,
+            "pages": 0,
+            "has_bookmarks": False,
+            "bookmarks": [],
+        },
         "pipeline": {
             "parser": None,
             "segmenter": None,

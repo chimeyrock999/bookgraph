@@ -30,15 +30,28 @@ class MinerUConfig:
 
 
 @dataclass(frozen=True)
+class SegmenterConfig:
+    default: str = "heading"
+    target_level: int = 2
+
+
+@dataclass(frozen=True)
 class WikiConfig:
     backend: str = "llmwiki"
+
+
+@dataclass(frozen=True)
+class ReadingPlanConfig:
+    daily_sections: int = 1
 
 
 @dataclass(frozen=True)
 class BookGraphConfig:
     parsers: ParserConfig = ParserConfig()
     mineru: MinerUConfig = MinerUConfig()
+    segmenter: SegmenterConfig = SegmenterConfig()
     wiki: WikiConfig = WikiConfig()
+    reading_plan: ReadingPlanConfig = ReadingPlanConfig()
 
 
 def load_config(workspace: WorkspacePaths) -> BookGraphConfig:
@@ -68,7 +81,14 @@ def load_config(workspace: WorkspacePaths) -> BookGraphConfig:
                 payload, ["mineru", "timeout_seconds"], 3600
             ),
         ),
+        segmenter=SegmenterConfig(
+            default=_string_at(payload, ["segmenter", "default"], "heading"),
+            target_level=_positive_int_at(payload, ["segmenter", "target_level"], 2),
+        ),
         wiki=WikiConfig(backend=_string_at(payload, ["wiki", "backend"], "llmwiki")),
+        reading_plan=ReadingPlanConfig(
+            daily_sections=_positive_int_at(payload, ["reading_plan", "daily_sections"], 1)
+        ),
     )
 
 
@@ -108,3 +128,12 @@ def _optional_non_negative_int_at(
     if not isinstance(value, int) or value < 0:
         raise typer.BadParameter(f"Config {'.'.join(path)} must be a non-negative integer")
     return None if value == 0 else value
+
+
+def _positive_int_at(payload: dict[str, Any], path: list[str], default: int) -> int:
+    value = _get_nested(payload, path)
+    if value is None:
+        return default
+    if not isinstance(value, int) or value < 1:
+        raise typer.BadParameter(f"Config {'.'.join(path)} must be a positive integer")
+    return value

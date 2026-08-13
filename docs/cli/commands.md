@@ -652,6 +652,48 @@ is only ever matched against loaded plan/section data, never used as a raw path.
 > A document absent from `doc_catalog` is always treated as unindexed. See
 > `docs/cli/index.md`.
 
+## `bookgraph llmwiki serve`
+
+**Status:** Implemented.
+
+Convenience wrapper that launches the **optional** `llmwiki` MCP server over a
+workspace's compiled `wiki/` directory. It is a secondary integration — BookGraph
+MCP (`bookgraph mcp`) remains the primary reading server, and this command does not
+make `llmwiki` a dependency of `bookgraph mcp`. See
+`docs/mcp/llmwiki-integration.md`.
+
+```bash
+bookgraph llmwiki serve /path/to/workspace
+bookgraph llmwiki serve /path/to/workspace --print
+```
+
+### Inputs
+
+- `workspace_path`: workspace/output root. Must already exist.
+- `--print`: print the resolved `llmwiki serve <wiki_dir>` command and exit without
+  launching anything.
+
+### Behavior
+
+- Resolves the workspace's `wiki/` directory (`<workspace>/wiki`) and runs
+  `llmwiki serve <wiki_dir>`, forwarding its exit code.
+- With `--print`, emits the command instead of running it.
+
+### Must not do
+
+- Must not parse, segment, compile wiki, build the index, or update reading
+  progress.
+- Must not read or mutate BookGraph's canonical inputs (`sources/sections/`,
+  `indexes/bookgraph.db`, `reading_plans/`, `annotations/`).
+
+### Errors
+
+- Missing workspace directory → `Workspace not found: … Run 'bookgraph init' first.`
+- No compiled `wiki/` directory → an actionable message pointing at
+  `bookgraph wiki compile`.
+- `llmwiki` not installed / not on PATH (without `--print`) → an actionable message
+  telling the user to install `llm-wiki-compiler` or re-run with `--print`.
+
 ## Book-level parse / wiki compile contracts
 
 ### `bookgraph parse-book`

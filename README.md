@@ -160,6 +160,8 @@ Implemented:
 - Reading-plan store (`bookgraph.reading_plans`) and CLI `reading-plan
   create`/`next`/`mark-read`: daily reading progression state under
   `reading_plans/<plan_id>.json`
+- TOC/bookmark-aware segmenter (`--segmenter bookmark`) fed by registered PDF
+  bookmarks with heading fallback
 - FastMCP server (`bookgraph mcp`, optional `mcp` extra) exposing
   `get_next_section`, `get_section`, `search`, `mark_read` over the sections and
   reading-plan artifacts
@@ -169,5 +171,4 @@ Implemented:
 
 Planned next:
 
-- TOC/bookmark-aware segmenter fed by registered PDF bookmarks
 - A graph index under `indexes/` linking sections for graph/context MCP tools

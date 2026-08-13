@@ -102,6 +102,7 @@ default_markdown = "markdown"
 [segmenter]
 default = "heading"
 target_level = 2
+max_tokens = 800
 
 [wiki]
 backend = "llmwiki"

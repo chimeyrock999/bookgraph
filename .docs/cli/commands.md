@@ -239,7 +239,9 @@ Segment a parsed document into human reading sections.
 bookgraph segment /path/to/workspace <doc_id>
 bookgraph segment /path/to/workspace <doc_id> --segmenter heading
 bookgraph segment /path/to/workspace <doc_id> --segmenter bookmark
+bookgraph segment /path/to/workspace <doc_id> --segmenter token-page
 bookgraph segment /path/to/workspace <doc_id> --target-level 1
+bookgraph segment /path/to/workspace <doc_id> --segmenter token-page --max-tokens 800
 ```
 
 ### Inputs
@@ -253,11 +255,17 @@ bookgraph segment /path/to/workspace <doc_id> --target-level 1
   deepest PDF bookmark level that starts sections. Defaults to
   `[segmenter].target_level` in `bookgraph.toml` (`2` when unset). Other
   segmenters may ignore this option.
+- `--max-tokens`: maximum token budget per `token-page` section. Defaults to
+  `[segmenter].max_tokens` in `bookgraph.toml` (`800` when unset). Ignored by
+  heading/bookmark segmenters.
 
 Reads `sources/parsed/<doc_id>/document.json` (fails if missing). The `bookmark`
 segmenter also reads `sources/inbox/<doc_id>/book.json` and uses its
 `pdf.bookmarks` array when present; without usable bookmarks it falls back to the
-heading segmenter.
+heading segmenter. The `token-page` segmenter is a deterministic fallback for
+documents with weak/missing headings or bookmarks: it keeps blocks whole,
+chunks by a token budget, and prefers page boundaries when a page break is
+available near the budget.
 
 ### Writes
 
@@ -281,6 +289,7 @@ the command rather than overwriting.
 ```text
 segmenter: <segmenter_name>
 target_level: <n>
+max_tokens: <n>      # only printed for token-page
 doc_id: <doc_id>
 sections: <section_count>
 manifest: <workspace>/sources/sections/<doc_id>/sections.jsonl

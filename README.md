@@ -33,7 +33,7 @@ flowchart TD
         direction LR
         S1["heading"]
         S2["bookmark"]
-        S3["token/page fallback<br/>(planned)"]:::planned
+        S3["token/page fallback"]
     end
 
     S --> SEC["Reading sections<br/>sources/sections/&lt;doc&gt;/*.jsonl + .md"]
@@ -100,6 +100,7 @@ src/bookgraph/
   segmenters/
     heading.py              # Heading/title-block segmenter
     bookmark.py             # PDF bookmark/outline segmenter (heading fallback)
+    token_page.py           # Token-budget/page-boundary fallback segmenter
   wiki_backends/
     llmwiki.py              # Stage section markdown for llm-wiki-compiler
     markdown_graph.py       # Linked markdown wiki: book pages + wikilinks
@@ -215,6 +216,9 @@ Implemented:
   `reading_plans/<plan_id>.json`
 - TOC/bookmark-aware segmenter (`--segmenter bookmark`) fed by registered PDF
   bookmarks with heading fallback
+- Token/page fallback segmenter (`--segmenter token-page`) for documents without
+  useful headings or bookmarks; chunks whole blocks by token budget while
+  preferring page boundaries when possible
 - FastMCP server (`bookgraph mcp`, optional `mcp` extra) exposing reading tools
   (`get_next_section`, `get_section`, `mark_read`), `search`, and graph/context
   tools (`get_outline`, `get_related`, `get_context`) over the sections,

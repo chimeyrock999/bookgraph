@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from bookgraph.indexes import build_section_index, index_path, write_index
 from bookgraph.mcp import service
 from bookgraph.mcp.service import (
     InvalidIdError,
@@ -15,7 +16,7 @@ from bookgraph.mcp.service import (
 )
 from bookgraph.models import ReadingPlan, Section
 from bookgraph.reading_plans import write_reading_plan
-from bookgraph.sections import write_sections
+from bookgraph.sections import read_sections, write_sections
 from bookgraph.workspace import WorkspacePaths
 
 
@@ -199,6 +200,37 @@ def test_search_respects_limit(tmp_path: Path) -> None:
     result = service.search_sections(workspace, "match", limit=2)
 
     assert [hit.section_id for hit in result.hits] == ["deep-work.c", "deep-work.b"]
+
+
+def test_search_uses_persisted_index_when_present(tmp_path: Path) -> None:
+    workspace = _workspace(
+        tmp_path,
+        _section("deep-work.a", "Storage engines", "storage storage storage index"),
+        _section("deep-work.c", "Indexes", "an index on storage"),
+    )
+    sections = read_sections(workspace.sources_sections / "deep-work" / "sections.jsonl")
+    write_index(build_section_index("deep-work", sections), index_path(workspace, "deep-work"))
+
+    result = service.search_sections(workspace, "storage")
+
+    # Same ranking as the scan fallback — the index and scan share tokenization.
+    assert [hit.section_id for hit in result.hits] == ["deep-work.a", "deep-work.c"]
+    assert result.hits[0].score == 4
+    assert "storage" in result.hits[0].snippet.lower()
+
+
+def test_search_falls_back_to_scan_for_a_corrupt_index(tmp_path: Path) -> None:
+    workspace = _workspace(
+        tmp_path,
+        _section("deep-work.a", "Storage", "storage text"),
+    )
+    path = index_path(workspace, "deep-work")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{ not valid json")
+
+    result = service.search_sections(workspace, "storage")
+
+    assert [hit.section_id for hit in result.hits] == ["deep-work.a"]
 
 
 def test_search_rejects_empty_query(tmp_path: Path) -> None:

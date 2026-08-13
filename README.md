@@ -49,6 +49,7 @@ src/bookgraph/
   sections.py               # sections.jsonl + <section_id>.md reader/writer
   pdf_metadata.py           # cheap PDF metadata/bookmark inspection
   reading_plans.py          # reading plan store (create/next/mark-read core)
+  indexes.py                # inverted search index (build/read/write core)
   parsers/
     mineru.py               # MinerU *_middle.json adapter
     markdown.py             # Markdown -> canonical blocks (shared by Markdown-producing parsers)
@@ -162,8 +163,11 @@ Implemented:
 - FastMCP server (`bookgraph mcp`, optional `mcp` extra) exposing
   `get_next_section`, `get_section`, `search`, `mark_read` over the sections and
   reading-plan artifacts
+- Inverted search index (`bookgraph index build`) under
+  `indexes/sections/<doc_id>.json` backing MCP `search`, with a live-scan
+  fallback for unindexed documents
 
 Planned next:
 
 - TOC/bookmark-aware segmenter fed by registered PDF bookmarks
-- A real sections/graph index under `indexes/` to back MCP `search`
+- A graph index under `indexes/` linking sections for graph/context MCP tools

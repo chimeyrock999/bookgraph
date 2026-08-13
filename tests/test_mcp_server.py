@@ -48,7 +48,10 @@ def test_build_server_registers_the_four_reading_tools(tmp_path: Path) -> None:
 
     assert server.name == "bookgraph"
     assert sorted(tool.name for tool in tools) == [
+        "get_context",
         "get_next_section",
+        "get_outline",
+        "get_related",
         "get_section",
         "mark_read",
         "search",
@@ -73,3 +76,16 @@ def test_search_tool_ranks_sections(tmp_path: Path) -> None:
 
     hits = result.structured_content["hits"]
     assert [hit["section_id"] for hit in hits] == ["deep-work.a"]
+
+
+def test_get_context_tool_returns_section_with_neighbourhood(tmp_path: Path) -> None:
+    server = build_server(_workspace(tmp_path))
+
+    result = asyncio.run(
+        server.call_tool("get_context", {"doc_id": "deep-work", "section_id": "deep-work.a"})
+    )
+
+    payload = result.structured_content
+    assert payload["section"]["text"] == "hello world"
+    assert payload["related"]["section_id"] == "deep-work.a"
+    assert payload["related"]["parent"] is None

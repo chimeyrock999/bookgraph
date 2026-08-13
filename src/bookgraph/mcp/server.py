@@ -18,8 +18,11 @@ from bookgraph.mcp import service
 from bookgraph.mcp.service import (
     MarkReadResult,
     NextSection,
+    Outline,
     ReadingServiceError,
+    RelatedSections,
     SearchResult,
+    SectionContext,
     SectionView,
 )
 from bookgraph.workspace import WorkspacePaths
@@ -63,6 +66,33 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
 
         try:
             return service.search_sections(workspace, query, doc_id, limit)
+        except ReadingServiceError as exc:
+            raise ToolError(str(exc)) from exc
+
+    @mcp.tool
+    def get_outline(doc_id: str) -> Outline:
+        """Return a document's section outline (heading hierarchy) in reading order."""
+
+        try:
+            return service.get_outline(workspace, doc_id)
+        except ReadingServiceError as exc:
+            raise ToolError(str(exc)) from exc
+
+    @mcp.tool
+    def get_related(doc_id: str, section_id: str) -> RelatedSections:
+        """Return a section's structural neighbours: parent, prev, next, and children."""
+
+        try:
+            return service.get_related(workspace, doc_id, section_id)
+        except ReadingServiceError as exc:
+            raise ToolError(str(exc)) from exc
+
+    @mcp.tool
+    def get_context(doc_id: str, section_id: str) -> SectionContext:
+        """Return a section's full content plus its graph neighbourhood."""
+
+        try:
+            return service.get_context(workspace, doc_id, section_id)
         except ReadingServiceError as exc:
             raise ToolError(str(exc)) from exc
 

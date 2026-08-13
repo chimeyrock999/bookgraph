@@ -1,0 +1,170 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from bookgraph.graph import SectionGraph, SectionNode, build_section_graph, graph_path, write_graph
+from bookgraph.mcp import service
+from bookgraph.mcp.service import InvalidIdError, SectionNotFoundError, SectionsNotFoundError
+from bookgraph.models import Section
+from bookgraph.sections import read_sections, write_sections
+from bookgraph.workspace import WorkspacePaths
+
+
+def _section(
+    section_id: str,
+    title: str,
+    level: int,
+    *,
+    prev_id: str | None = None,
+    next_id: str | None = None,
+    text: str = "Body.",
+) -> Section:
+    return Section(
+        id=section_id,
+        doc_id="ddia",
+        title=title,
+        level=level,
+        heading_path=[title],
+        text=text,
+        prev_id=prev_id,
+        next_id=next_id,
+    )
+
+
+def _sections() -> list[Section]:
+    # Part I > (Chapter 1, Chapter 2), Part II
+    return [
+        _section("ddia.part-1", "Part I", 1, next_id="ddia.ch-1"),
+        _section(
+            "ddia.ch-1",
+            "Chapter 1",
+            2,
+            prev_id="ddia.part-1",
+            next_id="ddia.ch-2",
+            text="storage",
+        ),
+        _section("ddia.ch-2", "Chapter 2", 2, prev_id="ddia.ch-1", next_id="ddia.part-2"),
+        _section("ddia.part-2", "Part II", 1, prev_id="ddia.ch-2"),
+    ]
+
+
+def _workspace(tmp_path: Path, *, build_index: bool = False) -> WorkspacePaths:
+    workspace = WorkspacePaths(tmp_path)
+    sections = _sections()
+    write_sections(sections, workspace.sources_sections / "ddia")
+    if build_index:
+        write_graph(build_section_graph("ddia", sections), graph_path(workspace, "ddia"))
+    return workspace
+
+
+def test_get_outline_returns_hierarchy_in_reading_order(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+
+    outline = service.get_outline(workspace, "ddia")
+
+    assert outline.doc_id == "ddia"
+    assert [node.id for node in outline.nodes] == [
+        "ddia.part-1",
+        "ddia.ch-1",
+        "ddia.ch-2",
+        "ddia.part-2",
+    ]
+    by_id = {node.id: node for node in outline.nodes}
+    assert by_id["ddia.part-1"].child_ids == ["ddia.ch-1", "ddia.ch-2"]
+    assert by_id["ddia.ch-1"].parent_id == "ddia.part-1"
+    assert by_id["ddia.part-2"].parent_id is None
+
+
+def test_get_related_returns_parent_prev_next_and_children(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+
+    related = service.get_related(workspace, "ddia", "ddia.ch-1")
+
+    assert related.parent is not None and related.parent.id == "ddia.part-1"
+    assert related.prev is not None and related.prev.id == "ddia.part-1"
+    assert related.next is not None and related.next.id == "ddia.ch-2"
+    assert related.children == []
+
+    part = service.get_related(workspace, "ddia", "ddia.part-1")
+    assert [child.id for child in part.children] == ["ddia.ch-1", "ddia.ch-2"]
+    assert part.parent is None
+    assert part.prev is None
+
+
+def test_get_context_combines_full_content_with_neighbourhood(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+
+    context = service.get_context(workspace, "ddia", "ddia.ch-1")
+
+    assert context.section.id == "ddia.ch-1"
+    assert context.section.text == "storage"
+    assert context.related.parent is not None
+    assert context.related.parent.id == "ddia.part-1"
+
+
+def test_graph_tools_work_without_a_built_index(tmp_path: Path) -> None:
+    # No `index build` run: the graph is rebuilt from sections on demand.
+    workspace = _workspace(tmp_path, build_index=False)
+    assert not graph_path(workspace, "ddia").exists()
+
+    outline = service.get_outline(workspace, "ddia")
+    assert len(outline.nodes) == 4
+
+
+def test_graph_tools_prefer_the_persisted_index_when_present(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path, build_index=True)
+    assert graph_path(workspace, "ddia").is_file()
+
+    outline = service.get_outline(workspace, "ddia")
+    assert [node.id for node in outline.nodes] == [n.id for n in read_sections(
+        workspace.sources_sections / "ddia" / "sections.jsonl"
+    )]
+
+
+def test_graph_tools_ignore_a_graph_whose_doc_id_mismatches_its_filename(tmp_path: Path) -> None:
+    """A schema-valid graph carrying another doc's id is stale: rebuild from sections."""
+
+    workspace = _workspace(tmp_path)
+    mismatched = SectionGraph(
+        doc_id="other-doc",
+        nodes=[SectionNode(id="other.x", title="Wrong", level=1)],
+    )
+    write_graph(mismatched, graph_path(workspace, "ddia"))
+
+    outline = service.get_outline(workspace, "ddia")
+
+    # The mismatched graph is discarded; the real 4-section structure is served.
+    assert [node.id for node in outline.nodes] == [
+        "ddia.part-1",
+        "ddia.ch-1",
+        "ddia.ch-2",
+        "ddia.part-2",
+    ]
+
+
+def test_get_related_raises_for_unknown_section(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+
+    with pytest.raises(SectionNotFoundError, match="not found"):
+        service.get_related(workspace, "ddia", "ddia.ghost")
+
+
+def test_graph_tools_raise_for_unsegmented_document(tmp_path: Path) -> None:
+    workspace = WorkspacePaths(tmp_path)
+
+    with pytest.raises(SectionsNotFoundError, match="No sections"):
+        service.get_outline(workspace, "ddia")
+
+
+@pytest.mark.parametrize("bad_id", ["../escape", "a/b", "..", "UP"])
+def test_graph_tools_reject_non_slug_doc_ids(tmp_path: Path, bad_id: str) -> None:
+    workspace = _workspace(tmp_path)
+
+    with pytest.raises(InvalidIdError):
+        service.get_outline(workspace, bad_id)
+    with pytest.raises(InvalidIdError):
+        service.get_related(workspace, bad_id, "ddia.ch-1")
+    with pytest.raises(InvalidIdError):
+        service.get_context(workspace, bad_id, "ddia.ch-1")

@@ -476,11 +476,20 @@ telling the user to `uv sync --extra mcp`.
 - `search(query, doc_id=None, limit=10)` → sections ranked by query-term
   frequency in title and text, with a short snippet. `doc_id` scopes to one
   document; omit it to search every segmented document.
+- `get_outline(doc_id)` → the document's section outline (heading hierarchy) in
+  reading order: one node per section with `title`, `level`, `parent_id`, and
+  `child_ids`.
+- `get_related(doc_id, section_id)` → a section's structural neighbours in the
+  graph: `parent`, `prev`, `next`, and `children` (each a lightweight
+  id/title/level reference).
+- `get_context(doc_id, section_id)` → a section's full reading content (as
+  `get_section`) together with its graph neighbourhood (as `get_related`).
 
 ### Reads / writes
 
-- Reads `indexes/sections/<doc_id>.json` (when built) and
-  `sources/sections/<doc_id>/sections.jsonl`, plus `reading_plans/<plan_id>.json`.
+- Reads `indexes/sections/<doc_id>.json` and `indexes/graph/<doc_id>.json` (each
+  when built) and `sources/sections/<doc_id>/sections.jsonl`, plus
+  `reading_plans/<plan_id>.json`.
 - `mark_read` writes `reading_plans/<plan_id>.json` (same contract as
   `bookgraph reading-plan mark-read`). No other tool writes.
 
@@ -493,6 +502,12 @@ is only ever matched against loaded plan/section data, never used as a raw path.
 > (built by `bookgraph index build`) when present, and falls back to a live scan of
 > `sections.jsonl` for documents that have not been indexed yet. Both paths share
 > the same tokenizer, so results are identical whether or not an index exists.
+>
+> The graph tools (`get_outline` / `get_related` / `get_context`) likewise use the
+> persisted graph under `indexes/graph/<doc_id>.json` when present and rebuild it
+> from `sections.jsonl` otherwise, so they work before `index build` has run. A
+> graph file whose stored `doc_id` does not match its filename is treated as stale
+> and rebuilt from the manifest.
 
 ## Placeholder command contracts
 

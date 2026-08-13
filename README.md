@@ -31,7 +31,7 @@ Wiki backend plugins
   ↓
 MCP server plugins
   - reading tools: get_next_section / get_section / search / mark_read (`bookgraph mcp`)
-  - graph/context tools (planned)
+  - graph/context tools: get_outline / get_related / get_context
 ```
 
 ## Module layout
@@ -163,17 +163,18 @@ Implemented:
   `reading_plans/<plan_id>.json`
 - TOC/bookmark-aware segmenter (`--segmenter bookmark`) fed by registered PDF
   bookmarks with heading fallback
-- FastMCP server (`bookgraph mcp`, optional `mcp` extra) exposing
-  `get_next_section`, `get_section`, `search`, `mark_read` over the sections and
-  reading-plan artifacts
+- FastMCP server (`bookgraph mcp`, optional `mcp` extra) exposing reading tools
+  (`get_next_section`, `get_section`, `mark_read`), `search`, and graph/context
+  tools (`get_outline`, `get_related`, `get_context`) over the sections,
+  reading-plan, and index artifacts
 - Inverted search index (`bookgraph index build`) under
   `indexes/sections/<doc_id>.json` backing MCP `search`, with a live-scan
   fallback for unindexed documents
 - Section graph (`bookgraph index build`) under `indexes/graph/<doc_id>.json`
-  capturing heading hierarchy + reading sequence, built alongside the search
-  index
+  capturing heading hierarchy + reading sequence, backing the graph/context MCP
+  tools, with an on-the-fly rebuild from sections when unindexed
 
 Planned next:
 
-- Graph/context MCP tools (`get_outline` / `get_related` / `get_context`) served
-  from the section graph
+- Cross-document / semantic edges in the section graph (beyond hierarchy +
+  sequence) to widen graph/context results

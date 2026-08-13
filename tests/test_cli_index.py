@@ -5,6 +5,7 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from bookgraph.cli import app
+from bookgraph.graph import read_graph
 from bookgraph.indexes import read_index
 from bookgraph.models import Section
 from bookgraph.sections import write_sections
@@ -43,6 +44,9 @@ def test_index_build_writes_index_for_one_document(tmp_path: Path) -> None:
     index = read_index(workspace.indexes_root / "sections" / "deep-work.json")
     assert index.doc_id == "deep-work"
     assert index.postings["storage"] == {"deep-work.a": 3}
+    # index build also emits the section graph.
+    graph = read_graph(workspace.indexes_root / "graph" / "deep-work.json")
+    assert [node.id for node in graph.nodes] == ["deep-work.a"]
 
 
 def test_index_build_indexes_every_segmented_document(tmp_path: Path) -> None:

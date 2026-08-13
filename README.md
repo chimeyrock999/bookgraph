@@ -50,6 +50,7 @@ src/bookgraph/
   pdf_metadata.py           # cheap PDF metadata/bookmark inspection
   reading_plans.py          # reading plan store (create/next/mark-read core)
   indexes.py                # inverted search index (build/read/write core)
+  graph.py                  # section graph: hierarchy + sequence edges
   parsers/
     mineru.py               # MinerU *_middle.json adapter
     markdown.py             # Markdown -> canonical blocks (shared by Markdown-producing parsers)
@@ -168,7 +169,11 @@ Implemented:
 - Inverted search index (`bookgraph index build`) under
   `indexes/sections/<doc_id>.json` backing MCP `search`, with a live-scan
   fallback for unindexed documents
+- Section graph (`bookgraph index build`) under `indexes/graph/<doc_id>.json`
+  capturing heading hierarchy + reading sequence, built alongside the search
+  index
 
 Planned next:
 
-- A graph index under `indexes/` linking sections for graph/context MCP tools
+- Graph/context MCP tools (`get_outline` / `get_related` / `get_context`) served
+  from the section graph

@@ -11,6 +11,7 @@ from __future__ import annotations
 # Import for side effects: each module registers its commands on ``app``.
 from bookgraph.cli import (  # noqa: E402,F401
     book,
+    index,
     mcp,
     parse,
     reading_plan,

@@ -259,6 +259,42 @@ titles with colons or quotes cannot corrupt the frontmatter.
 > read this manifest and emit compiled output under `wiki/`, not rewrite section
 > source artifacts.
 
+## `indexes/sections/<doc_id>.json`
+
+Owner: the index stage (`bookgraph index build` command /
+`bookgraph.indexes`).
+
+Per-document inverted index that backs MCP `search`. Mirrors
+`bookgraph.indexes.SectionIndex`:
+
+```json
+{
+  "doc_id": "ddia",
+  "sections": [
+    {"id": "ddia.chapter-3-storage", "title": "Chapter 3. Storage", "text": "Opening paragraph."}
+  ],
+  "postings": {
+    "storage": {"ddia.chapter-3-storage": 2},
+    "opening": {"ddia.chapter-3-storage": 1}
+  }
+}
+```
+
+### Field rules
+
+- `doc_id`: parent document id; matches the `sources/sections/<doc_id>/` folder
+  and the `<doc_id>.json` filename.
+- `sections`: one entry per indexed section, in reading order, holding the `id`,
+  `title`, and `text` — a denormalised copy carried purely so `search` can build
+  result snippets without re-reading `sections.jsonl`.
+- `postings`: `token -> {section_id: term frequency}`. Tokens are lowercased
+  maximal `[a-z0-9]+` runs from each section's `title` + `text`; the same
+  tokenizer scores the live-scan fallback, so an unindexed document ranks
+  identically.
+
+Fully regenerable from `sections.jsonl`; safe to delete and rebuild. Rebuild
+after re-segmenting a document so the denormalised text stays in sync.
+
 ## `reading_plans/<plan_id>.json`
 
 Owner: the reading-plan stage (`bookgraph reading-plan` commands /

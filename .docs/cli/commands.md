@@ -399,6 +399,43 @@ reading_plan: <workspace>/reading_plans/<plan_id>.json
 - Must not run MCP server/tools.
 - Must not write outside `reading_plans/`.
 
+## `bookgraph index build`
+
+**Status:** Implemented.
+
+Build the persistent search index that backs MCP `search`, deriving a per-document
+inverted index from the sections manifest.
+
+```bash
+bookgraph index build /path/to/workspace                 # index every segmented document
+bookgraph index build /path/to/workspace --doc-id ddia   # index one document
+```
+
+### Inputs
+
+- `workspace_path`: workspace/output root. Must already exist (`bookgraph init`).
+- `--doc-id`: index only this document. Validated as a filesystem-safe slug.
+  Omit it to index every segmented document under `sources/sections/`.
+
+### Writes
+
+- `indexes/sections/<doc_id>.json` per document — the inverted index (see
+  `.docs/cli/artifacts.md`). Fully regenerable; safe to delete and rebuild.
+
+### Must not do
+
+- Must not parse, segment, or compile wiki.
+- Must not write outside `indexes/`.
+
+### Prints
+
+- `doc_id`, `sections`, `terms`, and the written `index` path per document.
+
+### Errors
+
+- No `--doc-id` and nothing segmented → `No segmented documents under …`.
+- `--doc-id` given but its `sections.jsonl` is missing → `Sections manifest not found`.
+
 ## `bookgraph mcp`
 
 **Status:** Implemented (requires the optional `mcp` extra).
@@ -434,7 +471,8 @@ telling the user to `uv sync --extra mcp`.
 
 ### Reads / writes
 
-- Reads `sources/sections/<doc_id>/sections.jsonl` and `reading_plans/<plan_id>.json`.
+- Reads `indexes/sections/<doc_id>.json` (when built) and
+  `sources/sections/<doc_id>/sections.jsonl`, plus `reading_plans/<plan_id>.json`.
 - `mark_read` writes `reading_plans/<plan_id>.json` (same contract as
   `bookgraph reading-plan mark-read`). No other tool writes.
 
@@ -443,9 +481,10 @@ filesystem-safe slugs before they are used as path components; a traversal value
 (e.g. `../secret`) is rejected before any file is read or written. `section_id`
 is only ever matched against loaded plan/section data, never used as a raw path.
 
-> `search` is a naive linear scan with no persistent index — enough to expose the
-> tool contract. A real sections/graph index under `indexes/` is a planned
-> follow-up.
+> `search` uses the persisted inverted index under `indexes/sections/<doc_id>.json`
+> (built by `bookgraph index build`) when present, and falls back to a live scan of
+> `sections.jsonl` for documents that have not been indexed yet. Both paths share
+> the same tokenizer, so results are identical whether or not an index exists.
 
 ## Placeholder command contracts
 

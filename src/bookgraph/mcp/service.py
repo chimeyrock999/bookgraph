@@ -8,10 +8,12 @@ so they can be unit-tested directly; the MCP server is a thin wrapper in
 
 from __future__ import annotations
 
+from collections import Counter
 from pathlib import Path
 
 from pydantic import BaseModel, Field
 
+from bookgraph.indexes import SectionIndex, index_path, read_index, tokenize
 from bookgraph.models import ReadingPlan, Section
 from bookgraph.reading_plans import mark_section_read, next_sections, read_reading_plan
 from bookgraph.sections import read_sections
@@ -225,6 +227,66 @@ def _snippet(text: str, terms: list[str], width: int = 160) -> str:
     return prefix + excerpt + suffix
 
 
+def _hits_from_index(index: SectionIndex, terms: list[str]) -> list[SearchHit]:
+    by_id = {section.id: section for section in index.sections}
+    scores: dict[str, int] = {}
+    for term in terms:
+        for section_id, freq in index.postings.get(term, {}).items():
+            scores[section_id] = scores.get(section_id, 0) + freq
+    hits: list[SearchHit] = []
+    for section_id, score in scores.items():
+        indexed = by_id.get(section_id)
+        if indexed is None or score <= 0:
+            continue
+        hits.append(
+            SearchHit(
+                section_id=section_id,
+                doc_id=index.doc_id,
+                title=indexed.title,
+                score=score,
+                snippet=_snippet(indexed.text, terms),
+            )
+        )
+    return hits
+
+
+def _hits_from_sections(sections: list[Section], terms: list[str]) -> list[SearchHit]:
+    hits: list[SearchHit] = []
+    for section in sections:
+        counts = Counter(tokenize(f"{section.title}\n{section.text}"))
+        score = sum(counts[term] for term in terms)
+        if score > 0:
+            hits.append(
+                SearchHit(
+                    section_id=section.id,
+                    doc_id=section.doc_id,
+                    title=section.title,
+                    score=score,
+                    snippet=_snippet(section.text, terms),
+                )
+            )
+    return hits
+
+
+def _hits_for_doc(workspace: WorkspacePaths, doc_id: str, terms: list[str]) -> list[SearchHit]:
+    """Score one document, preferring its persisted index over a live scan."""
+
+    path = index_path(workspace, doc_id)
+    if path.is_file():
+        try:
+            index = read_index(path)
+        except (OSError, ValueError):
+            index = None
+        # Only trust an index whose stored doc_id matches the file it was loaded
+        # from. A corrupt file, or a schema-valid one carrying another document's
+        # doc_id (a stale/misplaced index), would otherwise return hits attributed
+        # to the wrong document and violate a caller's doc_id scope — so both cases
+        # fall back to the authoritative sections scan.
+        if index is not None and index.doc_id == doc_id:
+            return _hits_from_index(index, terms)
+    return _hits_from_sections(_load_doc_sections(workspace, doc_id), terms)
+
+
 def search_sections(
     workspace: WorkspacePaths,
     query: str,
@@ -233,13 +295,14 @@ def search_sections(
 ) -> SearchResult:
     """Rank sections by how often the query terms appear in title and text.
 
-    This is a deliberately simple linear scan over ``sections.jsonl`` with no
-    persistent index — enough to expose the tool contract. A real index is a
-    planned follow-up. Pass ``doc_id`` to search a single document, or omit it to
-    search every segmented document in the workspace.
+    Uses the persisted inverted index under ``indexes/sections/<doc_id>.json``
+    when present (built by ``bookgraph index build``), and falls back to a live
+    scan of ``sources/sections/<doc_id>/sections.jsonl`` for documents that have
+    not been indexed yet. Pass ``doc_id`` to search a single document, or omit it
+    to search every segmented document in the workspace.
     """
 
-    terms = [term for term in query.lower().split() if term]
+    terms = tokenize(query)
     if not terms:
         raise ReadingServiceError("search query must contain at least one term")
     if limit < 1:
@@ -262,24 +325,10 @@ def search_sections(
     hits: list[SearchHit] = []
     for current_doc in doc_ids:
         try:
-            sections = _load_doc_sections(workspace, current_doc)
+            hits.extend(_hits_for_doc(workspace, current_doc, terms))
         except SectionsNotFoundError:
             if doc_id is not None:
                 raise
-            continue
-        for section in sections:
-            haystack = f"{section.title}\n{section.text}".lower()
-            score = sum(haystack.count(term) for term in terms)
-            if score > 0:
-                hits.append(
-                    SearchHit(
-                        section_id=section.id,
-                        doc_id=section.doc_id,
-                        title=section.title,
-                        score=score,
-                        snippet=_snippet(section.text, terms),
-                    )
-                )
 
     hits.sort(key=lambda hit: (-hit.score, hit.doc_id, hit.section_id))
     return SearchResult(query=query, hits=hits[:limit])

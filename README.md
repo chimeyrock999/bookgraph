@@ -67,11 +67,9 @@ flowchart TD
         MCP3["graph/context<br/>get_outline · get_related · get_context"]
     end
 
-    classDef planned stroke-dasharray:5,opacity:0.65;
 ```
 
-Dashed nodes are planned/placeholder; everything else is implemented. File type
-routing picks the parser adapter, and `--parser` overrides it.
+File type routing picks the parser adapter, and `--parser` overrides it.
 
 ## Module layout
 

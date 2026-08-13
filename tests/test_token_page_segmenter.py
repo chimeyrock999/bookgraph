@@ -67,6 +67,42 @@ def test_token_page_segmenter_prefers_page_boundaries_when_possible() -> None:
     assert [section.page_end for section in sections] == [1, 2]
 
 
+def test_token_page_segmenter_keeps_a_page_together_even_if_last_block_overflows() -> None:
+    document = Document(
+        doc_id="paper",
+        title="A Paper",
+        blocks=[
+            CanonicalBlock(id="p1a", type="text", text="one two", page_idx=1),
+            CanonicalBlock(id="p1b", type="text", text="three four", page_idx=1),
+            CanonicalBlock(id="p1c", type="text", text="five six", page_idx=1),
+            CanonicalBlock(id="p2", type="text", text="seven", page_idx=2),
+        ],
+    )
+
+    sections = TokenPageSegmenter(max_tokens=5).segment(document)
+
+    assert [section.block_ids for section in sections] == [["p1a", "p1b", "p1c"], ["p2"]]
+    assert sections[0].metadata["token_count"] == 6
+
+
+def test_token_page_segmenter_preserves_non_textual_block_provenance() -> None:
+    document = Document(
+        doc_id="paper",
+        title="A Paper",
+        blocks=[
+            CanonicalBlock(id="intro", type="text", text="body", page_idx=1),
+            CanonicalBlock(id="fig", type="image", text="", page_idx=1),
+            CanonicalBlock(id="chart", type="chart", text="", page_idx=2),
+            CanonicalBlock(id="next", type="text", text="next body", page_idx=2),
+        ],
+    )
+
+    sections = TokenPageSegmenter(max_tokens=10).segment(document)
+
+    assert [section.block_ids for section in sections] == [["intro", "fig", "chart", "next"]]
+    assert sections[0].text == "body\n\nnext body"
+
+
 def test_token_page_segmenter_keeps_oversized_single_block_whole() -> None:
     document = Document(
         doc_id="paper",
@@ -88,12 +124,12 @@ def test_token_page_segmenter_keeps_oversized_single_block_whole() -> None:
     assert sections[0].metadata["token_count"] == 6
 
 
-def test_token_page_segmenter_ignores_non_textual_empty_blocks() -> None:
+def test_token_page_segmenter_ignores_empty_unknown_blocks() -> None:
     document = Document(
         doc_id="paper",
         title="A Paper",
         blocks=[
-            CanonicalBlock(id="img", type="image", text="", page_idx=1),
+            CanonicalBlock(id="empty", type="unknown", text="", page_idx=1),
             CanonicalBlock(id="txt", type="text", text="body", page_idx=1),
         ],
     )

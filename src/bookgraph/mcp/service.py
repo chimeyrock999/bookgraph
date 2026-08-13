@@ -274,10 +274,16 @@ def _hits_for_doc(workspace: WorkspacePaths, doc_id: str, terms: list[str]) -> l
     path = index_path(workspace, doc_id)
     if path.is_file():
         try:
-            return _hits_from_index(read_index(path), terms)
+            index = read_index(path)
         except (OSError, ValueError):
-            # A corrupt/stale index should not break search; fall back to the scan.
-            pass
+            index = None
+        # Only trust an index whose stored doc_id matches the file it was loaded
+        # from. A corrupt file, or a schema-valid one carrying another document's
+        # doc_id (a stale/misplaced index), would otherwise return hits attributed
+        # to the wrong document and violate a caller's doc_id scope — so both cases
+        # fall back to the authoritative sections scan.
+        if index is not None and index.doc_id == doc_id:
+            return _hits_from_index(index, terms)
     return _hits_from_sections(_load_doc_sections(workspace, doc_id), terms)
 
 

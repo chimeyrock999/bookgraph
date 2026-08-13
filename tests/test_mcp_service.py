@@ -5,7 +5,13 @@ from pathlib import Path
 
 import pytest
 
-from bookgraph.indexes import build_section_index, index_path, write_index
+from bookgraph.indexes import (
+    IndexedSection,
+    SectionIndex,
+    build_section_index,
+    index_path,
+    write_index,
+)
 from bookgraph.mcp import service
 from bookgraph.mcp.service import (
     InvalidIdError,
@@ -231,6 +237,27 @@ def test_search_falls_back_to_scan_for_a_corrupt_index(tmp_path: Path) -> None:
     result = service.search_sections(workspace, "storage")
 
     assert [hit.section_id for hit in result.hits] == ["deep-work.a"]
+
+
+def test_search_ignores_index_whose_doc_id_does_not_match_its_filename(tmp_path: Path) -> None:
+    """A schema-valid index carrying another document's doc_id is stale: scan instead."""
+
+    workspace = _workspace(
+        tmp_path,
+        _section("deep-work.a", "Focus", "needle in the real section"),
+    )
+    # An index file at deep-work.json that claims to be a different document.
+    mismatched = SectionIndex(
+        doc_id="other-doc",
+        sections=[IndexedSection(id="other.x", title="Wrong", text="needle")],
+        postings={"needle": {"other.x": 1}},
+    )
+    write_index(mismatched, index_path(workspace, "deep-work"))
+
+    result = service.search_sections(workspace, "needle", doc_id="deep-work")
+
+    # The mismatched index is discarded; only the authoritative scan hit remains.
+    assert [(hit.doc_id, hit.section_id) for hit in result.hits] == [("deep-work", "deep-work.a")]
 
 
 def test_search_rejects_empty_query(tmp_path: Path) -> None:

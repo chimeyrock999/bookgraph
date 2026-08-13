@@ -425,6 +425,11 @@ telling the user to `uv sync --extra mcp`.
 - `mark_read` writes `reading_plans/<plan_id>.json` (same contract as
   `bookgraph reading-plan mark-read`). No other tool writes.
 
+MCP tool inputs are client-controlled, so `plan_id` and `doc_id` are validated as
+filesystem-safe slugs before they are used as path components; a traversal value
+(e.g. `../secret`) is rejected before any file is read or written. `section_id`
+is only ever matched against loaded plan/section data, never used as a raw path.
+
 > `search` is a naive linear scan with no persistent index — enough to expose the
 > tool contract. A real sections/graph index under `indexes/` is a planned
 > follow-up.

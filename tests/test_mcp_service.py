@@ -7,6 +7,7 @@ import pytest
 
 from bookgraph.mcp import service
 from bookgraph.mcp.service import (
+    InvalidIdError,
     PlanNotFoundError,
     ReadingServiceError,
     SectionNotFoundError,
@@ -205,3 +206,34 @@ def test_search_rejects_empty_query(tmp_path: Path) -> None:
 
     with pytest.raises(ReadingServiceError, match="at least one term"):
         service.search_sections(workspace, "   ")
+
+
+@pytest.mark.parametrize("bad_id", ["../escape", "a/b", "..", "UP", "with space"])
+def test_client_ids_that_are_not_slugs_are_rejected(tmp_path: Path, bad_id: str) -> None:
+    """MCP tool ids are client-controlled and must never reach a filesystem path raw."""
+
+    workspace = _workspace(tmp_path, _section("deep-work.a", "Alpha"))
+    _plan(workspace, "deep-work.a")
+
+    with pytest.raises(InvalidIdError):
+        service.get_next_section(workspace, bad_id)
+    with pytest.raises(InvalidIdError):
+        service.get_section(workspace, bad_id, "deep-work.a")
+    with pytest.raises(InvalidIdError):
+        service.mark_read(workspace, bad_id)
+    with pytest.raises(InvalidIdError):
+        service.search_sections(workspace, "alpha", doc_id=bad_id)
+
+
+def test_mark_read_with_traversal_plan_id_writes_nothing_outside(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path, _section("deep-work.a", "Alpha"))
+    _plan(workspace, "deep-work.a")
+    # Where "../daily" would resolve to: reading_plans/../daily.json -> <root>/daily.json.
+    escape_target = workspace.reading_plans_root.parent / "daily.json"
+    escape_target.write_text('{"tampered": false}')
+
+    with pytest.raises(InvalidIdError):
+        service.mark_read(workspace, "../daily")
+
+    # The traversal target is untouched — validation happened before any write.
+    assert escape_target.read_text() == '{"tampered": false}'

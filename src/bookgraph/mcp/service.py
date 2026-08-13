@@ -15,11 +15,16 @@ from pydantic import BaseModel, Field
 from bookgraph.models import ReadingPlan, Section
 from bookgraph.reading_plans import mark_section_read, next_sections, read_reading_plan
 from bookgraph.sections import read_sections
+from bookgraph.utils import ID_PATTERN, validate_slug_id
 from bookgraph.workspace import WorkspacePaths
 
 
 class ReadingServiceError(Exception):
     """Base class for expected, client-facing reading-service failures."""
+
+
+class InvalidIdError(ReadingServiceError):
+    """A client-supplied id is not a filesystem-safe slug."""
 
 
 class PlanNotFoundError(ReadingServiceError):
@@ -110,7 +115,23 @@ def _section_view(workspace: WorkspacePaths, section: Section) -> SectionView:
     )
 
 
+def _validate_id(value: str, field_name: str) -> str:
+    """Reject client-supplied ids that are not filesystem-safe slugs.
+
+    MCP tool inputs are client-controlled, so any id that becomes a path
+    component (``plan_id``, ``doc_id``) must be validated before it is joined onto
+    a workspace path — otherwise a value like ``../secret`` could escape the
+    intended artifact directory.
+    """
+
+    try:
+        return validate_slug_id(value, field_name=field_name)
+    except ValueError as exc:
+        raise InvalidIdError(str(exc)) from exc
+
+
 def _load_doc_sections(workspace: WorkspacePaths, doc_id: str) -> list[Section]:
+    _validate_id(doc_id, "doc_id")
     manifest = workspace.sources_sections / doc_id / "sections.jsonl"
     if not manifest.is_file():
         raise SectionsNotFoundError(
@@ -123,6 +144,7 @@ def _load_doc_sections(workspace: WorkspacePaths, doc_id: str) -> list[Section]:
 
 
 def _load_plan(workspace: WorkspacePaths, plan_id: str) -> tuple[Path, ReadingPlan]:
+    _validate_id(plan_id, "plan_id")
     path = workspace.reading_plans_root / f"{plan_id}.json"
     if not path.is_file():
         raise PlanNotFoundError(
@@ -224,13 +246,17 @@ def search_sections(
         raise ReadingServiceError("limit must be at least 1")
 
     if doc_id is not None:
-        doc_ids = [doc_id]
+        doc_ids = [_validate_id(doc_id, "doc_id")]
     else:
+        # Enumerated directory names are workspace-internal, not client input, but
+        # only slug-shaped ones can have been produced by ``segment``; skipping the
+        # rest keeps the per-doc id validation in ``_load_doc_sections`` from
+        # aborting a workspace-wide search on a stray directory.
         root = workspace.sources_sections
         doc_ids = sorted(
             child.name
             for child in (root.iterdir() if root.is_dir() else [])
-            if (child / "sections.jsonl").is_file()
+            if (child / "sections.jsonl").is_file() and ID_PATTERN.fullmatch(child.name)
         )
 
     hits: list[SearchHit] = []

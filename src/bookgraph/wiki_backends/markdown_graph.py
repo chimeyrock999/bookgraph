@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import json
 import re
+import shutil
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
 from bookgraph.models import Section
 from bookgraph.ports import WikiBackend
-from bookgraph.sections import render_section_markdown
+from bookgraph.sections import read_sections, render_section_markdown
 from bookgraph.utils import unique_slug
+from bookgraph.wiki_backends.common import render_section_index
 
 _STOPWORDS = {
     "a",
@@ -37,14 +40,18 @@ _STOPWORDS = {
     "with",
 }
 _TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9-]{2,}")
+_CONCEPTS_MARKER = "<!-- bookgraph:concepts -->"
 
 
 @dataclass(frozen=True)
 class ConceptEntry:
     slug: str
     title: str
-    count: int
     section_ids: list[str]
+
+    @property
+    def section_count(self) -> int:
+        return len(self.section_ids)
 
 
 class MarkdownGraphBackend(WikiBackend):
@@ -52,14 +59,29 @@ class MarkdownGraphBackend(WikiBackend):
 
     name = "markdown-graph"
 
-    def compile_book(self, sections: list[Section], output_dir: Path) -> Path:
+    def compile_book(
+        self,
+        sections: list[Section],
+        output_dir: Path,
+        concepts_dir: Path | None = None,
+    ) -> Path:
         output_dir.mkdir(parents=True, exist_ok=True)
-        sections_dir = output_dir / "sections"
-        concepts_dir = output_dir.parent.parent / "concepts"
-        sections_dir.mkdir(parents=True, exist_ok=True)
+        resolved_concepts_dir = concepts_dir or output_dir / "concepts"
+        return self.compile_book_with_concepts(sections, output_dir, resolved_concepts_dir)
+
+    def compile_book_with_concepts(
+        self,
+        sections: list[Section],
+        output_dir: Path,
+        concepts_dir: Path,
+    ) -> Path:
+        output_dir.mkdir(parents=True, exist_ok=True)
         concepts_dir.mkdir(parents=True, exist_ok=True)
+        sections_dir = output_dir / "sections"
+        _replace_dir(sections_dir)
 
         concepts = extract_concepts(sections)
+        current_slugs = {concept.slug for concept in concepts}
         concept_map = {concept.slug: concept for concept in concepts}
         concepts_by_section = _concepts_by_section(concepts)
 
@@ -71,8 +93,15 @@ class MarkdownGraphBackend(WikiBackend):
                 _render_section(section, section_concepts)
             )
 
+        _remove_stale_mentions(concepts_dir, _doc_id(sections), current_slugs)
         for concept in concepts:
-            (concepts_dir / f"{concept.slug}.md").write_text(_render_concept(concept, sections))
+            concept_path = concepts_dir / f"{concept.slug}.md"
+            existing = _read_existing_concept_page(concept_path)
+            sections_by_doc = dict(existing.sections_by_doc)
+            sections_by_doc[_doc_id(sections)] = list(concept.section_ids)
+            (concepts_dir / f"{concept.slug}.md").write_text(
+                _render_concept(concept, sections_by_doc, concepts_dir)
+            )
 
         (output_dir / "README.md").write_text(
             _render_book_index(output_dir.name, sections, concepts)
@@ -110,7 +139,7 @@ def extract_concepts(sections: list[Section], *, max_concepts: int = 50) -> list
 
     ranked = sorted(
         counts,
-        key=lambda key: (-counts[key], display_titles[key].lower(), key),
+        key=lambda key: (-len(occurrences[key]), display_titles[key].lower(), key),
     )[:max_concepts]
 
     concepts: list[ConceptEntry] = []
@@ -121,7 +150,6 @@ def extract_concepts(sections: list[Section], *, max_concepts: int = 50) -> list
             ConceptEntry(
                 slug=slug,
                 title=title,
-                count=counts[key],
                 section_ids=occurrences[key],
             )
         )
@@ -180,16 +208,13 @@ def _concepts_by_section(concepts: list[ConceptEntry]) -> dict[str, list[str]]:
 
 
 def _render_book_index(doc_id: str, sections: list[Section], concepts: list[ConceptEntry]) -> str:
-    lines = [f"# {doc_id}", "", "## Sections", ""]
-    for section in sections:
-        indent = "  " * max(section.level - 1, 0)
-        lines.append(f"{indent}- [{section.title}](sections/{section.id}.md)")
-    lines.extend(["", "## Concepts", ""])
+    base = render_section_index(doc_id, sections).rstrip()
+    lines = [base, "", "## Concepts", ""]
     if concepts:
         for concept in concepts:
+            title = _escape_markdown_link_text(concept.title)
             lines.append(
-                f"- [{concept.title}](../../concepts/{concept.slug}.md) "
-                f"({len(concept.section_ids)} sections)"
+                f"- [{title}](../../concepts/{concept.slug}.md) ({concept.section_count} sections)"
             )
     else:
         lines.append("No concepts extracted.")
@@ -200,27 +225,122 @@ def _render_section(section: Section, concepts: list[ConceptEntry]) -> str:
     content = render_section_markdown(section)
     if not concepts:
         return content
-    links = [f"[[{concept.slug}|{concept.title}]]" for concept in concepts]
+    links = [_wiki_link(concept) for concept in concepts]
     return content + "\n## Linked concepts\n\n" + "\n".join(f"- {link}" for link in links) + "\n"
 
 
-def _render_concept(concept: ConceptEntry, sections: list[Section]) -> str:
-    by_id = {section.id: section for section in sections}
+def _render_concept(
+    concept: ConceptEntry,
+    sections_by_doc: dict[str, list[str]],
+    concepts_dir: Path,
+) -> str:
     lines = [
         "---",
-        f"concept: {concept.slug!r}",
-        f"title: {concept.title!r}",
-        f"count: {concept.count}",
+        f"concept: {json.dumps(concept.slug)}",
+        f"title: {json.dumps(concept.title)}",
+        f"section_count: {sum(len(section_ids) for section_ids in sections_by_doc.values())}",
         "---",
         "",
         f"# {concept.title}",
         "",
+        _CONCEPTS_MARKER,
+        json.dumps(sections_by_doc, sort_keys=True),
+        _CONCEPTS_MARKER,
+        "",
         "## Mentioned in",
         "",
     ]
-    for section_id in concept.section_ids:
-        section = by_id.get(section_id)
-        title = section.title if section is not None else section_id
-        doc_id = section.doc_id if section is not None else section_id.split(".")[0]
-        lines.append(f"- [{title}](../books/{doc_id}/sections/{section_id}.md)")
+    for doc_id in sorted(sections_by_doc):
+        sections = _read_compiled_sections_for_doc(concepts_dir, doc_id)
+        by_id = {section.id: section for section in sections}
+        for section_id in sections_by_doc[doc_id]:
+            section = by_id[section_id]
+            title = _escape_markdown_link_text(section.title)
+            lines.append(f"- [{title}](../books/{doc_id}/sections/{section_id}.md)")
     return "\n".join(lines) + "\n"
+
+
+@dataclass(frozen=True)
+class _ExistingConceptPage:
+    sections_by_doc: dict[str, list[str]]
+
+
+def _read_existing_concept_page(path: Path) -> _ExistingConceptPage:
+    if not path.is_file():
+        return _ExistingConceptPage(sections_by_doc={})
+    text = path.read_text()
+    parts = text.split(_CONCEPTS_MARKER)
+    if len(parts) < 3:
+        return _ExistingConceptPage(sections_by_doc={})
+    try:
+        raw = json.loads(parts[1].strip())
+    except json.JSONDecodeError:
+        return _ExistingConceptPage(sections_by_doc={})
+    sections_by_doc = {
+        str(doc_id): [str(section_id) for section_id in section_ids]
+        for doc_id, section_ids in raw.items()
+        if isinstance(section_ids, list)
+    }
+    return _ExistingConceptPage(sections_by_doc=sections_by_doc)
+
+
+def _remove_stale_mentions(concepts_dir: Path, doc_id: str, current_slugs: set[str]) -> None:
+    for path in concepts_dir.glob("*.md"):
+        existing = _read_existing_concept_page(path)
+        if doc_id not in existing.sections_by_doc:
+            continue
+        if path.stem in current_slugs:
+            continue
+        sections_by_doc = dict(existing.sections_by_doc)
+        sections_by_doc.pop(doc_id, None)
+        if not sections_by_doc:
+            path.unlink()
+            continue
+        title = _title_from_existing_page(path)
+        concept = ConceptEntry(slug=path.stem, title=title, section_ids=[])
+        path.write_text(_render_concept(concept, sections_by_doc, concepts_dir))
+
+
+def _title_from_existing_page(path: Path) -> str:
+    for line in path.read_text().splitlines():
+        if line.startswith("title: "):
+            try:
+                value = json.loads(line.removeprefix("title: "))
+            except json.JSONDecodeError:
+                break
+            if isinstance(value, str):
+                return value
+    return path.stem.replace("-", " ").title()
+
+
+def _read_compiled_sections_for_doc(concepts_dir: Path, doc_id: str) -> list[Section]:
+    manifest = concepts_dir.parent / "books" / doc_id / "sections" / "sections.jsonl"
+    if manifest.is_file():
+        return read_sections(manifest)
+    # Wiki section pages do not carry enough machine-readable text to round-trip
+    # from Markdown, so fall back to the source sections manifest when the backend
+    # is used in a normal BookGraph workspace.
+    source_manifest = (
+        concepts_dir.parent.parent / "sources" / "sections" / doc_id / "sections.jsonl"
+    )
+    return read_sections(source_manifest)
+
+
+def _replace_dir(path: Path) -> None:
+    if path.exists():
+        shutil.rmtree(path)
+    path.mkdir(parents=True, exist_ok=True)
+
+
+def _doc_id(sections: list[Section]) -> str:
+    if not sections:
+        return "untitled"
+    return sections[0].doc_id
+
+
+def _wiki_link(concept: ConceptEntry) -> str:
+    return f"[[{concept.slug}|{concept.title.replace('|', '/') }]]"
+
+
+def _escape_markdown_link_text(value: str) -> str:
+    return value.replace("[", r"\[").replace("]", r"\]")

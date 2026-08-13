@@ -3,42 +3,57 @@ from __future__ import annotations
 from pathlib import Path
 
 from bookgraph.models import Section
+from bookgraph.sections import write_sections
 from bookgraph.wiki_backends.markdown_graph import MarkdownGraphBackend, extract_concepts
 
 
-def _sections() -> list[Section]:
+def _sections(doc_id: str = "iceberg") -> list[Section]:
     return [
         Section(
-            id="iceberg.intro",
-            doc_id="iceberg",
+            id=f"{doc_id}.intro",
+            doc_id=doc_id,
             title="Apache Iceberg",
             level=1,
             heading_path=["Apache Iceberg"],
             text="Apache Iceberg supports schema evolution and partition evolution.",
             prev_id=None,
-            next_id="iceberg.metadata",
+            next_id=f"{doc_id}.metadata",
             block_ids=["b1"],
         ),
         Section(
-            id="iceberg.metadata",
-            doc_id="iceberg",
+            id=f"{doc_id}.metadata",
+            doc_id=doc_id,
             title="Metadata Tables",
             level=2,
             heading_path=["Apache Iceberg", "Metadata Tables"],
             text="Metadata Tables expose snapshots, manifests, and schema evolution history.",
-            prev_id="iceberg.intro",
+            prev_id=f"{doc_id}.intro",
             next_id=None,
             block_ids=["b2"],
         ),
     ]
 
 
+def _compile(
+    tmp_path: Path,
+    sections: list[Section],
+    doc_id: str | None = None,
+) -> None:
+    resolved_doc_id = doc_id or sections[0].doc_id
+    workspace = tmp_path / "workspace"
+    write_sections(sections, workspace / "sources" / "sections" / resolved_doc_id)
+    MarkdownGraphBackend().compile_book(
+        sections,
+        workspace / "wiki" / "books" / resolved_doc_id,
+        workspace / "wiki" / "concepts",
+    )
+
+
 def test_markdown_graph_backend_writes_book_sections_index_and_concepts(tmp_path: Path) -> None:
-    output_dir = tmp_path / "wiki" / "books" / "iceberg"
+    _compile(tmp_path, _sections())
+    workspace = tmp_path / "workspace"
+    output_dir = workspace / "wiki" / "books" / "iceberg"
 
-    written = MarkdownGraphBackend().compile_book(_sections(), output_dir)
-
-    assert written == output_dir
     index = (output_dir / "README.md").read_text()
     assert "# iceberg" in index
     assert "- [Apache Iceberg](sections/iceberg.intro.md)" in index
@@ -52,10 +67,94 @@ def test_markdown_graph_backend_writes_book_sections_index_and_concepts(tmp_path
     assert "## Linked concepts" in section
     assert "[[apache-iceberg|Apache Iceberg]]" in section
 
-    concept = (tmp_path / "wiki" / "concepts" / "apache-iceberg.md").read_text()
+    concept = (workspace / "wiki" / "concepts" / "apache-iceberg.md").read_text()
     assert "# Apache Iceberg" in concept
+    assert "section_count: 2" in concept
     assert "- [Apache Iceberg](../books/iceberg/sections/iceberg.intro.md)" in concept
     assert "- [Metadata Tables](../books/iceberg/sections/iceberg.metadata.md)" in concept
+
+
+def test_markdown_graph_backend_preserves_cross_book_concept_backlinks(tmp_path: Path) -> None:
+    _compile(tmp_path, _sections("iceberg"))
+    _compile(tmp_path, _sections("spark"))
+
+    concept = (tmp_path / "workspace" / "wiki" / "concepts" / "apache-iceberg.md").read_text()
+
+    assert "../books/iceberg/sections/iceberg.intro.md" in concept
+    assert "../books/spark/sections/spark.intro.md" in concept
+    assert "section_count: 4" in concept
+
+
+def test_markdown_graph_backend_removes_stale_concepts_for_recompiled_book(
+    tmp_path: Path,
+) -> None:
+    _compile(tmp_path, _sections("iceberg"))
+    stale = tmp_path / "workspace" / "wiki" / "concepts" / "apache-iceberg.md"
+    assert stale.is_file()
+
+    _compile(
+        tmp_path,
+        [
+            Section(
+                id="iceberg.other",
+                doc_id="iceberg",
+                title="Other Topic",
+                level=1,
+                heading_path=["Other Topic"],
+                text="fresh unrelated content",
+            )
+        ],
+    )
+
+    assert not stale.exists()
+
+
+def test_markdown_graph_backend_updates_only_current_doc_in_shared_concept(
+    tmp_path: Path,
+) -> None:
+    _compile(tmp_path, _sections("iceberg"))
+    _compile(tmp_path, _sections("spark"))
+
+    _compile(
+        tmp_path,
+        [
+            Section(
+                id="iceberg.other",
+                doc_id="iceberg",
+                title="Other Topic",
+                level=1,
+                heading_path=["Other Topic"],
+                text="fresh unrelated content",
+            )
+        ],
+    )
+
+    concept = (tmp_path / "workspace" / "wiki" / "concepts" / "apache-iceberg.md").read_text()
+    assert "../books/iceberg/" not in concept
+    assert "../books/spark/sections/spark.intro.md" in concept
+    assert "section_count: 2" in concept
+
+
+def test_markdown_graph_backend_escapes_wiki_link_titles(tmp_path: Path) -> None:
+    _compile(
+        tmp_path,
+        [
+            Section(
+                id="pipes.foo",
+                doc_id="pipes",
+                title="Foo | Bar",
+                level=1,
+                heading_path=["Foo | Bar"],
+                text="Foo Bar content",
+            )
+        ],
+    )
+
+    section = (
+        tmp_path / "workspace" / "wiki" / "books" / "pipes" / "sections" / "pipes.foo.md"
+    ).read_text()
+    assert "[[foo-bar-2|Foo / Bar]]" in section
+    assert "[[foo-bar|Foo | Bar]]" not in section
 
 
 def test_extract_concepts_is_deterministic_and_slug_safe() -> None:
@@ -64,6 +163,6 @@ def test_extract_concepts_is_deterministic_and_slug_safe() -> None:
     assert [concept.slug for concept in concepts][:3] == [
         "apache-iceberg",
         "evolution",
-        "metadata-tables",
+        "schema",
     ]
     assert all("/" not in concept.slug and ".." not in concept.slug for concept in concepts)

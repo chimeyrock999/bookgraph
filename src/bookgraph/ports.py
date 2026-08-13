@@ -32,5 +32,10 @@ class WikiBackend(ABC):
     name: str
 
     @abstractmethod
-    def compile_book(self, sections: list[Section], output_dir: Path) -> Path:
+    def compile_book(
+        self,
+        sections: list[Section],
+        output_dir: Path,
+        concepts_dir: Path | None = None,
+    ) -> Path:
         raise NotImplementedError

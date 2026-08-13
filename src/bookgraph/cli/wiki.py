@@ -60,7 +60,7 @@ def wiki_compile(
     try:
         sections = read_sections(sections_manifest)
         backend_plugin = default_wiki_backend_registry().get(backend_name)
-        output_dir = backend_plugin.compile_book(sections, wiki_book_dir, workspace.wiki_concepts)
+        output_dir = backend_plugin.compile_book(sections, wiki_book_dir)
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
 

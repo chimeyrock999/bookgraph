@@ -13,12 +13,7 @@ class LlmWikiBackend(WikiBackend):
 
     name = "llmwiki"
 
-    def compile_book(
-        self,
-        sections: list[Section],
-        output_dir: Path,
-        concepts_dir: Path | None = None,
-    ) -> Path:
+    def compile_book(self, sections: list[Section], output_dir: Path) -> Path:
         output_dir.mkdir(parents=True, exist_ok=True)
         sections_dir = output_dir / "sections"
         sections_dir.mkdir(parents=True, exist_ok=True)

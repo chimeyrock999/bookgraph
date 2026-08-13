@@ -259,13 +259,13 @@ titles with colons or quotes cannot corrupt the frontmatter.
 > read this manifest and emit compiled output under `wiki/`, not rewrite section
 > source artifacts.
 
-## `wiki/books/<doc_id>/` and `wiki/concepts/<concept_slug>.md`
+## `wiki/books/<doc_id>/`
 
 Owner: the wiki stage (`bookgraph wiki compile` command / wiki backend plugins).
 
 The `llmwiki` backend writes a book-local README plus section Markdown under
 `wiki/books/<doc_id>/sections/`. The `markdown-graph` backend writes the same book
-surface plus linked concept pages under `wiki/concepts/`.
+surface and adds deterministic concept wikilinks to section pages.
 
 Required book output shape:
 
@@ -283,23 +283,17 @@ block with wiki-style links:
 - [[schema-evolution|Schema Evolution]]
 ```
 
-Concept pages are deterministic, filesystem-safe Markdown files:
+The backend is intentionally stateless and book-local. It does **not** materialize
+or reconcile `wiki/concepts/<concept_slug>.md`, does not store hidden backlink
+state in Markdown, and does not own cross-book concept joins. Cross-book concept
+nodes/mentions/backlinks belong to the index/query layer (for example future
+`indexes/bookgraph.db` tables such as `concept_nodes` and `concept_mentions`) and
+should be rendered from that index if/when concept pages are materialized.
 
-```text
-wiki/concepts/<concept_slug>.md
-```
-
-Each concept page links back to the book sections that mention it:
-
-```text
-- [Section title](../books/<doc_id>/sections/<section_id>.md)
-```
-
-Concept extraction is intentionally local and deterministic at this stage: no
-LLMs, embeddings, or external services. It uses section titles, heading paths,
-title-case phrases, and long domain-looking terms from section text. Concept
-artifacts are regenerable from `sections.jsonl`; rerun `bookgraph wiki compile`
-after re-segmenting a document.
+Concept extraction here is intentionally local and deterministic: no LLMs,
+embeddings, or external services. It uses section titles, heading paths,
+title-case phrases, and long domain-looking terms from the current document's
+section text to emit wikilinks only.
 
 ## `indexes/bookgraph.db`
 

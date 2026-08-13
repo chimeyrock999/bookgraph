@@ -54,7 +54,7 @@ flowchart TD
         W2["markdown graph backend"]
     end
 
-    W --> WIKI["Linked wiki<br/>wiki/books/ + wiki/concepts/"]
+    W --> WIKI["Linked wiki<br/>wiki/books/ + wikilinks"]
 
     IDX --> MCP
     SEC --> MCP
@@ -100,7 +100,7 @@ src/bookgraph/
     bookmark.py             # PDF bookmark/outline segmenter (heading fallback)
   wiki_backends/
     llmwiki.py              # Stage section markdown for llm-wiki-compiler
-    markdown_graph.py       # Linked markdown wiki: book pages + concept pages
+    markdown_graph.py       # Linked markdown wiki: book pages + wikilinks
   mcp/
     service.py              # Reading/query logic (FastMCP-free, unit-tested)
     server.py               # FastMCP server wrapper (optional `mcp` extra)
@@ -193,8 +193,8 @@ Implemented:
 - Heading-based segmenter with deterministic duplicate-slug suffixes
 - llmwiki staging backend and real `bookgraph wiki compile` command
 - Markdown graph wiki backend (`--backend markdown-graph`) writing linked book
-  pages under `wiki/books/<doc_id>/` and deterministic concept pages under
-  `wiki/concepts/`
+  pages under `wiki/books/<doc_id>/` with deterministic concept wikilinks in
+  section pages
 - CLI workspace initializer with explicit `--output` alias and `paths` inspector
 - CLI-only `add-book` contract that registers a PDF source without running parser/segmenter
 - Markdown and MarkItDown parser adapters plus file type based parser routing

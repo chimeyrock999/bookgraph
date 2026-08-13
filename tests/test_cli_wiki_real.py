@@ -93,7 +93,7 @@ def test_wiki_compile_can_use_markdown_graph_backend(tmp_path: Path) -> None:
     book_dir = workspace / "wiki" / "books" / "deep-work"
     assert (book_dir / "README.md").is_file()
     assert (book_dir / "sections" / "deep-work.intro.md").is_file()
-    assert (workspace / "wiki" / "concepts" / "intro.md").is_file()
+    assert not (workspace / "wiki" / "concepts" / "intro.md").exists()
     intro = (book_dir / "sections" / "deep-work.intro.md").read_text()
     assert "## Linked concepts" in intro
     assert "[[intro|Intro]]" in intro

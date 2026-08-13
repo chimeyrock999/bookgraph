@@ -102,3 +102,42 @@ def read_reading_plan(path: Path) -> ReadingPlan:
     """Load a reading plan written by :func:`write_reading_plan`."""
 
     return ReadingPlan.model_validate_json(path.read_text())
+
+
+@dataclass(frozen=True)
+class PlanProgress:
+    """A reading plan's completion progress, for listings."""
+
+    plan_id: str
+    doc_id: str
+    completed: int
+    total: int
+    done: bool
+
+
+def list_plan_progress(root: Path) -> list[PlanProgress]:
+    """Progress for every readable plan under ``root``, sorted by file name.
+
+    Unreadable/corrupt plans are skipped rather than failing the whole listing.
+    Shared by the CLI ``reading-plan list`` and the MCP ``list_plans`` tool so a
+    future change (sort order, new corruption case) applies to both.
+    """
+
+    progress: list[PlanProgress] = []
+    for path in sorted(root.glob("*.json")) if root.is_dir() else []:
+        try:
+            plan = read_reading_plan(path)
+        except (OSError, ValueError):
+            continue
+        total = len(plan.section_ids)
+        completed = len(plan.completed)
+        progress.append(
+            PlanProgress(
+                plan_id=plan.plan_id,
+                doc_id=plan.doc_id,
+                completed=completed,
+                total=total,
+                done=total > 0 and completed >= total,
+            )
+        )
+    return progress

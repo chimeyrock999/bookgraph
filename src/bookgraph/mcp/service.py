@@ -19,12 +19,13 @@ from bookgraph.index import default_index_backend, tokenize
 from bookgraph.models import ReadingPlan, Section
 from bookgraph.reading_plans import (
     create_reading_plan,
+    list_plan_progress,
     mark_section_read,
     next_sections,
     read_reading_plan,
     write_reading_plan,
 )
-from bookgraph.sections import read_sections
+from bookgraph.sections import count_sections, read_sections
 from bookgraph.utils import ID_PATTERN, validate_slug_id
 from bookgraph.workspace import WorkspacePaths
 
@@ -578,15 +579,16 @@ def list_documents(workspace: WorkspacePaths) -> DocumentList:
 
     documents: list[DocumentRef] = []
     for doc_id in _segmented_doc_ids(workspace):
+        manifest = workspace.sources_sections / doc_id / "sections.jsonl"
         try:
-            sections = _load_doc_sections(workspace, doc_id)
-        except SectionsNotFoundError:
+            section_count = count_sections(manifest)
+        except OSError:
             continue  # a manifest that vanished/broke between listing and read
         documents.append(
             DocumentRef(
                 doc_id=doc_id,
                 title=_document_title(workspace, doc_id),
-                section_count=len(sections),
+                section_count=section_count,
             )
         )
     return DocumentList(documents=documents)
@@ -597,16 +599,28 @@ def create_plan(
     doc_id: str,
     plan_id: str | None = None,
     daily_sections: int = 1,
+    *,
+    overwrite: bool = False,
 ) -> CreatedPlan:
     """Create (and persist) a reading plan for a segmented document.
 
-    ``plan_id`` defaults to ``doc_id``. Mirrors ``bookgraph reading-plan create``.
+    ``plan_id`` defaults to ``doc_id``. To protect the autonomous agents this
+    tool serves, creating a plan whose id already exists raises rather than
+    silently discarding its progress; pass ``overwrite=True`` to replace it.
     """
 
     resolved_doc_id = _validate_id(doc_id, "doc_id")
     resolved_plan_id = _validate_id(plan_id or resolved_doc_id, "plan_id")
     if daily_sections < 1:
         raise ReadingServiceError("daily_sections must be at least 1")
+
+    path = workspace.reading_plans_root / f"{resolved_plan_id}.json"
+    if path.exists() and not overwrite:
+        raise ReadingServiceError(
+            f"reading plan '{resolved_plan_id}' already exists; resume it with "
+            "get_next_section/list_plans, or pass overwrite=True to replace it "
+            "(discarding its progress)"
+        )
 
     sections = _load_doc_sections(workspace, resolved_doc_id)
     try:
@@ -619,7 +633,6 @@ def create_plan(
     except ValueError as exc:
         raise ReadingServiceError(str(exc)) from exc
 
-    path = workspace.reading_plans_root / f"{resolved_plan_id}.json"
     write_reading_plan(plan, path)
     return CreatedPlan(
         plan_id=plan.plan_id,
@@ -633,22 +646,15 @@ def create_plan(
 def list_plans(workspace: WorkspacePaths) -> PlanList:
     """List the workspace's reading plans with completion progress."""
 
-    root = workspace.reading_plans_root
-    plans: list[PlanRef] = []
-    for path in sorted(root.glob("*.json")) if root.is_dir() else []:
-        try:
-            plan = read_reading_plan(path)
-        except (OSError, ValueError):
-            continue  # skip an unreadable/corrupt plan rather than fail the listing
-        total = len(plan.section_ids)
-        completed = len(plan.completed)
-        plans.append(
+    return PlanList(
+        plans=[
             PlanRef(
-                plan_id=plan.plan_id,
-                doc_id=plan.doc_id,
-                completed=completed,
-                total=total,
-                done=total > 0 and completed >= total,
+                plan_id=progress.plan_id,
+                doc_id=progress.doc_id,
+                completed=progress.completed,
+                total=progress.total,
+                done=progress.done,
             )
-        )
-    return PlanList(plans=plans)
+            for progress in list_plan_progress(workspace.reading_plans_root)
+        ]
+    )

@@ -65,7 +65,10 @@ A self-serve agent drives an entire session with these tools alone:
 1. `list_documents()` — discover what there is to read (`doc_id`, `title`,
    `section_count`).
 2. `create_plan(doc_id, daily_sections=N)` — start a reading plan (defaults
-   `plan_id` to `doc_id`). Idempotent to re-run only if you pass a new `plan_id`.
+   `plan_id` to `doc_id`). If a plan with that `plan_id` already exists it
+   **errors** rather than wiping its progress — to resume, skip straight to
+   `get_next_section`/`list_plans`; pass a fresh `plan_id` for a separate plan,
+   or `overwrite=True` to deliberately start it over.
 3. Loop:
    - `get_next_section(plan_id)` — the next up-to-`daily_sections` unread
      sections, each with full text + provenance.

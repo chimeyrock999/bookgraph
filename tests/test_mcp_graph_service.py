@@ -9,6 +9,7 @@ from bookgraph.mcp import service
 from bookgraph.mcp.service import (
     ConceptNotFoundError,
     InvalidIdError,
+    ReadingServiceError,
     SectionNotFoundError,
     SectionsNotFoundError,
 )
@@ -297,6 +298,31 @@ def test_create_plan_rejects_an_invalid_doc_id(tmp_path: Path) -> None:
 
     with pytest.raises(InvalidIdError):
         service.create_plan(workspace, "../escape")
+
+
+def test_create_plan_refuses_to_overwrite_an_in_progress_plan(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    service.create_plan(workspace, "ddia", daily_sections=2)
+    service.mark_read(workspace, "ddia")  # make progress worth protecting
+
+    with pytest.raises(ReadingServiceError, match="already exists"):
+        service.create_plan(workspace, "ddia")
+
+    # the existing plan (and its progress) is untouched by the refused re-create
+    plans = service.list_plans(workspace)
+    assert [(p.plan_id, p.completed, p.total) for p in plans.plans] == [("ddia", 1, 4)]
+
+
+def test_create_plan_overwrite_replaces_the_existing_plan(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    service.create_plan(workspace, "ddia", daily_sections=2)
+    service.mark_read(workspace, "ddia")
+
+    recreated = service.create_plan(workspace, "ddia", daily_sections=1, overwrite=True)
+
+    assert recreated.daily_sections == 1
+    plans = service.list_plans(workspace)
+    assert [(p.plan_id, p.completed, p.total) for p in plans.plans] == [("ddia", 0, 4)]
 
 
 def test_list_plans_is_empty_without_any_plans(tmp_path: Path) -> None:

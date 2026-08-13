@@ -575,11 +575,13 @@ telling the user to `uv sync --extra mcp`.
   `title` (from the parsed `document.json`, falling back to `doc_id`), and
   `section_count`. Lets an agent discover what there is to read before picking a
   document.
-- `create_plan(doc_id, plan_id=None, daily_sections=1)` → create and persist a
-  reading plan for a segmented document (same contract as `bookgraph reading-plan
-  create`; `plan_id` defaults to `doc_id`). Returns `plan_id`, `doc_id`,
-  `daily_sections`, `section_count`, and `path`. Fails if the document is not
-  segmented.
+- `create_plan(doc_id, plan_id=None, daily_sections=1, overwrite=False)` → create
+  and persist a reading plan for a segmented document (`plan_id` defaults to
+  `doc_id`). Returns `plan_id`, `doc_id`, `daily_sections`, `section_count`, and
+  `path`. Fails if the document is not segmented, or — unlike `bookgraph
+  reading-plan create` — if a plan with that `plan_id` already exists, so a
+  re-calling agent cannot silently wipe an in-progress plan; pass `overwrite=True`
+  to replace it.
 - `list_plans()` → the workspace's reading plans, each with `plan_id`, `doc_id`,
   `completed`, `total`, and `done`. Lets an agent resume or track progress.
 

@@ -120,12 +120,21 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
 
     @mcp.tool
     def create_plan(
-        doc_id: str, plan_id: str | None = None, daily_sections: int = 1
+        doc_id: str,
+        plan_id: str | None = None,
+        daily_sections: int = 1,
+        overwrite: bool = False,
     ) -> CreatedPlan:
-        """Create a reading plan for a document (plan_id defaults to doc_id)."""
+        """Create a reading plan for a document (plan_id defaults to doc_id).
+
+        Errors if a plan with that id already exists, to avoid discarding an
+        in-progress plan on a re-call; pass overwrite=True to replace it.
+        """
 
         try:
-            return service.create_plan(workspace, doc_id, plan_id, daily_sections)
+            return service.create_plan(
+                workspace, doc_id, plan_id, daily_sections, overwrite=overwrite
+            )
         except ReadingServiceError as exc:
             raise ToolError(str(exc)) from exc
 

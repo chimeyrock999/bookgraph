@@ -38,14 +38,17 @@ def _compile(
     tmp_path: Path,
     sections: list[Section],
     doc_id: str | None = None,
+    *,
+    explicit_concepts_dir: bool = True,
 ) -> None:
     resolved_doc_id = doc_id or sections[0].doc_id
     workspace = tmp_path / "workspace"
     write_sections(sections, workspace / "sources" / "sections" / resolved_doc_id)
+    concepts_dir = workspace / "wiki" / "concepts" if explicit_concepts_dir else None
     MarkdownGraphBackend().compile_book(
         sections,
         workspace / "wiki" / "books" / resolved_doc_id,
-        workspace / "wiki" / "concepts",
+        concepts_dir,
     )
 
 
@@ -133,6 +136,54 @@ def test_markdown_graph_backend_updates_only_current_doc_in_shared_concept(
     assert "../books/iceberg/" not in concept
     assert "../books/spark/sections/spark.intro.md" in concept
     assert "section_count: 2" in concept
+
+
+def test_markdown_graph_backend_survives_stale_cross_book_section_ids(
+    tmp_path: Path,
+) -> None:
+    _compile(tmp_path, _sections("iceberg"))
+    _compile(tmp_path, _sections("spark"))
+
+    # Spark has been re-segmented on disk since its own last wiki compile. The
+    # concept page still stores the old spark.intro/spark.metadata mentions until
+    # spark is compiled again; recompiling another book must not read Spark's
+    # current source manifest and crash on missing ids.
+    write_sections(
+        [
+            Section(
+                id="spark.renamed",
+                doc_id="spark",
+                title="Apache Iceberg",
+                level=1,
+                heading_path=["Apache Iceberg"],
+                text="Apache Iceberg after re-segmentation.",
+            )
+        ],
+        tmp_path / "workspace" / "sources" / "sections" / "spark",
+    )
+
+    _compile(tmp_path, _sections("iceberg"))
+
+    concept = (tmp_path / "workspace" / "wiki" / "concepts" / "apache-iceberg.md").read_text()
+    assert "../books/iceberg/sections/iceberg.intro.md" in concept
+    assert "../books/spark/sections/spark.intro.md" in concept
+
+
+def test_markdown_graph_backend_compile_book_default_concepts_dir_does_not_crash(
+    tmp_path: Path,
+) -> None:
+    _compile(tmp_path, _sections("iceberg"), explicit_concepts_dir=False)
+
+    concept = (
+        tmp_path
+        / "workspace"
+        / "wiki"
+        / "books"
+        / "iceberg"
+        / "concepts"
+        / "apache-iceberg.md"
+    ).read_text()
+    assert "../books/iceberg/sections/iceberg.intro.md" in concept
 
 
 def test_markdown_graph_backend_escapes_wiki_link_titles(tmp_path: Path) -> None:

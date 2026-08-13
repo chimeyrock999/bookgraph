@@ -9,7 +9,7 @@ from pathlib import Path
 
 from bookgraph.models import Section
 from bookgraph.ports import WikiBackend
-from bookgraph.sections import read_sections, render_section_markdown
+from bookgraph.sections import render_section_markdown
 from bookgraph.utils import unique_slug
 from bookgraph.wiki_backends.common import render_section_index
 
@@ -54,6 +54,13 @@ class ConceptEntry:
         return len(self.section_ids)
 
 
+@dataclass(frozen=True)
+class SectionMention:
+    id: str
+    doc_id: str
+    title: str
+
+
 class MarkdownGraphBackend(WikiBackend):
     """Compile sections into a linked markdown wiki with deterministic concepts."""
 
@@ -80,10 +87,12 @@ class MarkdownGraphBackend(WikiBackend):
         sections_dir = output_dir / "sections"
         _replace_dir(sections_dir)
 
+        doc_id = _doc_id(sections)
         concepts = extract_concepts(sections)
         current_slugs = {concept.slug for concept in concepts}
         concept_map = {concept.slug: concept for concept in concepts}
         concepts_by_section = _concepts_by_section(concepts)
+        current_mentions = _mentions_by_section_id(sections)
 
         for section in sections:
             section_concepts = [
@@ -93,14 +102,24 @@ class MarkdownGraphBackend(WikiBackend):
                 _render_section(section, section_concepts)
             )
 
-        _remove_stale_mentions(concepts_dir, _doc_id(sections), current_slugs)
+        _remove_stale_mentions(concepts_dir, doc_id, current_slugs)
         for concept in concepts:
             concept_path = concepts_dir / f"{concept.slug}.md"
             existing = _read_existing_concept_page(concept_path)
-            sections_by_doc = dict(existing.sections_by_doc)
-            sections_by_doc[_doc_id(sections)] = list(concept.section_ids)
+            mentions_by_doc = dict(existing.mentions_by_doc)
+            mentions_by_doc[doc_id] = [
+                current_mentions[section_id] for section_id in concept.section_ids
+            ]
+            concept_title = existing.title or concept.title
             (concepts_dir / f"{concept.slug}.md").write_text(
-                _render_concept(concept, sections_by_doc, concepts_dir)
+                _render_concept(
+                    ConceptEntry(
+                        slug=concept.slug,
+                        title=concept_title,
+                        section_ids=concept.section_ids,
+                    ),
+                    mentions_by_doc,
+                )
             )
 
         (output_dir / "README.md").write_text(
@@ -231,78 +250,119 @@ def _render_section(section: Section, concepts: list[ConceptEntry]) -> str:
 
 def _render_concept(
     concept: ConceptEntry,
-    sections_by_doc: dict[str, list[str]],
-    concepts_dir: Path,
+    mentions_by_doc: dict[str, list[SectionMention]],
 ) -> str:
+    section_count = sum(len(mentions) for mentions in mentions_by_doc.values())
     lines = [
         "---",
         f"concept: {json.dumps(concept.slug)}",
         f"title: {json.dumps(concept.title)}",
-        f"section_count: {sum(len(section_ids) for section_ids in sections_by_doc.values())}",
+        f"section_count: {section_count}",
         "---",
         "",
         f"# {concept.title}",
         "",
         _CONCEPTS_MARKER,
-        json.dumps(sections_by_doc, sort_keys=True),
+        json.dumps(_mentions_to_json(mentions_by_doc), sort_keys=True),
         _CONCEPTS_MARKER,
         "",
         "## Mentioned in",
         "",
     ]
-    for doc_id in sorted(sections_by_doc):
-        sections = _read_compiled_sections_for_doc(concepts_dir, doc_id)
-        by_id = {section.id: section for section in sections}
-        for section_id in sections_by_doc[doc_id]:
-            section = by_id[section_id]
-            title = _escape_markdown_link_text(section.title)
-            lines.append(f"- [{title}](../books/{doc_id}/sections/{section_id}.md)")
+    for doc_id in sorted(mentions_by_doc):
+        for mention in mentions_by_doc[doc_id]:
+            title = _escape_markdown_link_text(mention.title)
+            lines.append(f"- [{title}](../books/{doc_id}/sections/{mention.id}.md)")
     return "\n".join(lines) + "\n"
 
 
 @dataclass(frozen=True)
 class _ExistingConceptPage:
-    sections_by_doc: dict[str, list[str]]
+    title: str | None
+    mentions_by_doc: dict[str, list[SectionMention]]
 
 
 def _read_existing_concept_page(path: Path) -> _ExistingConceptPage:
     if not path.is_file():
-        return _ExistingConceptPage(sections_by_doc={})
+        return _ExistingConceptPage(title=None, mentions_by_doc={})
     text = path.read_text()
     parts = text.split(_CONCEPTS_MARKER)
     if len(parts) < 3:
-        return _ExistingConceptPage(sections_by_doc={})
+        return _ExistingConceptPage(title=_title_from_text(text), mentions_by_doc={})
     try:
         raw = json.loads(parts[1].strip())
     except json.JSONDecodeError:
-        return _ExistingConceptPage(sections_by_doc={})
-    sections_by_doc = {
-        str(doc_id): [str(section_id) for section_id in section_ids]
-        for doc_id, section_ids in raw.items()
-        if isinstance(section_ids, list)
-    }
-    return _ExistingConceptPage(sections_by_doc=sections_by_doc)
+        return _ExistingConceptPage(title=_title_from_text(text), mentions_by_doc={})
+    mentions_by_doc = _mentions_from_json(raw)
+    return _ExistingConceptPage(title=_title_from_text(text), mentions_by_doc=mentions_by_doc)
 
 
 def _remove_stale_mentions(concepts_dir: Path, doc_id: str, current_slugs: set[str]) -> None:
     for path in concepts_dir.glob("*.md"):
         existing = _read_existing_concept_page(path)
-        if doc_id not in existing.sections_by_doc:
+        if doc_id not in existing.mentions_by_doc:
             continue
         if path.stem in current_slugs:
             continue
-        sections_by_doc = dict(existing.sections_by_doc)
-        sections_by_doc.pop(doc_id, None)
-        if not sections_by_doc:
+        mentions_by_doc = dict(existing.mentions_by_doc)
+        mentions_by_doc.pop(doc_id, None)
+        if not mentions_by_doc:
             path.unlink()
             continue
-        title = _title_from_existing_page(path)
+        title = existing.title or path.stem.replace("-", " ").title()
         concept = ConceptEntry(slug=path.stem, title=title, section_ids=[])
-        path.write_text(_render_concept(concept, sections_by_doc, concepts_dir))
+        path.write_text(_render_concept(concept, mentions_by_doc))
 
 
-def _title_from_existing_page(path: Path) -> str:
-    for line in path.read_text().splitlines():
+def _mentions_by_section_id(sections: list[Section]) -> dict[str, SectionMention]:
+    return {
+        section.id: SectionMention(id=section.id, doc_id=section.doc_id, title=section.title)
+        for section in sections
+    }
+
+
+def _mentions_to_json(
+    mentions_by_doc: dict[str, list[SectionMention]],
+) -> dict[str, list[dict[str, str]]]:
+    return {
+        doc_id: [
+            {
+                "id": mention.id,
+                "title": mention.title,
+            }
+            for mention in mentions
+        ]
+        for doc_id, mentions in mentions_by_doc.items()
+    }
+
+
+def _mentions_from_json(raw: object) -> dict[str, list[SectionMention]]:
+    if not isinstance(raw, dict):
+        return {}
+    mentions_by_doc: dict[str, list[SectionMention]] = {}
+    for doc_id, raw_mentions in raw.items():
+        if not isinstance(doc_id, str) or not isinstance(raw_mentions, list):
+            continue
+        mentions = [_parse_mention(doc_id, item) for item in raw_mentions]
+        mentions_by_doc[doc_id] = [mention for mention in mentions if mention is not None]
+    return mentions_by_doc
+
+
+def _parse_mention(doc_id: str, raw: object) -> SectionMention | None:
+    if isinstance(raw, str):
+        # Backward-compatible read of the first PR iteration's hidden state.
+        return SectionMention(id=raw, doc_id=doc_id, title=raw)
+    if not isinstance(raw, dict):
+        return None
+    section_id = raw.get("id")
+    title = raw.get("title")
+    if not isinstance(section_id, str) or not isinstance(title, str):
+        return None
+    return SectionMention(id=section_id, doc_id=doc_id, title=title)
+
+
+def _title_from_text(text: str) -> str | None:
+    for line in text.splitlines():
         if line.startswith("title: "):
             try:
                 value = json.loads(line.removeprefix("title: "))
@@ -310,20 +370,7 @@ def _title_from_existing_page(path: Path) -> str:
                 break
             if isinstance(value, str):
                 return value
-    return path.stem.replace("-", " ").title()
-
-
-def _read_compiled_sections_for_doc(concepts_dir: Path, doc_id: str) -> list[Section]:
-    manifest = concepts_dir.parent / "books" / doc_id / "sections" / "sections.jsonl"
-    if manifest.is_file():
-        return read_sections(manifest)
-    # Wiki section pages do not carry enough machine-readable text to round-trip
-    # from Markdown, so fall back to the source sections manifest when the backend
-    # is used in a normal BookGraph workspace.
-    source_manifest = (
-        concepts_dir.parent.parent / "sources" / "sections" / doc_id / "sections.jsonl"
-    )
-    return read_sections(source_manifest)
+    return None
 
 
 def _replace_dir(path: Path) -> None:

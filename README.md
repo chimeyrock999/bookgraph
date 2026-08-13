@@ -30,7 +30,7 @@ Wiki backend plugins
   - custom markdown graph backend (planned)
   ↓
 MCP server plugins
-  - reading plan tools (planned)
+  - reading tools: get_next_section / get_section / search / mark_read (`bookgraph mcp`)
   - graph/context tools (planned)
 ```
 
@@ -57,6 +57,9 @@ src/bookgraph/
     heading.py              # Heading/title-block segmenter
   wiki_backends/
     llmwiki.py              # Stage section markdown for llm-wiki-compiler
+  mcp/
+    service.py              # Reading/query logic (FastMCP-free, unit-tested)
+    server.py               # FastMCP server wrapper (optional `mcp` extra)
 ```
 
 ## CLI contracts
@@ -149,9 +152,13 @@ Implemented:
 - Reading-plan store (`bookgraph.reading_plans`) and CLI `reading-plan
   create`/`next`/`mark-read`: daily reading progression state under
   `reading_plans/<plan_id>.json`
+- FastMCP server (`bookgraph mcp`, optional `mcp` extra) exposing
+  `get_next_section`, `get_section`, `search`, `mark_read` over the sections and
+  reading-plan artifacts
 
 Planned next:
 
 - PDF metadata/bookmark detector
-- `bookgraph.toml` config loading so CLI defaults come from the workspace
-- FastMCP server exposing `get_next_section`, `get_section`, `search`, `mark_read`
+- `bookgraph.toml` config loading across all stages (currently `parse-book` and
+  `wiki compile` only)
+- A real sections/graph index under `indexes/` to back MCP `search`

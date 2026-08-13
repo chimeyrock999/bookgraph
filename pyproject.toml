@@ -57,5 +57,13 @@ strict = true
 packages = ["bookgraph"]
 
 [[tool.mypy.overrides]]
-module = ["markitdown.*"]
+module = ["markitdown.*", "fastmcp.*"]
 ignore_missing_imports = true
+
+# The FastMCP tool decorators are untyped when the optional ``mcp`` extra is not
+# installed (fastmcp is treated as missing above). The wrapper is thin and its
+# tools are individually typed, so relax only the untyped-decorator rule here to
+# keep ``mypy`` green in the default (no-extra) environment.
+[[tool.mypy.overrides]]
+module = ["bookgraph.mcp.server"]
+disallow_untyped_decorators = false

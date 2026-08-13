@@ -38,6 +38,7 @@ workspace/
     comparisons/
     daily/
   indexes/
+  annotations/
   reading_plans/
   runs/
 ```
@@ -55,6 +56,7 @@ workspace/
 | `wiki/comparisons/` | wiki backend | Cross-book comparison pages. |
 | `wiki/daily/` | daily agent/wiki backend | Daily reading notes and summaries. |
 | `indexes/` | index/search/graph stage | Deterministic indexes, graph DB files, search indexes. |
+| `annotations/<doc_id>/` | reading agent (MCP `annotate_section`) | Tier-2 per-section agent annotations (concepts + summary); a source of truth read by `index build`. See `annotations.md`. |
 | `reading_plans/` | reading plan stage | Progress state for daily reading. |
 | `runs/` | orchestration | Run logs and reproducibility metadata. |
 

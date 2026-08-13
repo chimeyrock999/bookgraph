@@ -76,6 +76,7 @@ wiki.books
 wiki.comparisons
 wiki.daily
 indexes.root
+annotations.root
 reading_plans.root
 runs.root
 ```
@@ -461,18 +462,27 @@ bookgraph index build /path/to/workspace --doc-id ddia   # index one document
 - `--doc-id`: index only this document. Validated as a filesystem-safe slug.
   Omit it to index every segmented document under `sources/sections/`.
 
+### Reads
+
+- `sources/sections/<doc_id>/sections.jsonl` (the sections to index).
+- `annotations/<doc_id>/<section_id>.json` — Tier-2 agent annotations, merged with the
+  deterministic Tier-1 extraction per the presence-based rule in `annotations.md`. The
+  annotation files are a source of truth: `index build` reads them, never writes them.
+
 ### Writes
 
 - `indexes/bookgraph.db` — the workspace-wide SQLite index. Each document is
   (re)built idempotently and atomically into `doc_catalog` + `sections_fts` +
-  `section_graph` + `concept_mentions` (delete-then-insert per `doc_id`); other
-  documents' rows are never touched. Fully regenerable from `sections.jsonl` and
-  safe to delete and rebuild (see `.docs/cli/index.md`).
+  `section_graph` + `concept_mentions` (Tier-1/Tier-2 merged, carrying `gloss`/`source`)
+  + `section_annotations` (per-section summaries), delete-then-insert per `doc_id`;
+  other documents' rows are never touched. Fully regenerable from `sections.jsonl` +
+  `annotations/` and safe to delete and rebuild (see `.docs/cli/index.md`).
 
 ### Must not do
 
 - Must not parse, segment, or compile wiki.
-- Must not write outside `indexes/`.
+- Must not write outside `indexes/`. In particular it reads, but never writes,
+  `annotations/`.
 
 ### Prints
 
@@ -504,9 +514,10 @@ bookgraph index concepts /path/to/workspace
 ### Writes
 
 - `wiki/concepts/<concept_slug>.md` — one page per concept, with cross-book
-  backlinks, rendered from `concept_nodes` + `concept_mentions`. Rewrites the whole
-  `wiki/concepts/` directory so it reflects exactly the currently indexed concepts
-  (see `.docs/cli/artifacts.md`).
+  backlinks, rendered from `concept_nodes` + `concept_mentions`. Each backlink shows
+  its per-mention `gloss` when present and an `(agent-verified)` marker when the
+  mention's `source` is `agent`. Rewrites the whole `wiki/concepts/` directory so it
+  reflects exactly the currently indexed concepts (see `.docs/cli/artifacts.md`).
 
 > Backlinks point into `wiki/books/<doc_id>/sections/`, which is materialized by
 > `bookgraph wiki compile <doc_id> --backend markdown-graph`, not by this command.
@@ -537,7 +548,8 @@ bookgraph index concepts /path/to/workspace
 
 Serve a workspace over MCP (stdio transport) so a reading client/agent can query
 sections and drive a reading plan. All tools are read-mostly; only `mark_read` and
-`create_plan` write state (reading plans).
+`create_plan` write reading-plan state, and `annotate_section` writes a Tier-2
+annotation artifact.
 
 ```bash
 uv sync --extra mcp
@@ -571,15 +583,30 @@ telling the user to `uv sync --extra mcp`.
   graph: `parent`, `prev`, `next`, and `children` (each a lightweight
   id/title/level reference).
 - `get_context(doc_id, section_id)` → a section's full reading content (as
-  `get_section`), its graph neighbourhood (as `get_related`), and its `concepts`
-  (each with `slug`, `title`, and cross-book `doc_count` / `mention_count`) so a
-  reader can pivot into `get_concept`. Concepts are empty for an unindexed document.
+  `get_section`), its graph neighbourhood (as `get_related`), its `concepts`
+  (each with `slug`, `title`, cross-book `doc_count` / `mention_count`, and the
+  per-mention `gloss` / `source`) so a reader can pivot into `get_concept`, and the
+  section's `summary`. The `summary` is read directly from the annotation file
+  (`annotations/<doc_id>/<section_id>.json`), so it reflects an `annotate_section`
+  call immediately; concepts are empty for an unindexed document and pick up
+  gloss/source after the next `index build`.
 - `get_concept(concept)` → a cross-book concept lookup: the concept node (`slug`,
   `title`, `doc_count`, `mention_count`) plus its backlink mentions
-  (`doc_id`, `section_id`, `title`) across every indexed book, grouped by
-  document. Returns empty when the slug is unknown. Backed by `concept_nodes` /
-  `concept_mentions`; no live-scan fallback (a document's concepts exist only once
-  it is built).
+  (`doc_id`, `section_id`, `title`, `gloss`, `source`) across every indexed book,
+  grouped by document. Returns empty when the slug is unknown. Backed by
+  `concept_nodes` / `concept_mentions`; no live-scan fallback (a document's concepts
+  exist only once it is built).
+- `annotate_section(doc_id, section_id, concepts=[], summary="", model=None)` →
+  write a Tier-2 annotation for one section: the agent's authoritative concept edge
+  set (each `{slug?, title, gloss?}`; `slug` defaults to a slugified `title`, and an
+  empty/`untitled` slug is rejected) plus a prose `summary`. Writes only
+  `annotations/<doc_id>/<section_id>.json` (see `annotations.md`); it does **not**
+  touch the index. `doc_id` is validated as a slug; `section_id` is validated by
+  **membership** (it must exist in the document — real ids contain a dot, so they are
+  not bare slugs), rejecting unknown ids and traversal values. The summary is visible
+  via `get_context` immediately; the concept edges (and their prune of Tier-1 false
+  positives) take effect on the next `bookgraph index build <doc_id>`. Returns the
+  written `doc_id`, `section_id`, `concept_count`, and `path`.
 - `list_documents()` → the workspace's segmented documents, each with `doc_id`,
   `title` (from the parsed `document.json`, falling back to `doc_id`), and
   `section_count`. Lets an agent discover what there is to read before picking a
@@ -601,9 +628,12 @@ CLI step (see `.docs/mcp/reading-agent.md`).
 ### Reads / writes
 
 - Reads `indexes/bookgraph.db` (when built) and
-  `sources/sections/<doc_id>/sections.jsonl`, plus `reading_plans/<plan_id>.json`.
+  `sources/sections/<doc_id>/sections.jsonl`, plus `reading_plans/<plan_id>.json` and
+  `annotations/<doc_id>/<section_id>.json` (the latter for `get_context.summary`).
 - `mark_read` and `create_plan` write `reading_plans/<plan_id>.json` (same
-  contracts as `bookgraph reading-plan mark-read` / `create`). No other tool writes.
+  contracts as `bookgraph reading-plan mark-read` / `create`); `annotate_section`
+  writes `annotations/<doc_id>/<section_id>.json` (see `annotations.md`). No other
+  tool writes.
 
 MCP tool inputs are client-controlled, so `plan_id` and `doc_id` are validated as
 filesystem-safe slugs before they are used as path components; a traversal value

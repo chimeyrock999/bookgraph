@@ -121,21 +121,63 @@ CREATE TABLE concept_mentions (
     concept_title TEXT NOT NULL,   -- display title, e.g. "Schema Evolution"
     doc_id        TEXT NOT NULL,
     section_id    TEXT NOT NULL,
+    gloss         TEXT NOT NULL DEFAULT '',      -- per-mention note (Tier-2 only)
+    source        TEXT NOT NULL DEFAULT 'auto',  -- 'auto' | 'agent'
     PRIMARY KEY (doc_id, section_id, concept_slug)
 );
 CREATE INDEX concept_mentions_slug ON concept_mentions (concept_slug);
 ```
 
-- Concepts are extracted from the document's own `sections.jsonl` by the shared
-  deterministic extractor `bookgraph.concepts.extract_concepts` (the same one the
-  `markdown-graph` wiki backend uses for in-page wikilinks), so a section's
-  mentions here match the `[[<slug>|Title]]` links on its book page.
+- Concepts for a section come from **one of two tiers**, chosen per section by the
+  presence of a Tier-2 annotation (see the `annotations.md` merge rule):
+  - **Tier 1 (auto):** the shared deterministic extractor
+    `bookgraph.concepts.extract_concepts` (the same one the `markdown-graph` wiki
+    backend uses for in-page wikilinks), so an auto section's mentions match the
+    `[[<slug>|Title]]` links on its book page. These rows carry `source='auto'` and an
+    empty `gloss`.
+  - **Tier 2 (agent):** an agent annotation
+    (`annotations/<doc_id>/<section_id>.json`) is the authoritative edge set for that
+    section. These rows carry `source='agent'` and the annotation's per-mention `gloss`.
+    An annotation with an empty concept list **zeroes out** that section's rows (the
+    false-positive prune) — see `annotations.md`.
 - `concept_slug`: `[a-z0-9]+(?:-[a-z0-9]+)*`; the join key across books.
 - `concept_title`: display title carried for labels. The same slug may carry
   slightly different titles across documents; a single canonical title is chosen
   at query time (see `concept_nodes`).
 - `section_id`: the mentioning section, joinable to `section_graph` and the
   section files. `(doc_id, section_id)` scope makes per-doc delete trivial.
+- `gloss`: a short per-mention note on why the concept matters in this section.
+  Non-empty only for `source='agent'` rows; surfaced on concept pages and in
+  `get_context.concepts`.
+- `source`: `'auto'` or `'agent'`. Because concepts for a `(doc_id, section_id)` come
+  from exactly one tier, all rows for a given pair share one `source`; the
+  `PRIMARY KEY (doc_id, section_id, concept_slug)` makes a cross-tier collision for the
+  same pair impossible.
+
+### `section_annotations`
+
+Per-section Tier-2 metadata that is **not** a concept edge: the agent's `summary` and
+provenance. One row per annotated section. It is populated by `index build` from the
+annotation files (mirroring `concept_mentions`' per-doc delete/insert) so the built
+database carries the summary alongside the graph — but it is **not** a
+`_REQUIRED_TABLES` member, so a database predating it still reads cleanly (its absence
+just means "no stored summaries").
+
+```sql
+CREATE TABLE section_annotations (
+    doc_id     TEXT NOT NULL,
+    section_id TEXT NOT NULL,
+    summary    TEXT NOT NULL DEFAULT '',
+    model      TEXT,
+    created_at TEXT,
+    PRIMARY KEY (doc_id, section_id)
+);
+```
+
+- `summary` / `model` / `created_at`: carried straight from the annotation file.
+- `get_context` does **not** depend on this table for immediacy: it reads the single
+  annotation file directly so a just-written summary shows before any rebuild. The table
+  exists so the summary is queryable from the built index too.
 
 ### `concept_nodes`
 
@@ -164,16 +206,43 @@ GROUP BY concept_slug;
 
 1. Reads `sources/sections/<doc_id>/sections.jsonl`.
 2. Opens (creating if absent) `indexes/bookgraph.db` and ensures the schema.
-3. Rebuilds that document **idempotently and atomically** in one transaction:
-   `DELETE FROM doc_catalog / sections_fts / section_graph / concept_mentions
-   WHERE doc_id = ?`, then re-inserts the fresh rows (including the document's
-   concept mentions, extracted from its sections via `bookgraph.concepts`).
-   Re-running build for the same document is a no-op net of content changes; other
-   documents' rows are never touched.
-4. Prints the database path and the section count written.
+3. Reads the document's Tier-2 annotations
+   (`annotations/<doc_id>/<section_id>.json`, see `annotations.md`) and merges them
+   with the deterministic Tier-1 extraction per the **presence-based merge rule**: for
+   each section, an annotation (if present) is the authoritative concept edge set
+   (`source='agent'`, carrying gloss — an empty concept list prunes the section);
+   otherwise the auto extractor supplies the edges (`source='auto'`).
+4. Rebuilds that document **idempotently and atomically** in one transaction:
+   `DELETE FROM doc_catalog / sections_fts / section_graph / concept_mentions /
+   section_annotations WHERE doc_id = ?`, then re-inserts the fresh rows (the merged
+   concept mentions and the per-section summaries). Re-running build for the same
+   document is a no-op net of content/annotation changes; other documents' rows are
+   never touched.
+5. Prints the database path and the section count written.
 
-Rebuild a document after re-segmenting it so the denormalised `title` / `text`,
-the graph edges, and the concept mentions stay in sync with `sections.jsonl`.
+Rebuild a document after re-segmenting it **or after annotating any of its sections**
+so the denormalised `title` / `text`, the graph edges, the concept mentions (Tier-1 +
+Tier-2 merge), and the stored summaries stay in sync with `sections.jsonl` +
+`annotations/`.
+
+### Schema migration (pre-annotation databases)
+
+The `gloss` / `source` columns on `concept_mentions` and the `section_annotations`
+table were added for the Tier-2 enrichment. `index build` runs an idempotent,
+guarded migration on open: it reads `PRAGMA table_info(concept_mentions)` and issues
+`ALTER TABLE … ADD COLUMN` only for columns that are missing (both with `NOT NULL
+DEFAULT` so existing rows backfill), and `CREATE TABLE IF NOT EXISTS section_annotations`.
+
+- A pre-change database never crashes: its `concept_mentions` lacks the `gloss` /
+  `source` columns, so the concept-read SELECTs (which now name those columns) hit
+  "no such column" and the read-only wrapper degrades that read to **empty** — the same
+  graceful "not indexed" path used for a corrupt/partial database. So on an un-rebuilt
+  old database `get_concept` / `get_context.concepts` return empty rather than raising.
+  (Reads never migrate — only `index build` writes.)
+- **Migration note:** to restore concept reads and pick up gloss/source + stored
+  summaries, run `bookgraph index build <doc_id>` once per document — that is what adds
+  the columns and re-populates the rows. Until a document is rebuilt its concept reads
+  are empty (never a crash); search and the graph tools are unaffected.
 
 `bookgraph index concepts <workspace>` — a **global** pass (not per-document):
 
@@ -197,17 +266,20 @@ stage's output.
 - **`get_outline` / `get_related` / `get_context`**: read `section_graph` for the
   requested `doc_id`, reconstructing children via the `parent_id` inverse.
   `get_context` additionally returns the section's own concepts (from
-  `concept_mentions`, each with its cross-book `doc_count` / `mention_count`) so a
-  reader can pivot from the current section into `get_concept`; these are empty for
-  an unindexed document (concepts have no live-scan fallback).
+  `concept_mentions`, each with its cross-book `doc_count` / `mention_count` plus the
+  per-mention `gloss` / `source`) so a reader can pivot from the current section into
+  `get_concept`; these are empty for an unindexed document (concepts have no live-scan
+  fallback). `get_context` also returns the section's `summary`, read **directly from
+  the annotation file** (`annotations/<doc_id>/<section_id>.json`) rather than from the
+  index, so a summary written by `annotate_section` shows before any `index build`.
 - **`get_concept(concept)`**: looks a concept up by slug in `concept_nodes`, then
   reads its `concept_mentions` across **every** indexed book. Returns the node
   (`slug`, `title`, `doc_count`, `mention_count`) plus its backlink mentions
-  (`doc_id`, `section_id`, section `title`) grouped/ordered by document — the
-  cross-book "what mentions this concept" query. Returns nothing when the slug is
-  absent. Concepts have no live-scan fallback: an unindexed document's concepts
-  are simply absent until it is built (unlike `search`/graph reads, which scan
-  `sections.jsonl` on miss).
+  (`doc_id`, `section_id`, section `title`, `gloss`, `source`) grouped/ordered by
+  document — the cross-book "what mentions this concept" query. Returns nothing when
+  the slug is absent. Concepts have no live-scan fallback: an unindexed document's
+  concepts are simply absent until it is built (unlike `search`/graph reads, which
+  scan `sections.jsonl` on miss).
 
 ## Fallback
 

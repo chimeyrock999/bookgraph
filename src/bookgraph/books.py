@@ -5,6 +5,7 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
+from bookgraph.pdf_metadata import PdfMetadata, inspect_pdf_metadata
 from bookgraph.utils import slugify
 from bookgraph.workspace import WorkspacePaths
 
@@ -16,6 +17,7 @@ class BookRegistration:
     source_type: str
     source_path: Path
     workspace: WorkspacePaths
+    pdf_metadata: PdfMetadata | None = None
 
     @property
     def book_root(self) -> Path:
@@ -49,6 +51,7 @@ class BookRegistration:
             "source_path": str(self.source_path),
             "workspace_path": str(self.workspace.root),
             "status": "registered",
+            "pdf": _pdf_manifest(self.pdf_metadata),
             "pipeline": {
                 "parser": None,
                 "segmenter": None,
@@ -69,12 +72,14 @@ def build_book_registration(workspace: WorkspacePaths, source: Path) -> BookRegi
     if resolved_source.suffix.lower() != ".pdf":
         raise ValueError("Only PDF input is supported by this CLI contract for now.")
     title = _title_from_path(resolved_source)
+    pdf_metadata = _try_inspect_pdf_metadata(resolved_source)
     return BookRegistration(
         book_id=slugify(title),
         title=title,
         source_type="pdf",
         source_path=resolved_source,
         workspace=workspace,
+        pdf_metadata=pdf_metadata,
     )
 
 
@@ -86,3 +91,37 @@ def register_book(registration: BookRegistration) -> None:
 
 def _title_from_path(source: Path) -> str:
     return source.stem.replace("_", " ").strip().title()
+
+
+def _try_inspect_pdf_metadata(source: Path) -> PdfMetadata | None:
+    try:
+        return inspect_pdf_metadata(source)
+    except Exception:
+        # Registration should remain cheap and tolerant: malformed PDFs or missing
+        # optional pypdf support should not block copying the original source.
+        return None
+
+
+def _pdf_manifest(metadata: PdfMetadata | None) -> dict[str, object]:
+    if metadata is None:
+        return {
+            "title": None,
+            "author": None,
+            "pages": 0,
+            "has_bookmarks": False,
+            "bookmarks": [],
+        }
+    return {
+        "title": metadata.title,
+        "author": metadata.author,
+        "pages": metadata.pages,
+        "has_bookmarks": metadata.has_bookmarks,
+        "bookmarks": [
+            {
+                "title": bookmark.title,
+                "page_index": bookmark.page_index,
+                "level": bookmark.level,
+            }
+            for bookmark in metadata.bookmarks
+        ],
+    }

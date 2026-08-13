@@ -6,6 +6,7 @@ from typing import Annotated
 import typer
 
 from bookgraph.cli._app import reading_plan_app
+from bookgraph.cli._config import load_config
 from bookgraph.cli._shared import _validate_id
 from bookgraph.models import ReadingPlan
 from bookgraph.reading_plans import (
@@ -45,9 +46,12 @@ def reading_plan_create(
         typer.Option("--plan-id", help="Reading plan id; defaults to the doc id."),
     ] = None,
     daily_sections: Annotated[
-        int,
-        typer.Option("--daily-sections", help="Sections per daily reading tick."),
-    ] = 1,
+        int | None,
+        typer.Option(
+            "--daily-sections",
+            help="Sections per daily reading tick. Defaults to [reading_plan].daily_sections.",
+        ),
+    ] = None,
     dry_run: Annotated[
         bool,
         typer.Option("--dry-run", help="Compute the plan and print it without writing files."),
@@ -56,9 +60,13 @@ def reading_plan_create(
     """Create a reading plan from a document's sections manifest."""
 
     workspace = WorkspacePaths(workspace_path.expanduser().resolve())
+    config = load_config(workspace)
     resolved_doc_id = _validate_id(doc_id, "doc_id")
     resolved_plan_id = _validate_id(plan_id or resolved_doc_id, "plan_id")
-    if daily_sections < 1:
+    resolved_daily_sections = (
+        config.reading_plan.daily_sections if daily_sections is None else daily_sections
+    )
+    if resolved_daily_sections < 1:
         raise typer.BadParameter("daily_sections must be at least 1")
 
     manifest = workspace.sources_sections / resolved_doc_id / "sections.jsonl"
@@ -76,7 +84,7 @@ def reading_plan_create(
             sections,
             plan_id=resolved_plan_id,
             doc_id=resolved_doc_id,
-            daily_sections=daily_sections,
+            daily_sections=resolved_daily_sections,
         )
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc

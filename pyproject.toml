@@ -57,7 +57,7 @@ strict = true
 packages = ["bookgraph"]
 
 [[tool.mypy.overrides]]
-module = ["markitdown.*", "fastmcp.*"]
+module = ["markitdown.*", "fastmcp.*", "pypdf.*"]
 ignore_missing_imports = true
 
 # The FastMCP tool decorators are untyped when the optional ``mcp`` extra is not

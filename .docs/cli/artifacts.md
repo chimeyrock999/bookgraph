@@ -16,6 +16,15 @@ Current schema:
   "source_path": "/absolute/original/input/path/book.pdf",
   "workspace_path": "/absolute/workspace/path",
   "status": "registered",
+  "pdf": {
+    "title": "Designing Data-Intensive Applications",
+    "author": "Martin Kleppmann",
+    "pages": 616,
+    "has_bookmarks": true,
+    "bookmarks": [
+      {"title": "Chapter 1. Reliable, Scalable, and Maintainable Applications", "page_index": 1, "level": 1}
+    ]
+  },
   "pipeline": {
     "parser": null,
     "segmenter": null,
@@ -39,6 +48,11 @@ Current schema:
 - `source_path`: absolute path to the user-provided source path at registration time.
 - `workspace_path`: absolute workspace path used at registration time.
 - `status`: current book-level lifecycle state.
+- `pdf`: best-effort PDF metadata read at registration time. If optional `pypdf`
+  support is unavailable or the source cannot be inspected, values fall back to
+  `title: null`, `author: null`, `pages: 0`, `has_bookmarks: false`, and an
+  empty `bookmarks` list. Bookmark `page_index` is zero-based when known and
+  `level` preserves nested outline depth.
 - `pipeline`: per-stage selected plugin/status placeholder. Current registration sets all values to `null`.
 - `paths`: absolute target paths for downstream stages.
 
@@ -241,10 +255,9 @@ fields (`id`, `doc_id`, `title`, `level`, `heading_path`, `page_start`,
 and text. Frontmatter values are emitted as JSON scalars/arrays (valid YAML) so
 titles with colons or quotes cannot corrupt the frontmatter.
 
-> Note: `sources/sections/` is owned by the segment stage. The current
-> `LlmWikiBackend.ingest_sections` also writes `<section_id>.md` here as a
-> staging step; wiki backends should ultimately emit under `wiki/` instead. This
-> overlap is a known follow-up to resolve when the wiki stage is wired up.
+> Note: `sources/sections/` is owned by the segment stage. Wiki backends should
+> read this manifest and emit compiled output under `wiki/`, not rewrite section
+> source artifacts.
 
 ## `reading_plans/<plan_id>.json`
 

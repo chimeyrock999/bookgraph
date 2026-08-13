@@ -195,7 +195,31 @@ plan daily batch size. Explicit CLI flags still win over config defaults.
 ```bash
 uv run --extra dev pytest -q
 uv run --extra dev ruff check .
+uv run --extra dev mypy src/bookgraph
 ```
+
+Build release distributions locally:
+
+```bash
+uv build
+uvx twine check dist/*
+```
+
+GitHub Actions builds release artifacts with `.github/workflows/release.yml`:
+
+- `workflow_dispatch` builds and uploads the `bookgraph-dist` artifact.
+- pushing a `v*` tag builds the same artifacts and attaches them to a GitHub
+  Release with generated release notes.
+
+## Agent skills
+
+BookGraph ships a `bookgraph-reader` skill in two forms:
+
+- `.claude/skills/bookgraph-reader/SKILL.md` for Claude agents.
+- `.agents/skills/bookgraph-reader/SKILL.md` as an agent-neutral procedure for
+  Hermes/custom MCP clients or any agent runtime that can load `SKILL.md`.
+
+Both describe the MCP reading loop over a prepared workspace.
 
 ## Current MVP status
 

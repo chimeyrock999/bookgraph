@@ -576,6 +576,7 @@ document: <workspace>/sources/parsed/<book_id>/document.json
 ```bash
 bookgraph wiki compile /path/to/workspace <doc_id>
 bookgraph wiki compile /path/to/workspace <doc_id> --backend llmwiki
+bookgraph wiki compile /path/to/workspace <doc_id> --backend markdown-graph
 bookgraph wiki compile /path/to/workspace <doc_id> --dry-run
 ```
 
@@ -591,6 +592,12 @@ Writes:
 
 ```text
 wiki/books/<doc_id>/
+```
+
+For `--backend markdown-graph`, also writes deterministic concept pages under:
+
+```text
+wiki/concepts/<concept_slug>.md
 ```
 
 Dry run still writes a placeholder request artifact under:

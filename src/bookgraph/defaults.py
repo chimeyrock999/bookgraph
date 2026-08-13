@@ -8,6 +8,7 @@ from bookgraph.ports import DocumentParser, DocumentSegmenter, WikiBackend
 from bookgraph.segmenters.bookmark import BookmarkSegmenter
 from bookgraph.segmenters.heading import HeadingSegmenter
 from bookgraph.wiki_backends.llmwiki import LlmWikiBackend
+from bookgraph.wiki_backends.markdown_graph import MarkdownGraphBackend
 
 
 def default_parser_registry() -> PluginRegistry[DocumentParser]:
@@ -28,4 +29,5 @@ def default_segmenter_registry() -> PluginRegistry[DocumentSegmenter]:
 def default_wiki_backend_registry() -> PluginRegistry[WikiBackend]:
     registry: PluginRegistry[WikiBackend] = PluginRegistry(kind="wiki backend")
     registry.register(LlmWikiBackend())
+    registry.register(MarkdownGraphBackend())
     return registry

@@ -259,6 +259,48 @@ titles with colons or quotes cannot corrupt the frontmatter.
 > read this manifest and emit compiled output under `wiki/`, not rewrite section
 > source artifacts.
 
+## `wiki/books/<doc_id>/` and `wiki/concepts/<concept_slug>.md`
+
+Owner: the wiki stage (`bookgraph wiki compile` command / wiki backend plugins).
+
+The `llmwiki` backend writes a book-local README plus section Markdown under
+`wiki/books/<doc_id>/sections/`. The `markdown-graph` backend writes the same book
+surface plus linked concept pages under `wiki/concepts/`.
+
+Required book output shape:
+
+```text
+wiki/books/<doc_id>/
+  README.md
+  sections/
+    <section_id>.md
+```
+
+For the `markdown-graph` backend, section pages include a `## Linked concepts`
+block with wiki-style links:
+
+```text
+- [[schema-evolution|Schema Evolution]]
+```
+
+Concept pages are deterministic, filesystem-safe Markdown files:
+
+```text
+wiki/concepts/<concept_slug>.md
+```
+
+Each concept page links back to the book sections that mention it:
+
+```text
+- [Section title](../books/<doc_id>/sections/<section_id>.md)
+```
+
+Concept extraction is intentionally local and deterministic at this stage: no
+LLMs, embeddings, or external services. It uses section titles, heading paths,
+title-case phrases, and long domain-looking terms from section text. Concept
+artifacts are regenerable from `sections.jsonl`; rerun `bookgraph wiki compile`
+after re-segmenting a document.
+
 ## `indexes/bookgraph.db`
 
 Owner: the index stage (`bookgraph index build` command / `bookgraph.indexes`).

@@ -78,6 +78,28 @@ def test_wiki_compile_reads_sections_and_writes_wiki_book(tmp_path: Path) -> Non
     assert f"wiki: {book_dir}" in result.output
 
 
+def test_wiki_compile_can_use_markdown_graph_backend(tmp_path: Path) -> None:
+    runner = CliRunner()
+    workspace = tmp_path / "workspace"
+    assert runner.invoke(app, ["init", str(workspace)]).exit_code == 0
+    _write_sections_manifest(workspace, "deep-work")
+
+    result = runner.invoke(
+        app,
+        ["wiki", "compile", str(workspace), "deep-work", "--backend", "markdown-graph"],
+    )
+
+    assert result.exit_code == 0, result.output
+    book_dir = workspace / "wiki" / "books" / "deep-work"
+    assert (book_dir / "README.md").is_file()
+    assert (book_dir / "sections" / "deep-work.intro.md").is_file()
+    assert (workspace / "wiki" / "concepts" / "intro.md").is_file()
+    intro = (book_dir / "sections" / "deep-work.intro.md").read_text()
+    assert "## Linked concepts" in intro
+    assert "[[intro|Intro]]" in intro
+    assert "backend: markdown-graph" in result.output
+
+
 def test_wiki_compile_reports_missing_sections_manifest(tmp_path: Path) -> None:
     runner = CliRunner()
     workspace = tmp_path / "workspace"

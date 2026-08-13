@@ -44,17 +44,17 @@ flowchart TD
 
     subgraph IDX["Index stage — bookgraph index build"]
         direction LR
-        IDX1["search index<br/>indexes/sections/"]
-        IDX2["section graph<br/>indexes/graph/"]
+        IDX1["SQLite FTS/search index<br/>indexes/bookgraph.db"]
+        IDX2["section graph<br/>indexes/bookgraph.db"]
     end
 
     subgraph W["Wiki backend plugins — bookgraph wiki compile"]
         direction LR
         W1["llmwiki staging"]
-        W2["markdown graph backend<br/>(planned)"]:::planned
+        W2["markdown graph backend"]
     end
 
-    W --> WIKI["Wiki output<br/>wiki/books/ · linked concepts (planned)"]:::planned
+    W --> WIKI["Linked wiki<br/>wiki/books/ + wiki/concepts/"]
 
     IDX --> MCP
     SEC --> MCP
@@ -88,7 +88,7 @@ src/bookgraph/
   sections.py               # sections.jsonl + <section_id>.md reader/writer
   pdf_metadata.py           # cheap PDF metadata/bookmark inspection
   reading_plans.py          # reading plan store (create/next/mark-read core)
-  indexes.py                # inverted search index (build/read/write core)
+  indexes.py                # SQLite FTS index build/read/write core
   graph.py                  # section graph: hierarchy + sequence edges
   parsers/
     mineru.py               # MinerU *_middle.json adapter
@@ -100,6 +100,7 @@ src/bookgraph/
     bookmark.py             # PDF bookmark/outline segmenter (heading fallback)
   wiki_backends/
     llmwiki.py              # Stage section markdown for llm-wiki-compiler
+    markdown_graph.py       # Linked markdown wiki: book pages + concept pages
   mcp/
     service.py              # Reading/query logic (FastMCP-free, unit-tested)
     server.py               # FastMCP server wrapper (optional `mcp` extra)
@@ -191,6 +192,9 @@ Implemented:
 - MinerU `*_middle.json` parser adapter skeleton
 - Heading-based segmenter with deterministic duplicate-slug suffixes
 - llmwiki staging backend and real `bookgraph wiki compile` command
+- Markdown graph wiki backend (`--backend markdown-graph`) writing linked book
+  pages under `wiki/books/<doc_id>/` and deterministic concept pages under
+  `wiki/concepts/`
 - CLI workspace initializer with explicit `--output` alias and `paths` inspector
 - CLI-only `add-book` contract that registers a PDF source without running parser/segmenter
 - Markdown and MarkItDown parser adapters plus file type based parser routing
@@ -213,12 +217,11 @@ Implemented:
   (`get_next_section`, `get_section`, `mark_read`), `search`, and graph/context
   tools (`get_outline`, `get_related`, `get_context`) over the sections,
   reading-plan, and index artifacts
-- Inverted search index (`bookgraph index build`) under
-  `indexes/sections/<doc_id>.json` backing MCP `search`, with a live-scan
-  fallback for unindexed documents
-- Section graph (`bookgraph index build`) under `indexes/graph/<doc_id>.json`
-  capturing heading hierarchy + reading sequence, backing the graph/context MCP
-  tools, with an on-the-fly rebuild from sections when unindexed
+- SQLite FTS/search index (`bookgraph index build`) under `indexes/bookgraph.db`
+  backing MCP `search`, with a live-scan fallback for unindexed documents
+- Section graph (`bookgraph index build`) under `indexes/bookgraph.db` capturing
+  heading hierarchy + reading sequence, backing the graph/context MCP tools,
+  with an on-the-fly rebuild from sections when unindexed
 
 Planned next:
 

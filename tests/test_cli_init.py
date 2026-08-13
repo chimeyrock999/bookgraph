@@ -22,6 +22,7 @@ def test_init_creates_pluggable_project_layout(tmp_path: Path) -> None:
         "wiki/comparisons",
         "wiki/daily",
         "indexes",
+        "annotations",
         "reading_plans",
         "runs",
     ]
@@ -55,6 +56,7 @@ def test_paths_prints_all_workspace_output_locations(tmp_path: Path) -> None:
         "wiki.root",
         "wiki.books",
         "indexes.root",
+        "annotations.root",
         "reading_plans.root",
         "runs.root",
     ]:

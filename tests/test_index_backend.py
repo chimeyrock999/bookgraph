@@ -3,10 +3,25 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+from bookgraph.annotations import annotation_path, build_annotation, write_annotation
 from bookgraph.index import default_index_backend, tokenize
 from bookgraph.index.sqlite import SqliteIndexBackend, db_path
-from bookgraph.models import Section
+from bookgraph.models import AnnotatedConcept, Section
 from bookgraph.workspace import WorkspacePaths
+
+
+def _annotate(
+    workspace: WorkspacePaths,
+    doc_id: str,
+    section_id: str,
+    concepts: list[AnnotatedConcept],
+    *,
+    summary: str = "",
+) -> None:
+    annotation = build_annotation(doc_id, section_id, concepts, summary=summary)
+    write_annotation(
+        annotation, annotation_path(workspace.annotations_root, doc_id, section_id)
+    )
 
 
 def _section(
@@ -344,6 +359,144 @@ def test_partial_db_with_only_doc_catalog_degrades_to_not_indexed(tmp_path: Path
     assert backend.indexed_doc_ids(workspace) == set()
     assert backend.search(workspace, ["storage"], None, 10) == []
     assert backend.load_graph(workspace, "deep-work") is None
+
+
+def test_annotated_section_overrides_auto_and_carries_gloss_and_source(tmp_path: Path) -> None:
+    workspace = WorkspacePaths(tmp_path)
+    backend = SqliteIndexBackend()
+    sections = [_section("ddia.a", "Schema Evolution", "Schema Evolution matters", doc_id="ddia")]
+    _annotate(
+        workspace,
+        "ddia",
+        "ddia.a",
+        [AnnotatedConcept(slug="", title="Log Structured Merge", gloss="core idea")],
+    )
+
+    backend.build_document(workspace, "ddia", "DDIA", sections)
+
+    # The auto concepts (schema-evolution, etc.) are gone; only the agent concept remains.
+    concepts = backend.section_concepts(workspace, "ddia", "ddia.a")
+    assert [(c.slug, c.source, c.gloss) for c in concepts] == [
+        ("log-structured-merge", "agent", "core idea")
+    ]
+    # ...and it round-trips through the cross-book concept lookup with source/gloss.
+    concept = backend.get_concept(workspace, "log-structured-merge")
+    assert concept is not None
+    assert [(m.source, m.gloss) for m in concept.mentions] == [("agent", "core idea")]
+    assert backend.get_concept(workspace, "schema-evolution") is None
+
+
+def test_empty_annotation_prunes_the_sections_concepts(tmp_path: Path) -> None:
+    workspace = WorkspacePaths(tmp_path)
+    backend = SqliteIndexBackend()
+    sections = [_section("ddia.a", "Schema Evolution", "Schema Evolution matters", doc_id="ddia")]
+
+    # Baseline: auto concepts exist.
+    backend.build_document(workspace, "ddia", "DDIA", sections)
+    assert backend.section_concepts(workspace, "ddia", "ddia.a")
+
+    # An empty annotation zeroes them out on the next rebuild.
+    _annotate(workspace, "ddia", "ddia.a", [])
+    backend.build_document(workspace, "ddia", "DDIA", sections)
+
+    assert backend.section_concepts(workspace, "ddia", "ddia.a") == []
+    assert backend.concept_nodes(workspace) == []
+
+
+def test_auto_mentions_carry_default_source_and_empty_gloss(tmp_path: Path) -> None:
+    workspace = WorkspacePaths(tmp_path)
+    backend = SqliteIndexBackend()
+    backend.build_document(
+        workspace, "ddia", "DDIA", [_section("ddia.a", "Schema Evolution", "x", doc_id="ddia")]
+    )
+
+    concept = backend.get_concept(workspace, "schema-evolution")
+    assert concept is not None
+    assert all(m.source == "auto" and m.gloss == "" for m in concept.mentions)
+
+
+def test_section_annotation_round_trips_through_the_index(tmp_path: Path) -> None:
+    workspace = WorkspacePaths(tmp_path)
+    backend = SqliteIndexBackend()
+    sections = [_section("ddia.a", "Schema Evolution", "x", doc_id="ddia")]
+    _annotate(workspace, "ddia", "ddia.a", [], summary="the agent's explanation")
+
+    backend.build_document(workspace, "ddia", "DDIA", sections)
+
+    assert backend.section_annotation(workspace, "ddia", "ddia.a") == "the agent's explanation"
+    # An unannotated section has no stored summary.
+    assert backend.section_annotation(workspace, "ddia", "ddia.ghost") is None
+
+
+def test_old_shape_concept_mentions_reads_empty_not_crash(tmp_path: Path) -> None:
+    # A concept_mentions table without the gloss/source columns must not crash concept
+    # reads: the gloss/source SELECTs hit "no such column" and degrade to empty.
+    workspace = WorkspacePaths(tmp_path)
+    _partial_db(
+        workspace,
+        [
+            "CREATE TABLE doc_catalog "
+            "(doc_id TEXT PRIMARY KEY, title TEXT NOT NULL, section_count INTEGER NOT NULL)",
+            "CREATE VIRTUAL TABLE sections_fts USING fts5("
+            "doc_id UNINDEXED, section_id UNINDEXED, title, text)",
+            "CREATE TABLE section_graph (doc_id TEXT NOT NULL, section_id TEXT NOT NULL, "
+            "ord INTEGER NOT NULL, level INTEGER NOT NULL, title TEXT NOT NULL, "
+            "heading_path TEXT NOT NULL, parent_id TEXT, prev_id TEXT, next_id TEXT, "
+            "PRIMARY KEY (doc_id, section_id))",
+            "CREATE TABLE concept_mentions (concept_slug TEXT NOT NULL, "
+            "concept_title TEXT NOT NULL, doc_id TEXT NOT NULL, section_id TEXT NOT NULL, "
+            "PRIMARY KEY (doc_id, section_id, concept_slug))",
+            "INSERT INTO concept_mentions VALUES ('schema-evolution', 'Schema Evolution', "
+            "'ddia', 'ddia.a')",
+        ],
+    )
+    backend = SqliteIndexBackend()
+
+    # concept_nodes (the view, no gloss/source) still aggregates, but the mention reads
+    # that name gloss/source degrade to empty rather than raising.
+    assert backend.get_concept(workspace, "schema-evolution") is None
+    assert backend.section_concepts(workspace, "ddia", "ddia.a") == []
+    assert backend.concepts(workspace) == []
+    assert backend.section_annotation(workspace, "ddia", "ddia.a") is None
+
+
+def test_build_migrates_an_old_schema_db_then_queries(tmp_path: Path) -> None:
+    # A pre-annotation database (concept_mentions without gloss/source, no
+    # section_annotations table) must be migrated in place by build_document, after
+    # which the new columns/table are populated and queryable.
+    workspace = WorkspacePaths(tmp_path)
+    _partial_db(
+        workspace,
+        [
+            "CREATE TABLE doc_catalog "
+            "(doc_id TEXT PRIMARY KEY, title TEXT NOT NULL, section_count INTEGER NOT NULL)",
+            "CREATE VIRTUAL TABLE sections_fts USING fts5("
+            "doc_id UNINDEXED, section_id UNINDEXED, title, text)",
+            "CREATE TABLE section_graph (doc_id TEXT NOT NULL, section_id TEXT NOT NULL, "
+            "ord INTEGER NOT NULL, level INTEGER NOT NULL, title TEXT NOT NULL, "
+            "heading_path TEXT NOT NULL, parent_id TEXT, prev_id TEXT, next_id TEXT, "
+            "PRIMARY KEY (doc_id, section_id))",
+            "CREATE TABLE concept_mentions (concept_slug TEXT NOT NULL, "
+            "concept_title TEXT NOT NULL, doc_id TEXT NOT NULL, section_id TEXT NOT NULL, "
+            "PRIMARY KEY (doc_id, section_id, concept_slug))",
+        ],
+    )
+    backend = SqliteIndexBackend()
+    sections = [_section("ddia.a", "Schema Evolution", "x", doc_id="ddia")]
+    _annotate(
+        workspace,
+        "ddia",
+        "ddia.a",
+        [AnnotatedConcept(slug="", title="Curated", gloss="g")],
+        summary="s",
+    )
+
+    backend.build_document(workspace, "ddia", "DDIA", sections)
+
+    concept = backend.get_concept(workspace, "curated")
+    assert concept is not None
+    assert [(m.source, m.gloss) for m in concept.mentions] == [("agent", "g")]
+    assert backend.section_annotation(workspace, "ddia", "ddia.a") == "s"
 
 
 def test_partial_db_missing_section_graph_degrades_to_not_indexed(tmp_path: Path) -> None:

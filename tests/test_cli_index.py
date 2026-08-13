@@ -4,9 +4,10 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
+from bookgraph.annotations import annotation_path, build_annotation, write_annotation
 from bookgraph.cli import app
 from bookgraph.index.sqlite import SqliteIndexBackend, db_path
-from bookgraph.models import Section
+from bookgraph.models import AnnotatedConcept, Section
 from bookgraph.sections import write_sections
 from bookgraph.workspace import WorkspacePaths
 
@@ -184,6 +185,41 @@ def test_index_concepts_rewrites_the_directory(tmp_path: Path) -> None:
 
     assert (workspace.wiki_concepts / "consensus.md").is_file()
     assert not (workspace.wiki_concepts / "replication.md").exists()  # stale page removed
+
+
+def test_index_concepts_renders_agent_gloss_and_marker(tmp_path: Path) -> None:
+    workspace = _init_workspace(tmp_path)
+    write_sections(
+        [_section("ddia.a", "ddia", "Storage Engines", "storage text")],
+        workspace.sources_sections / "ddia",
+    )
+    # Annotate the section so its concept becomes an agent-verified, glossed backlink.
+    write_annotation(
+        build_annotation(
+            "ddia",
+            "ddia.a",
+            [AnnotatedConcept(slug="", title="Log Structured Merge", gloss="the core idea")],
+        ),
+        annotation_path(workspace.annotations_root, "ddia", "ddia.a"),
+    )
+    assert runner.invoke(app, ["index", "build", str(tmp_path)]).exit_code == 0
+    assert runner.invoke(app, ["index", "concepts", str(tmp_path)]).exit_code == 0
+
+    page = (workspace.wiki_concepts / "log-structured-merge.md").read_text()
+    assert "— the core idea (agent-verified)" in page
+
+
+def test_index_concepts_omits_marker_for_auto_backlinks(tmp_path: Path) -> None:
+    workspace = _init_workspace(tmp_path)
+    write_sections(
+        [_section("ddia.a", "ddia", "Schema Evolution", "text")],
+        workspace.sources_sections / "ddia",
+    )
+    assert runner.invoke(app, ["index", "build", str(tmp_path)]).exit_code == 0
+    assert runner.invoke(app, ["index", "concepts", str(tmp_path)]).exit_code == 0
+
+    page = (workspace.wiki_concepts / "schema-evolution.md").read_text()
+    assert "(agent-verified)" not in page
 
 
 def test_index_concepts_errors_without_an_index(tmp_path: Path) -> None:

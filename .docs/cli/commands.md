@@ -238,13 +238,18 @@ Segment a parsed document into human reading sections.
 ```bash
 bookgraph segment /path/to/workspace <doc_id>
 bookgraph segment /path/to/workspace <doc_id> --segmenter heading
+bookgraph segment /path/to/workspace <doc_id> --target-level 1
 ```
 
 ### Inputs
 
 - `workspace_path`: workspace/output root.
 - `doc_id`: parsed document id under `sources/parsed/<doc_id>/`.
-- `--segmenter/-s`: segmenter plugin name, validated against the segmenter registry. Default: `heading`.
+- `--segmenter/-s`: segmenter plugin name, validated against the segmenter registry.
+  Defaults to `[segmenter].default` in `bookgraph.toml` (`heading` when unset).
+- `--target-level`: heading levels at or above this number start new sections for
+  the built-in heading segmenter. Defaults to `[segmenter].target_level` in
+  `bookgraph.toml` (`2` when unset). Other segmenters may ignore this option.
 
 Reads `sources/parsed/<doc_id>/document.json` (fails if missing).
 
@@ -269,6 +274,7 @@ the command rather than overwriting.
 
 ```text
 segmenter: <segmenter_name>
+target_level: <n>
 doc_id: <doc_id>
 sections: <section_count>
 manifest: <workspace>/sources/sections/<doc_id>/sections.jsonl
@@ -297,7 +303,8 @@ bookgraph reading-plan create /path/to/workspace <doc_id> --dry-run
 - `workspace_path`: workspace/output root.
 - `doc_id`: segmented document id under `sources/sections/<doc_id>/`.
 - `--plan-id`: reading plan id; doubles as the output filename. Defaults to `doc_id`.
-- `--daily-sections`: sections per daily reading tick. Must be at least `1`. Default: `1`.
+- `--daily-sections`: sections per daily reading tick. Must be at least `1`.
+  Defaults to `[reading_plan].daily_sections` in `bookgraph.toml` (`1` when unset).
 - `--dry-run`: compute and print the plan without writing files.
 
 Reads `sources/sections/<doc_id>/sections.jsonl` (fails if missing or empty). The

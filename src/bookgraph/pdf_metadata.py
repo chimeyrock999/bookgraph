@@ -1,13 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from importlib import import_module
 from pathlib import Path
-from typing import Any, cast
-
-try:  # pypdf is an optional parser dependency.
-    from pypdf import PdfReader as _PdfReader
-except ImportError:  # pragma: no cover - exercised only without the parsers extra
-    _PdfReader = None  # type: ignore[assignment,misc]
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -32,11 +28,7 @@ class PdfMetadata:
 def inspect_pdf_metadata(pdf: Path) -> PdfMetadata:
     """Read cheap PDF metadata and bookmarks for future TOC-aware segmentation."""
 
-    if _PdfReader is None:
-        raise RuntimeError(
-            "pypdf is required for PDF metadata inspection. Install with: uv sync --extra parsers"
-        )
-    reader_cls = cast(Any, _PdfReader)
+    reader_cls = _load_pdf_reader()
     reader = reader_cls(str(pdf))
     metadata = reader.metadata
     return PdfMetadata(
@@ -66,6 +58,15 @@ def _flatten_outline(reader: Any) -> list[PdfBookmark]:
 
     walk(list(getattr(reader, "outline", []) or []), 1)
     return bookmarks
+
+
+def _load_pdf_reader() -> Any:
+    try:
+        return import_module("pypdf").PdfReader
+    except ImportError as exc:  # pragma: no cover - exercised only without the parsers extra
+        raise RuntimeError(
+            "pypdf is required for PDF metadata inspection. Install with: uv sync --extra parsers"
+        ) from exc
 
 
 def _clean_text(value: object) -> str | None:

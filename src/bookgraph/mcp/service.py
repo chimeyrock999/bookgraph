@@ -14,9 +14,15 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
+from bookgraph.annotations import (
+    annotation_path,
+    build_annotation,
+    read_annotation,
+    write_annotation,
+)
 from bookgraph.graph import SectionGraph, build_section_graph
 from bookgraph.index import default_index_backend, tokenize
-from bookgraph.models import ReadingPlan, Section
+from bookgraph.models import AnnotatedConcept, ReadingPlan, Section
 from bookgraph.reading_plans import (
     create_reading_plan,
     list_plan_progress,
@@ -145,20 +151,34 @@ class RelatedSections(BaseModel):
 
 
 class ConceptRef(BaseModel):
-    """A lightweight concept pointer with its cross-book reach (no backlinks)."""
+    """A lightweight concept pointer with its cross-book reach (no backlinks).
+
+    ``gloss`` / ``source`` describe this concept **in the current section**: the gloss
+    an agent attached to the mention here, and whether the mention is ``"auto"`` (Tier-1)
+    or ``"agent"`` (Tier-2). They are section-scoped, unlike ``doc_count`` /
+    ``mention_count`` which are the concept's cross-book totals.
+    """
 
     slug: str
     title: str
     doc_count: int
     mention_count: int
+    gloss: str = ""
+    source: str = "auto"
 
 
 class SectionContext(BaseModel):
-    """A section's full content, its graph neighbourhood, and its concepts."""
+    """A section's full content, its graph neighbourhood, its concepts, and summary.
+
+    ``summary`` is the Tier-2 agent annotation for this section, read directly from the
+    annotation file so it reflects an ``annotate_section`` call immediately (before any
+    ``index build``). Empty when the section has not been annotated.
+    """
 
     section: SectionView
     related: RelatedSections
     concepts: list[ConceptRef] = Field(default_factory=list)
+    summary: str = ""
 
 
 class ConceptMentionView(BaseModel):
@@ -167,6 +187,30 @@ class ConceptMentionView(BaseModel):
     doc_id: str
     section_id: str
     title: str
+    gloss: str = ""
+    source: str = "auto"
+
+
+class ConceptInput(BaseModel):
+    """One concept an agent asserts for a section (input to ``annotate_section``).
+
+    ``slug`` is optional — it is derived from ``title`` when omitted; a title/slug that
+    slugifies to empty or ``untitled`` is rejected. ``gloss`` is an optional per-section
+    note on why the concept matters here.
+    """
+
+    title: str
+    slug: str = ""
+    gloss: str = ""
+
+
+class AnnotationResult(BaseModel):
+    """Outcome of writing a Tier-2 section annotation."""
+
+    doc_id: str
+    section_id: str
+    concept_count: int
+    path: str
 
 
 class ConceptView(BaseModel):
@@ -482,10 +526,34 @@ def get_context(workspace: WorkspacePaths, doc_id: str, section_id: str) -> Sect
             title=node.title,
             doc_count=node.doc_count,
             mention_count=node.mention_count,
+            gloss=node.gloss,
+            source=node.source,
         )
         for node in default_index_backend().section_concepts(workspace, doc_id, section_id)
     ]
-    return SectionContext(section=section, related=related, concepts=concepts)
+    return SectionContext(
+        section=section,
+        related=related,
+        concepts=concepts,
+        summary=_section_summary(workspace, doc_id, section_id),
+    )
+
+
+def _section_summary(workspace: WorkspacePaths, doc_id: str, section_id: str) -> str:
+    """The Tier-2 summary for a section, read straight from the annotation file.
+
+    Reading the single file (not the index) is what makes an ``annotate_section``
+    summary visible immediately, before the next ``index build``. A missing or corrupt
+    annotation is simply "no summary".
+    """
+
+    path = annotation_path(workspace.annotations_root, doc_id, section_id)
+    if not path.is_file():
+        return ""
+    try:
+        return read_annotation(path).summary
+    except (OSError, ValueError):
+        return ""
 
 
 def get_concept(workspace: WorkspacePaths, concept: str) -> ConceptView:
@@ -508,9 +576,59 @@ def get_concept(workspace: WorkspacePaths, concept: str) -> ConceptView:
                 doc_id=mention.doc_id,
                 section_id=mention.section_id,
                 title=mention.title,
+                gloss=mention.gloss,
+                source=mention.source,
             )
             for mention in result.mentions
         ],
+    )
+
+
+def annotate_section(
+    workspace: WorkspacePaths,
+    doc_id: str,
+    section_id: str,
+    concepts: list[ConceptInput] | None = None,
+    summary: str = "",
+    model: str | None = None,
+) -> AnnotationResult:
+    """Write a Tier-2 annotation for one section (the reinforcement loop).
+
+    Records the agent's authoritative concept edge set + a prose summary as a source
+    artifact (``annotations/<doc_id>/<section_id>.json``). It is **deferred**: it does
+    not touch the index — the summary shows immediately via ``get_context``, while the
+    concept edges (and their prune of Tier-1 false positives) take effect on the next
+    ``bookgraph index build <doc_id>``. See ``.docs/cli/annotations.md``.
+
+    ``doc_id`` is validated as a filesystem-safe slug; ``section_id`` is validated by
+    **membership** — it must be a real section of the document (its dotted
+    ``<doc_id>.<slug>`` form is not a bare slug) — via :func:`get_section`, which also
+    rejects traversal values because they match no section.
+    """
+
+    resolved_doc_id = _validate_id(doc_id, "doc_id")
+    # Membership check: raises SectionNotFoundError for an unknown or traversal id.
+    get_section(workspace, resolved_doc_id, section_id)
+
+    inputs = [
+        AnnotatedConcept(slug=concept.slug, title=concept.title, gloss=concept.gloss)
+        for concept in (concepts or [])
+    ]
+    try:
+        annotation = build_annotation(
+            resolved_doc_id, section_id, inputs, summary=summary, model=model
+        )
+    except ValueError as exc:
+        raise ReadingServiceError(str(exc)) from exc
+
+    path = write_annotation(
+        annotation, annotation_path(workspace.annotations_root, resolved_doc_id, section_id)
+    )
+    return AnnotationResult(
+        doc_id=annotation.doc_id,
+        section_id=annotation.section_id,
+        concept_count=len(annotation.concepts),
+        path=str(path),
     )
 
 

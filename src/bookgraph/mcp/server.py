@@ -16,6 +16,8 @@ from fastmcp.exceptions import ToolError
 
 from bookgraph.mcp import service
 from bookgraph.mcp.service import (
+    AnnotationResult,
+    ConceptInput,
     ConceptView,
     CreatedPlan,
     DocumentList,
@@ -106,6 +108,29 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
 
         try:
             return service.get_concept(workspace, concept)
+        except ReadingServiceError as exc:
+            raise ToolError(str(exc)) from exc
+
+    @mcp.tool
+    def annotate_section(
+        doc_id: str,
+        section_id: str,
+        concepts: list[ConceptInput] | None = None,
+        summary: str = "",
+        model: str | None = None,
+    ) -> AnnotationResult:
+        """Write a Tier-2 annotation (real concepts + summary) for one section.
+
+        Feeds a reading agent's judgment back into the concept graph. Writes only the
+        annotation artifact; the summary shows immediately via get_context, while the
+        concepts take effect on the next 'bookgraph index build <doc_id>'. Each concept
+        is {title, slug?, gloss?}; an empty concepts list prunes the section's concepts.
+        """
+
+        try:
+            return service.annotate_section(
+                workspace, doc_id, section_id, concepts, summary, model
+            )
         except ReadingServiceError as exc:
             raise ToolError(str(exc)) from exc
 

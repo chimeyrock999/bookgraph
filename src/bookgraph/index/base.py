@@ -63,6 +63,30 @@ class IndexSearchHit(BaseModel):
     score: float
 
 
+class ConceptMention(BaseModel):
+    """One place a concept is mentioned — a backlink into a specific section."""
+
+    doc_id: str
+    section_id: str
+    title: str
+
+
+class ConceptNode(BaseModel):
+    """A concept aggregated across every indexed document."""
+
+    slug: str
+    title: str
+    doc_count: int
+    mention_count: int
+
+
+class Concept(BaseModel):
+    """A concept node together with its cross-book backlink mentions."""
+
+    node: ConceptNode
+    mentions: list[ConceptMention]
+
+
 class IndexBackend(ABC):
     """Persist and query the derived search + graph index for a workspace.
 
@@ -105,6 +129,22 @@ class IndexBackend(ABC):
     @abstractmethod
     def load_graph(self, workspace: WorkspacePaths, doc_id: str) -> SectionGraph | None:
         """The document's section graph, or ``None`` when it is not indexed."""
+
+    @abstractmethod
+    def concept_nodes(self, workspace: WorkspacePaths) -> list[ConceptNode]:
+        """Every concept aggregated across indexed documents (empty when none).
+
+        Ordered most-connected first (by document count, then mentions) so callers
+        can render or list concepts deterministically.
+        """
+
+    @abstractmethod
+    def get_concept(self, workspace: WorkspacePaths, slug: str) -> Concept | None:
+        """A concept and its cross-book backlink mentions, or ``None`` if unknown.
+
+        Concepts have no live-scan fallback: an unindexed document's concepts are
+        absent until it is built.
+        """
 
     @abstractmethod
     def location(self, workspace: WorkspacePaths) -> str:

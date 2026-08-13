@@ -81,3 +81,59 @@ def test_index_build_rejects_traversal_doc_id(tmp_path: Path) -> None:
     result = runner.invoke(app, ["index", "build", str(tmp_path), "--doc-id", "../escape"])
 
     assert result.exit_code != 0
+
+
+def test_index_concepts_renders_cross_book_pages(tmp_path: Path) -> None:
+    workspace = _init_workspace(tmp_path)
+    write_sections(
+        [_section("ddia.a", "ddia", "Schema Evolution", "text")],
+        workspace.sources_sections / "ddia",
+    )
+    write_sections(
+        [_section("deep-work.a", "deep-work", "Schema Evolution", "text")],
+        workspace.sources_sections / "deep-work",
+    )
+    assert runner.invoke(app, ["index", "build", str(tmp_path)]).exit_code == 0
+
+    result = runner.invoke(app, ["index", "concepts", str(tmp_path)])
+
+    assert result.exit_code == 0, result.output
+    page = workspace.wiki_concepts / "schema-evolution.md"
+    assert page.is_file()
+    body = page.read_text()
+    assert body.startswith("# Schema Evolution")
+    assert "Mentioned in 2 books" in body
+    # Cross-book backlinks with relative links into the book pages.
+    assert "../books/ddia/sections/ddia.a.md" in body
+    assert "../books/deep-work/sections/deep-work.a.md" in body
+
+
+def test_index_concepts_rewrites_the_directory(tmp_path: Path) -> None:
+    workspace = _init_workspace(tmp_path)
+    write_sections(
+        [_section("ddia.a", "ddia", "Replication", "text")],
+        workspace.sources_sections / "ddia",
+    )
+    assert runner.invoke(app, ["index", "build", str(tmp_path)]).exit_code == 0
+    assert runner.invoke(app, ["index", "concepts", str(tmp_path)]).exit_code == 0
+    assert (workspace.wiki_concepts / "replication.md").is_file()
+
+    # Re-segment the document with a different concept, rebuild, re-render.
+    write_sections(
+        [_section("ddia.a", "ddia", "Consensus", "text")],
+        workspace.sources_sections / "ddia",
+    )
+    assert runner.invoke(app, ["index", "build", str(tmp_path), "--doc-id", "ddia"]).exit_code == 0
+    assert runner.invoke(app, ["index", "concepts", str(tmp_path)]).exit_code == 0
+
+    assert (workspace.wiki_concepts / "consensus.md").is_file()
+    assert not (workspace.wiki_concepts / "replication.md").exists()  # stale page removed
+
+
+def test_index_concepts_errors_without_an_index(tmp_path: Path) -> None:
+    _init_workspace(tmp_path)
+
+    result = runner.invoke(app, ["index", "concepts", str(tmp_path)])
+
+    assert result.exit_code != 0
+    assert "No concepts" in result.output

@@ -1,10 +1,12 @@
 """SQLite/FTS5 implementation of :class:`bookgraph.index.base.IndexBackend`.
 
-One workspace-wide database at ``indexes/bookgraph.db`` holds three tables:
+One workspace-wide database at ``indexes/bookgraph.db`` holds:
 
 - ``doc_catalog`` — one row per indexed document (presence = "indexed").
 - ``sections_fts`` — an FTS5 full-text table backing ``search`` (ranked ``bm25``).
 - ``section_graph`` — hierarchy + sequence edges backing the graph/context tools.
+- ``concept_mentions`` — per-section concept backlinks (+ the ``concept_nodes``
+  view aggregating them across books) backing ``get_concept``.
 
 See ``.docs/cli/index.md`` for the schema and build/query contract.
 """
@@ -16,8 +18,16 @@ import sqlite3
 from pathlib import Path
 from urllib.parse import quote
 
+from bookgraph.concepts import extract_concepts
 from bookgraph.graph import SectionGraph, SectionNode, build_section_graph
-from bookgraph.index.base import IndexBackend, IndexSearchHit, IndexUnavailableError
+from bookgraph.index.base import (
+    Concept,
+    ConceptMention,
+    ConceptNode,
+    IndexBackend,
+    IndexSearchHit,
+    IndexUnavailableError,
+)
 from bookgraph.models import Section
 from bookgraph.workspace import WorkspacePaths
 
@@ -55,6 +65,21 @@ CREATE TABLE IF NOT EXISTS section_graph (
 );
 CREATE INDEX IF NOT EXISTS section_graph_parent ON section_graph (doc_id, parent_id);
 CREATE INDEX IF NOT EXISTS section_graph_ord ON section_graph (doc_id, ord);
+CREATE TABLE IF NOT EXISTS concept_mentions (
+    concept_slug  TEXT NOT NULL,
+    concept_title TEXT NOT NULL,
+    doc_id        TEXT NOT NULL,
+    section_id    TEXT NOT NULL,
+    PRIMARY KEY (doc_id, section_id, concept_slug)
+);
+CREATE INDEX IF NOT EXISTS concept_mentions_slug ON concept_mentions (concept_slug);
+CREATE VIEW IF NOT EXISTS concept_nodes AS
+SELECT concept_slug           AS slug,
+       MIN(concept_title)      AS title,
+       COUNT(DISTINCT doc_id)  AS doc_count,
+       COUNT(*)                AS mention_count
+FROM concept_mentions
+GROUP BY concept_slug;
 """
 
 
@@ -131,6 +156,47 @@ class SqliteIndexBackend(IndexBackend):
         finally:
             conn.close()
 
+    def concept_nodes(self, workspace: WorkspacePaths) -> list[ConceptNode]:
+        conn = _open_read_only(workspace)
+        if conn is None:
+            return []
+        try:
+            return [
+                ConceptNode(
+                    slug=row["slug"],
+                    title=row["title"],
+                    doc_count=row["doc_count"],
+                    mention_count=row["mention_count"],
+                )
+                for row in _concept_nodes(conn)
+            ]
+        except sqlite3.Error:
+            return []  # a db without the concept schema (or unusable) has no concepts
+        finally:
+            conn.close()
+
+    def get_concept(self, workspace: WorkspacePaths, slug: str) -> Concept | None:
+        conn = _open_read_only(workspace)
+        if conn is None:
+            return None
+        try:
+            node = _concept_node(conn, slug)
+            if node is None:
+                return None
+            mentions = [
+                ConceptMention(
+                    doc_id=row["doc_id"],
+                    section_id=row["section_id"],
+                    title=row["title"],
+                )
+                for row in _concept_mentions(conn, slug)
+            ]
+            return Concept(node=node, mentions=mentions)
+        except sqlite3.Error:
+            return None  # a db without the concept schema (or unusable) has no concepts
+        finally:
+            conn.close()
+
     def location(self, workspace: WorkspacePaths) -> str:
         return str(db_path(workspace))
 
@@ -189,10 +255,16 @@ def _build_document(
         )
         for ordinal, node in enumerate(graph.nodes)
     ]
+    concept_rows = [
+        (concept.slug, concept.title, doc_id, section_id)
+        for concept in extract_concepts(sections)
+        for section_id in concept.section_ids
+    ]
     with conn:  # one transaction: BEGIN/COMMIT, or ROLLBACK on error
         conn.execute("DELETE FROM doc_catalog WHERE doc_id = ?", (doc_id,))
         conn.execute("DELETE FROM sections_fts WHERE doc_id = ?", (doc_id,))
         conn.execute("DELETE FROM section_graph WHERE doc_id = ?", (doc_id,))
+        conn.execute("DELETE FROM concept_mentions WHERE doc_id = ?", (doc_id,))
         conn.executemany(
             "INSERT INTO sections_fts (doc_id, section_id, title, text) VALUES (?, ?, ?, ?)",
             [(doc_id, section.id, section.title, section.text) for section in sections],
@@ -202,6 +274,11 @@ def _build_document(
             "(doc_id, section_id, ord, level, title, heading_path, parent_id, prev_id, next_id) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             graph_rows,
+        )
+        conn.executemany(
+            "INSERT INTO concept_mentions "
+            "(concept_slug, concept_title, doc_id, section_id) VALUES (?, ?, ?, ?)",
+            concept_rows,
         )
         conn.execute(
             "INSERT INTO doc_catalog (doc_id, title, section_count) VALUES (?, ?, ?)",
@@ -270,3 +347,40 @@ def _load_graph(conn: sqlite3.Connection, doc_id: str) -> SectionGraph:
         for row in rows
     ]
     return SectionGraph(doc_id=doc_id, nodes=nodes)
+
+
+def _concept_nodes(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    return conn.execute(
+        "SELECT slug, title, doc_count, mention_count FROM concept_nodes "
+        "ORDER BY doc_count DESC, mention_count DESC, slug"
+    ).fetchall()
+
+
+def _concept_node(conn: sqlite3.Connection, slug: str) -> ConceptNode | None:
+    row = conn.execute(
+        "SELECT slug, title, doc_count, mention_count FROM concept_nodes WHERE slug = ?",
+        (slug,),
+    ).fetchone()
+    if row is None:
+        return None
+    return ConceptNode(
+        slug=row["slug"],
+        title=row["title"],
+        doc_count=row["doc_count"],
+        mention_count=row["mention_count"],
+    )
+
+
+def _concept_mentions(conn: sqlite3.Connection, slug: str) -> list[sqlite3.Row]:
+    # Join to section_graph for the mentioning section's title and reading order;
+    # group by document, ordered within a document by reading position.
+    return conn.execute(
+        "SELECT cm.doc_id AS doc_id, cm.section_id AS section_id, "
+        "       COALESCE(sg.title, cm.section_id) AS title "
+        "FROM concept_mentions cm "
+        "LEFT JOIN section_graph sg "
+        "  ON sg.doc_id = cm.doc_id AND sg.section_id = cm.section_id "
+        "WHERE cm.concept_slug = ? "
+        "ORDER BY cm.doc_id, sg.ord, cm.section_id",
+        (slug,),
+    ).fetchall()

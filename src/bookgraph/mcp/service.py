@@ -42,6 +42,10 @@ class SectionNotFoundError(ReadingServiceError):
     """A requested section id does not exist in a document."""
 
 
+class ConceptNotFoundError(ReadingServiceError):
+    """A requested concept slug is not present in the index."""
+
+
 class SectionView(BaseModel):
     """A section's full reading content plus provenance and its Markdown path."""
 
@@ -137,6 +141,24 @@ class SectionContext(BaseModel):
 
     section: SectionView
     related: RelatedSections
+
+
+class ConceptMentionView(BaseModel):
+    """One backlink: a section (in some book) that mentions a concept."""
+
+    doc_id: str
+    section_id: str
+    title: str
+
+
+class ConceptView(BaseModel):
+    """A concept aggregated across books, with its cross-book backlinks."""
+
+    slug: str
+    title: str
+    doc_count: int
+    mention_count: int
+    mentions: list[ConceptMentionView] = Field(default_factory=list)
 
 
 def _section_markdown_path(workspace: WorkspacePaths, doc_id: str, section_id: str) -> Path:
@@ -432,3 +454,29 @@ def get_context(workspace: WorkspacePaths, doc_id: str, section_id: str) -> Sect
     section = get_section(workspace, doc_id, section_id)
     related = get_related(workspace, doc_id, section_id)
     return SectionContext(section=section, related=related)
+
+
+def get_concept(workspace: WorkspacePaths, concept: str) -> ConceptView:
+    """Return a concept and its cross-book backlink mentions from the index."""
+
+    slug = _validate_id(concept, "concept")
+    result = default_index_backend().get_concept(workspace, slug)
+    if result is None:
+        raise ConceptNotFoundError(
+            f"Concept '{slug}' not found. Run 'bookgraph index build' then "
+            "'bookgraph index concepts'."
+        )
+    return ConceptView(
+        slug=result.node.slug,
+        title=result.node.title,
+        doc_count=result.node.doc_count,
+        mention_count=result.node.mention_count,
+        mentions=[
+            ConceptMentionView(
+                doc_id=mention.doc_id,
+                section_id=mention.section_id,
+                title=mention.title,
+            )
+            for mention in result.mentions
+        ],
+    )

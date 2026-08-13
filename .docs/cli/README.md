@@ -16,6 +16,7 @@ This directory is the source of truth for CLI-facing contracts. CLI work lands h
 - `workspace.md` — canonical workspace paths and naming rules.
 - `commands.md` — CLI command contracts, inputs, outputs, side effects, and error behavior.
 - `artifacts.md` — JSON/Markdown artifact schemas and status transitions.
+- `index.md` — the `indexes/bookgraph.db` SQLite schema, build, and query contract.
 - `handoff.md` — feature-branch and cross-agent integration workflow.
 
 ## Current command groups

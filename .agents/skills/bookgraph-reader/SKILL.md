@@ -50,7 +50,7 @@ Optional navigation tools:
   cross-document search.
 - `get_outline(doc_id)` — show document hierarchy.
 - `get_related(doc_id, section_id)` — show parent/prev/next/children neighbours.
-- `get_concept(slug)` — show cross-book mentions for a concept.
+- `get_concept(concept)` — show cross-book mentions for a concept.
 
 ## Reading loop
 
@@ -98,8 +98,9 @@ Optional navigation tools:
 
 ## Client-specific packaging
 
-- Claude agents can use the mirrored skill at
-  `.claude/skills/bookgraph-reader/SKILL.md`.
+- Claude agents can use the Claude-tuned equivalent at
+  `.claude/skills/bookgraph-reader/SKILL.md`; keep the tool loop and argument
+  names in sync when either skill changes.
 - Other agents can copy this directory to their own skill/procedure location or
   load this file as repository instructions.
 - Full setup details live in `.docs/mcp/reading-agent.md`.

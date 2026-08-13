@@ -75,7 +75,7 @@ A self-serve agent drives an entire session with these tools alone:
    - `get_context(doc_id, section_id)` — the section's content, its graph
      neighbourhood (parent/prev/next/children), and its `concepts`.
    - Pivot as needed:
-     - `get_concept(concept_slug)` — where a concept is discussed across **all**
+     - `get_concept(concept)` — where a concept is discussed across **all**
        books (cross-book backlinks).
      - `search(query, doc_id=None)` — find related sections (cross-document when
        `doc_id` is omitted).
@@ -89,18 +89,21 @@ session resumes exactly where the last left off.
 
 ## Agent skills
 
-The repo ships the same **`bookgraph-reader`** workflow in two packaging forms:
+The repo ships the **`bookgraph-reader`** workflow in two packaging forms:
 
-- `.claude/skills/bookgraph-reader/SKILL.md` — Claude Code / Claude agents.
+- `.claude/skills/bookgraph-reader/SKILL.md` — Claude Code / Claude agents
+  (Claude-tuned equivalent).
 - `.agents/skills/bookgraph-reader/SKILL.md` — agent-neutral instructions for
   Hermes, custom MCP clients, or any agent runtime that can load a procedural
   `SKILL.md` file.
 
-Both package this loop — orient → plan → read → explain → follow the concept
-graph → track progress. With the MCP server connected, agents should trigger it
-on requests like "read the next section" or "walk me through this book", so users
-do not have to know the tool names. Copy the matching directory to your client's
-skill/procedure location to use it across projects.
+Both package the same loop — orient → plan → read → explain → follow the concept
+graph → track progress — but the prose can be tuned for the client. Keep the tool
+loop and argument names in sync when either skill changes. With the MCP server
+connected, agents should trigger it on requests like "read the next section" or
+"walk me through this book", so users do not have to know the tool names. Copy the
+matching directory to your client's skill/procedure location to use it across
+projects.
 
 ## Notes & current limitations
 

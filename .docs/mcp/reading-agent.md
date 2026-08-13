@@ -84,6 +84,15 @@ A self-serve agent drives an entire session with these tools alone:
 State (reading-plan progress) persists in `reading_plans/<plan_id>.json`, so a new
 session resumes exactly where the last left off.
 
+## Agent Skill
+
+For Claude Code / Claude agents, the repo ships a **`bookgraph-reader`** skill
+(`.claude/skills/bookgraph-reader/SKILL.md`) that packages this whole loop —
+orient → plan → read → explain → follow the concept graph → track progress. With
+the MCP server connected, the skill triggers on requests like "read the next
+section" or "walk me through this book", so users don't have to know the tool
+names. Copy it to `~/.claude/skills/` to use it across projects.
+
 ## Notes & current limitations
 
 - **Concept quality** is a deterministic tokenizer baseline today (it can surface

@@ -75,7 +75,7 @@ A self-serve agent drives an entire session with these tools alone:
    - `get_context(doc_id, section_id)` — the section's content, its graph
      neighbourhood (parent/prev/next/children), and its `concepts`.
    - Pivot as needed:
-     - `get_concept(concept_slug)` — where a concept is discussed across **all**
+     - `get_concept(concept)` — where a concept is discussed across **all**
        books (cross-book backlinks).
      - `search(query, doc_id=None)` — find related sections (cross-document when
        `doc_id` is omitted).
@@ -87,22 +87,31 @@ A self-serve agent drives an entire session with these tools alone:
 State (reading-plan progress) persists in `reading_plans/<plan_id>.json`, so a new
 session resumes exactly where the last left off.
 
-## Agent Skill
+## Agent skills
 
-For Claude Code / Claude agents, the repo ships a **`bookgraph-reader`** skill
-(`.claude/skills/bookgraph-reader/SKILL.md`) that packages this whole loop —
-orient → plan → read → explain → follow the concept graph → track progress. With
-the MCP server connected, the skill triggers on requests like "read the next
-section" or "walk me through this book", so users don't have to know the tool
-names. Copy it to `~/.claude/skills/` to use it across projects.
+The repo ships the **`bookgraph-reader`** workflow in two packaging forms:
+
+- `.claude/skills/bookgraph-reader/SKILL.md` — Claude Code / Claude agents
+  (Claude-tuned equivalent).
+- `.agents/skills/bookgraph-reader/SKILL.md` — agent-neutral instructions for
+  Hermes, custom MCP clients, or any agent runtime that can load a procedural
+  `SKILL.md` file.
+
+Both package the same loop — orient → plan → read → explain → follow the concept
+graph → track progress — but the prose can be tuned for the client. Keep the tool
+loop and argument names in sync when either skill changes. With the MCP server
+connected, agents should trigger it on requests like "read the next section" or
+"walk me through this book", so users do not have to know the tool names. Copy the
+matching directory to your client's skill/procedure location to use it across
+projects.
 
 ## Notes & current limitations
 
 - **Concept quality** is a deterministic tokenizer baseline today (it can surface
   noisy or split concepts). Agent-curated concepts + per-section summaries (the
   "reinforcement" loop) are tracked in issue #21 and not required to read.
-- **Ingestion coverage:** documents need headings or PDF bookmarks to segment
-  today. A token/page fallback segmenter (for heading-less PDFs) is separate work.
+- **Ingestion coverage:** documents without useful headings or PDF bookmarks can
+  use the token/page fallback segmenter (`bookgraph segment --segmenter token-page`).
 - **Write surface:** only `create_plan` and `mark_read` write (reading plans).
   Every other tool is read-only. Client-supplied `doc_id`/`plan_id` are validated
   as filesystem-safe slugs before use.

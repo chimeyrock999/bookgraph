@@ -50,7 +50,7 @@ bookgraph index build /path/to/workspace          # enables search + concepts
    - Explain the section grounded in its text: the core idea, why it matters, how
      it connects to the parent/surrounding sections. Quote or cite specifics.
    - Surface the section's `concepts`; for any the user wants to go deeper on, call
-     `get_concept(slug)` to show where that idea appears **across all books**
+     `get_concept(concept)` to show where that idea appears **across all books**
      (cross-book backlinks) and tie the threads together.
 4. **Advance** — once the user is done with a section, `mark_read(plan_id)` (marks
    the next unread by default) so progress persists. Then loop to step 3.
@@ -63,7 +63,7 @@ bookgraph index build /path/to/workspace          # enables search + concepts
 - `get_outline(doc_id)` — the full heading hierarchy, for jumping around or giving
   the user a map.
 - `get_related(doc_id, section_id)` — a section's structural neighbours.
-- `get_concept(slug)` — the cross-book "where else is this discussed" view. Use it
+- `get_concept(concept)` — the cross-book "where else is this discussed" view. Use it
   whenever a concept recurs, to build the user's mental graph across books.
 
 ## Behavior

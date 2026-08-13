@@ -14,6 +14,8 @@ BookGraph is a Python project for a pluggable source-grounded document/book grap
 
 - Tests: `uv run --extra dev pytest -q`
 - Lint: `uv run --extra dev ruff check .`
+- Types: `uv run --extra dev mypy src/bookgraph`
+- Build distributions: `uv build && uvx twine check dist/*`
 
 ## Style
 

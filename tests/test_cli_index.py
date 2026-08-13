@@ -108,6 +108,45 @@ def test_index_concepts_renders_cross_book_pages(tmp_path: Path) -> None:
     assert "../books/deep-work/sections/deep-work.a.md" in body
 
 
+def test_index_concepts_warns_when_book_pages_not_compiled(tmp_path: Path) -> None:
+    workspace = _init_workspace(tmp_path)
+    write_sections(
+        [_section("ddia.a", "ddia", "Schema Evolution", "text")],
+        workspace.sources_sections / "ddia",
+    )
+    assert runner.invoke(app, ["index", "build", str(tmp_path)]).exit_code == 0
+
+    # No `wiki compile` run yet: every backlink targets a not-yet-materialized page.
+    result = runner.invoke(app, ["index", "concepts", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    assert "warning:" in result.output
+    assert "wiki compile" in result.output
+
+    # Materialize the book section page the backlinks point at; the warning clears.
+    book_page = workspace.wiki_books / "ddia" / "sections" / "ddia.a.md"
+    book_page.parent.mkdir(parents=True, exist_ok=True)
+    book_page.write_text("# Schema Evolution\n")
+    result = runner.invoke(app, ["index", "concepts", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    assert "warning:" not in result.output
+
+
+def test_index_concepts_merges_slug_colliding_terms_into_one_page(tmp_path: Path) -> None:
+    workspace = _init_workspace(tmp_path)
+    # "Schema Evolution" (title-case phrase) and the token "schema-evolution" both
+    # slugify to "schema-evolution": they must be one concept, not two pages, so the
+    # cross-book join key stays stable rather than gaining a per-build "-2" suffix.
+    write_sections(
+        [_section("ddia.a", "ddia", "Schema Evolution", "the schema-evolution identifier")],
+        workspace.sources_sections / "ddia",
+    )
+    assert runner.invoke(app, ["index", "build", str(tmp_path)]).exit_code == 0
+    assert runner.invoke(app, ["index", "concepts", str(tmp_path)]).exit_code == 0
+
+    assert (workspace.wiki_concepts / "schema-evolution.md").is_file()
+    assert not (workspace.wiki_concepts / "schema-evolution-2.md").exists()
+
+
 def test_index_concepts_rewrites_the_directory(tmp_path: Path) -> None:
     workspace = _init_workspace(tmp_path)
     write_sections(

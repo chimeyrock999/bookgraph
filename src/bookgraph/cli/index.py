@@ -105,6 +105,7 @@ def index_concepts(
 
     title_cache: dict[str, str] = {}
     written = 0
+    missing_links = 0
     for node in nodes:
         concept = backend.get_concept(workspace, node.slug)
         if concept is None:  # concurrent rebuild dropped it; skip
@@ -113,9 +114,23 @@ def index_concepts(
             _render_concept_page(workspace, concept, title_cache)
         )
         written += 1
+        for mention in concept.mentions:
+            book_page = (
+                workspace.wiki_books / mention.doc_id / "sections" / f"{mention.section_id}.md"
+            )
+            if not book_page.is_file():
+                missing_links += 1
 
     typer.echo(f"concepts: {written}")
     typer.echo(f"wiki: {concepts_dir}")
+    if missing_links:
+        # Backlinks resolve into wiki/books/, which is the wiki backend's surface
+        # (never written here). Flag it rather than emit silently dead links.
+        typer.echo(
+            f"warning: {missing_links} concept backlink(s) point to book pages not yet "
+            "compiled; run 'bookgraph wiki compile <doc_id> --backend markdown-graph' "
+            "for each book to materialize them."
+        )
 
 
 def _render_concept_page(

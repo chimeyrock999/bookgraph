@@ -19,7 +19,7 @@ from collections import Counter
 from dataclasses import dataclass
 
 from bookgraph.models import Section
-from bookgraph.utils import unique_slug
+from bookgraph.utils import slugify
 
 _STOPWORDS = {
     "a",
@@ -74,7 +74,6 @@ def extract_concepts(sections: list[Section], *, max_concepts: int = 50) -> list
     occurrences: dict[str, list[str]] = {}
     display_titles: dict[str, str] = {}
     counts: Counter[str] = Counter()
-    used_slugs: set[str] = set()
 
     for section in sections:
         candidates = _candidate_terms(section)
@@ -96,18 +95,30 @@ def extract_concepts(sections: list[Section], *, max_concepts: int = 50) -> list
         key=lambda key: (-len(occurrences[key]), display_titles[key].lower(), key),
     )[:max_concepts]
 
-    concepts: list[ConceptEntry] = []
+    # Key each concept by a *stable* slug derived only from its title, so the slug
+    # is a content-derived identity usable as a cross-book join key in the index.
+    # Distinct terms that slugify to the same value (e.g. the phrase "Schema
+    # Evolution" and the token "schema-evolution") are merged into one concept
+    # rather than disambiguated with a per-build ``-2`` counter, which is not stable
+    # across documents/builds and would fragment or cross-contaminate the graph.
+    by_slug: dict[str, ConceptEntry] = {}
     for key in ranked:
         title = display_titles[key]
-        slug = unique_slug(title, used_slugs)
-        concepts.append(
-            ConceptEntry(
-                slug=slug,
-                title=title,
-                section_ids=occurrences[key],
+        slug = slugify(title)
+        existing = by_slug.get(slug)
+        if existing is None:
+            by_slug[slug] = ConceptEntry(
+                slug=slug, title=title, section_ids=list(occurrences[key])
             )
+            continue
+        section_ids = list(existing.section_ids)
+        for section_id in occurrences[key]:
+            if section_id not in section_ids:
+                section_ids.append(section_id)
+        by_slug[slug] = ConceptEntry(
+            slug=existing.slug, title=existing.title, section_ids=section_ids
         )
-    return concepts
+    return list(by_slug.values())
 
 
 def _candidate_terms(section: Section) -> list[str]:

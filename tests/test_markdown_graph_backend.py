@@ -74,15 +74,17 @@ def test_markdown_graph_backend_escapes_wiki_link_titles(tmp_path: Path) -> None
                 title="Foo | Bar",
                 level=1,
                 heading_path=["Foo | Bar"],
-                text="Foo Bar content",
+                text="lorem ipsum body",
             )
         ],
         output_dir,
     )
 
     section = (output_dir / "sections" / "pipes.foo.md").read_text()
-    assert "[[foo-bar-2|Foo / Bar]]" in section
-    assert "[[foo-bar|Foo | Bar]]" not in section
+    # The pipe in the title is escaped to '/', and the slug is a stable content
+    # slug with no per-build '-2' disambiguation counter.
+    assert "[[foo-bar|Foo / Bar]]" in section
+    assert "-2|" not in section
 
 
 def test_extract_concepts_is_deterministic_and_slug_safe() -> None:

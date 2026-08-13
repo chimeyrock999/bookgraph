@@ -386,6 +386,54 @@ reading_plan: <workspace>/reading_plans/<plan_id>.json
 - Must not run MCP server/tools.
 - Must not write outside `reading_plans/`.
 
+## `bookgraph mcp`
+
+**Status:** Implemented (requires the optional `mcp` extra).
+
+Serve a workspace over MCP (stdio transport) so a reading client/agent can query
+sections and drive a reading plan. All tools are read-mostly; only `mark_read`
+mutates state (the reading plan).
+
+```bash
+uv sync --extra mcp
+bookgraph mcp /path/to/workspace
+```
+
+### Inputs
+
+- `workspace_path`: workspace/output root. Must already exist (`bookgraph init`).
+
+The server binds to that one workspace; tool arguments never take a workspace
+path. If the `mcp` extra is not installed, the command fails with a message
+telling the user to `uv sync --extra mcp`.
+
+### Tools
+
+- `get_next_section(plan_id)` → the next up-to-`daily_sections` unread sections
+  for a plan, each with full text, provenance, and its `<section_id>.md` path,
+  plus `remaining` and `done`.
+- `get_section(doc_id, section_id)` → one section's full reading content.
+- `mark_read(plan_id, section_id=None)` → mark a section read (defaults to the
+  next unread one) and persist the plan; returns `completed`/`total`/`done`.
+- `search(query, doc_id=None, limit=10)` → sections ranked by query-term
+  frequency in title and text, with a short snippet. `doc_id` scopes to one
+  document; omit it to search every segmented document.
+
+### Reads / writes
+
+- Reads `sources/sections/<doc_id>/sections.jsonl` and `reading_plans/<plan_id>.json`.
+- `mark_read` writes `reading_plans/<plan_id>.json` (same contract as
+  `bookgraph reading-plan mark-read`). No other tool writes.
+
+MCP tool inputs are client-controlled, so `plan_id` and `doc_id` are validated as
+filesystem-safe slugs before they are used as path components; a traversal value
+(e.g. `../secret`) is rejected before any file is read or written. `section_id`
+is only ever matched against loaded plan/section data, never used as a raw path.
+
+> `search` is a naive linear scan with no persistent index — enough to expose the
+> tool contract. A real sections/graph index under `indexes/` is a planned
+> follow-up.
+
 ## Placeholder command contracts
 
 The commands below expose the CLI interface and write placeholder request

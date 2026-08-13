@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,7 @@ from bookgraph.parsers.mineru_runner import (
     MinerUNotInstalledError,
     MinerURunError,
     MinerURunner,
+    _stream_run_process,
 )
 
 
@@ -128,6 +130,48 @@ def test_run_raises_on_nonzero_exit(tmp_path: Path) -> None:
     with pytest.raises(MinerURunError, match="boom"):
         runner.run(_pdf(tmp_path), out)
     assert not (out / "_mineru").exists()
+
+
+def test_run_reports_merged_stream_output_on_nonzero_exit(tmp_path: Path) -> None:
+    script = tmp_path / "failing-mineru"
+    script.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "sys.stderr.write('mineru exploded\\n')\n"
+        "raise SystemExit(9)\n"
+    )
+    script.chmod(0o755)
+    runner = MinerURunner(command=str(script), run_process=None, log_path=tmp_path / "mineru.log")
+    out = tmp_path / "parsed" / "doc"
+
+    with pytest.raises(MinerURunError, match="mineru exploded"):
+        runner.run(_pdf(tmp_path), out)
+
+    assert "mineru exploded" in (tmp_path / "mineru.log").read_text()
+    assert not (out / "_mineru").exists()
+
+
+def test_stream_run_process_streams_carriage_return_progress(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    code = (
+        "import sys\n"
+        "sys.stderr.write('download 10%\\r')\n"
+        "sys.stderr.flush()\n"
+        "sys.stderr.write('download 20%\\n')\n"
+        "sys.stderr.flush()\n"
+    )
+
+    completed = _stream_run_process(
+        [sys.executable, "-c", code], timeout=10, log_path=tmp_path / "stream.log"
+    )
+
+    assert completed.returncode == 0
+    assert "download 10%\rdownload 20%\n" in completed.stdout
+    assert completed.stderr == completed.stdout
+    log_text = (tmp_path / "stream.log").open(newline="").read()
+    assert "download 10%\rdownload 20%" in log_text
+    assert "download 10%\rdownload 20%" in capsys.readouterr().err
 
 
 def test_run_raises_when_no_middle_json_is_produced(tmp_path: Path) -> None:

@@ -169,6 +169,7 @@ raise SystemExit(7)
 
     assert result.exit_code != 0
     assert "Log:" in result.output
+    assert "starting fake mineru" in result.output
     logs = list((workspace / "runs" / "parse-book").glob("*-deep-work.log"))
     assert len(logs) == 1
     log = logs[0].read_text()

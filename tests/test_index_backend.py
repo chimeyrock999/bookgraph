@@ -41,6 +41,12 @@ def test_tokenize_lowercases_and_splits_on_non_alphanumeric() -> None:
     ]
 
 
+def test_tokenize_folds_diacritics_to_match_fts_storage() -> None:
+    # Query tokens must line up with FTS5 'unicode61 remove_diacritics 2' storage.
+    assert tokenize("Kiến trúc") == ["kien", "truc"]
+    assert tokenize("café") == ["cafe"]
+
+
 def test_default_index_backend_is_sqlite() -> None:
     assert default_index_backend().name == "sqlite"
 
@@ -94,6 +100,37 @@ def test_search_across_all_indexed_documents_when_scope_is_none(tmp_path: Path) 
     hits = backend.search(workspace, ["storage"], None, 10)
 
     assert sorted(hit.doc_id for hit in hits) == ["ddia", "deep-work"]
+
+
+def test_search_matches_accented_terms(tmp_path: Path) -> None:
+    workspace = WorkspacePaths(tmp_path)
+    backend = SqliteIndexBackend()
+    backend.build_document(
+        workspace,
+        "vi",
+        "VI",
+        [_section("vi.a", "Kiến trúc", "Kiến trúc hệ thống lưu trữ", doc_id="vi")],
+    )
+
+    # An accented query and its diacritic-folded form both match the stored text.
+    assert [hit.section_id for hit in backend.search(workspace, tokenize("Kiến"), ["vi"], 10)] == [
+        "vi.a"
+    ]
+    assert [hit.section_id for hit in backend.search(workspace, ["kien"], ["vi"], 10)] == ["vi.a"]
+
+
+def test_reads_work_when_workspace_path_has_uri_special_chars(tmp_path: Path) -> None:
+    # A workspace dir containing '#'/'?' must not break read-only URI opens.
+    workspace = WorkspacePaths(tmp_path / "work #1?draft")
+    backend = SqliteIndexBackend()
+    backend.build_document(
+        workspace, "deep-work", "Deep Work", [_section("deep-work.a", "Storage", "storage text")]
+    )
+
+    assert backend.indexed_doc_ids(workspace) == {"deep-work"}
+    hits = backend.search(workspace, ["storage"], None, 10)
+    assert [hit.section_id for hit in hits] == ["deep-work.a"]
+    assert backend.load_graph(workspace, "deep-work") is not None
 
 
 def test_rebuild_is_idempotent_and_isolated_per_document(tmp_path: Path) -> None:

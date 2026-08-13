@@ -138,8 +138,8 @@ Query tools preserve the existing **index-or-scan** behaviour: if
 `indexes/bookgraph.db` is missing, or the requested `doc_id` has no row in
 `doc_catalog`, the tool falls back to a live scan/build from that document's
 `sections.jsonl`. Results stay correct; only ranking fidelity and latency differ
-(the live-scan path keeps the legacy lowercased `[a-z0-9]+` term-frequency scorer,
-which will not rank byte-identically to FTS5 `bm25`).
+(the live-scan path uses a Unicode-aware, diacritic-folding term-frequency scorer,
+which matches the same terms as FTS5 but will not rank byte-identically to `bm25`).
 
 ## Concurrency
 

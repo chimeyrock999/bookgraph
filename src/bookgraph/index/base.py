@@ -16,6 +16,7 @@ to a live scan of the canonical section artifacts.
 from __future__ import annotations
 
 import re
+import unicodedata
 from abc import ABC, abstractmethod
 
 from pydantic import BaseModel
@@ -24,18 +25,23 @@ from bookgraph.graph import SectionGraph
 from bookgraph.models import Section
 from bookgraph.workspace import WorkspacePaths
 
-_TOKEN_RE = re.compile(r"[a-z0-9]+")
+_TOKEN_RE = re.compile(r"[^\W_]+", re.UNICODE)
 
 
 def tokenize(text: str) -> list[str]:
-    """Lowercase and split text into alphanumeric search tokens.
+    """Lowercase, fold diacritics, and split text into search tokens.
 
     Used to tokenize the query, and to score the live-scan fallback for documents
-    that have not been indexed yet. A backend's own full-text engine may tokenize
-    its stored text differently (e.g. FTS5 ``unicode61``).
+    that have not been indexed yet. Diacritics are stripped (NFKD, dropping
+    combining marks) so tokens line up with what the default FTS5 backend stores
+    (``unicode61 remove_diacritics 2``) — otherwise accented terms such as
+    Vietnamese text would never match. Splitting keeps Unicode letters/digits, so
+    non-ASCII words survive instead of being discarded.
     """
 
-    return _TOKEN_RE.findall(text.lower())
+    normalized = unicodedata.normalize("NFKD", text.lower())
+    folded = "".join(ch for ch in normalized if not unicodedata.combining(ch))
+    return _TOKEN_RE.findall(folded)
 
 
 class IndexUnavailableError(RuntimeError):

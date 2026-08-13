@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from pathlib import Path
+from urllib.parse import quote
 
 from bookgraph.graph import SectionGraph, SectionNode, build_section_graph
 from bookgraph.index.base import IndexBackend, IndexSearchHit, IndexUnavailableError
@@ -145,7 +146,10 @@ def _open_read_only(workspace: WorkspacePaths) -> sqlite3.Connection | None:
     if not path.is_file():
         return None
     try:
-        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        # Percent-encode the path so a workspace directory containing URI-special
+        # characters (# fragment, ? query) still opens the intended file read-only.
+        uri = f"file:{quote(str(path))}?mode=ro"
+        conn = sqlite3.connect(uri, uri=True)
         conn.row_factory = sqlite3.Row
         # Every backend-owned table must be present and queryable. A file with a
         # partial schema (e.g. only ``doc_catalog``) is not usable: the search and

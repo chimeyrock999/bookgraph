@@ -73,19 +73,54 @@ A self-serve agent drives an entire session with these tools alone:
    - `get_next_section(plan_id)` — the next up-to-`daily_sections` unread
      sections, each with full text + provenance.
    - `get_context(doc_id, section_id)` — the section's content, its graph
-     neighbourhood (parent/prev/next/children), and its `concepts`.
+     neighbourhood (parent/prev/next/children), its `concepts`, and any `summary`
+     already written for it.
    - Pivot as needed:
      - `get_concept(concept)` — where a concept is discussed across **all**
        books (cross-book backlinks).
      - `search(query, doc_id=None)` — find related sections (cross-document when
        `doc_id` is omitted).
      - `get_outline(doc_id)` / `get_related(doc_id, section_id)` — navigate structure.
+   - `annotate_section(doc_id, section_id, concepts=[...], summary="...")` — **feed
+     your judgment back** (see *The reinforcement loop* below): the real concepts of
+     the section (each `{title, gloss}`, `slug` optional) and a prose summary. This is
+     optional per section but is how the concept graph gets smarter over time.
    - `mark_read(plan_id)` — mark the section read (defaults to the next unread) and
      persist progress.
 4. `list_plans()` — resume or report progress across sessions (`completed`/`total`/`done`).
 
-State (reading-plan progress) persists in `reading_plans/<plan_id>.json`, so a new
-session resumes exactly where the last left off.
+State (reading-plan progress in `reading_plans/<plan_id>.json` and annotations in
+`annotations/<doc_id>/<section_id>.json`) persists on disk, so a new session resumes
+exactly where the last left off and keeps every annotation ever written.
+
+## The reinforcement loop
+
+The concept graph has two tiers (see `.docs/cli/annotations.md`):
+
+- **Tier 1 (auto):** a deterministic tokenizer extracts concepts at `index build` time,
+  so the graph is never empty — but it is "dumb" (false positives, missed concepts).
+- **Tier 2 (agent):** `annotate_section` records the *real* concepts you found while
+  reading, each with a gloss, plus a section summary. Your annotation is the
+  **authoritative concept→section edge set for that section**: on the next rebuild it
+  prunes the tokenizer's spurious mentions and adds the real ones (an empty `concepts`
+  list deliberately zeroes out that section's concepts).
+
+`annotate_section` is **deferred**: it writes only the annotation file — it does not
+touch the index. Two things follow:
+
+- The `summary` shows up **immediately** via `get_context` (it reads the annotation
+  file directly).
+- The concept edges (and their gloss / `(agent-verified)` marker on `wiki/concepts`)
+  take effect only after the next per-document rebuild.
+
+So annotations **compound**: read a book once with light auto concepts, and each night's
+rebuild folds in whatever the agent annotated, so the cross-book graph gets sharper the
+more it is read. A nightly (or post-session) maintenance step re-merges and re-renders:
+
+```bash
+bookgraph index build /path/to/ws              # per-doc: re-merge Tier-1 + Tier-2
+bookgraph index concepts /path/to/ws           # global: re-render wiki/concepts/<slug>.md
+```
 
 ## Agent skills
 
@@ -107,11 +142,14 @@ projects.
 
 ## Notes & current limitations
 
-- **Concept quality** is a deterministic tokenizer baseline today (it can surface
-  noisy or split concepts). Agent-curated concepts + per-section summaries (the
-  "reinforcement" loop) are tracked in issue #21 and not required to read.
+- **Concept quality** starts from a deterministic tokenizer baseline (it can surface
+  noisy or split concepts) and improves as the agent annotates: `annotate_section`
+  curates concepts + per-section summaries (the reinforcement loop above). Annotating
+  is optional to read but is what sharpens the graph over time.
 - **Ingestion coverage:** documents without useful headings or PDF bookmarks can
   use the token/page fallback segmenter (`bookgraph segment --segmenter token-page`).
-- **Write surface:** only `create_plan` and `mark_read` write (reading plans).
-  Every other tool is read-only. Client-supplied `doc_id`/`plan_id` are validated
-  as filesystem-safe slugs before use.
+- **Write surface:** only `create_plan` and `mark_read` write reading plans, and
+  `annotate_section` writes a per-section annotation artifact. Every other tool is
+  read-only. Client-supplied `doc_id`/`plan_id` are validated as filesystem-safe slugs
+  before use; `annotate_section`'s `section_id` (which contains a dot, so it is not a
+  bare slug) is validated by membership against the document's sections.

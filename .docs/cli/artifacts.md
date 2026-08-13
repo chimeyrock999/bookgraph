@@ -315,7 +315,9 @@ wiki/concepts/
 ```
 
 Page shape — a title, a one-line summary, then backlinks grouped by book in
-reading order:
+reading order. A backlink shows its per-mention `gloss` after an em dash when present,
+and an `(agent-verified)` marker when the mention came from a Tier-2 agent annotation
+(`source='agent'`):
 
 ```markdown
 # Schema Evolution
@@ -326,7 +328,7 @@ Mentioned in 2 books · 5 sections.
 - [Storage](../books/deep-work/sections/deep-work.a.md)
 
 ## Designing Data-Intensive Applications
-- [Encoding and Evolution](../books/ddia/sections/ddia.ch-4.md)
+- [Encoding and Evolution](../books/ddia/sections/ddia.ch-4.md) — why it matters here (agent-verified)
 ```
 
 Properties:
@@ -393,6 +395,35 @@ mirroring `bookgraph.models.ReadingPlan`:
 
 These are recomputed from `section_ids` + `completed` on each `next` call rather
 than persisted, so the file stays a minimal source of truth.
+
+## `annotations/<doc_id>/<section_id>.json`
+
+Owner: the MCP `annotate_section` tool (`bookgraph.mcp.service` /
+`bookgraph.annotations`). Read by the index stage (`bookgraph index build`).
+
+A **Tier-2 source of truth** — an agent's authoritative concepts + summary for one
+section. Unlike `indexes/bookgraph.db` (derived), it is **not** rebuildable and ranks
+alongside `sources/sections/<doc_id>/sections.jsonl`; `index build` reads it and never
+writes it. One file per annotated section, mirroring
+`bookgraph.models.SectionAnnotation`:
+
+```json
+{
+  "doc_id": "ddia",
+  "section_id": "ddia.schema-evolution",
+  "concepts": [
+    {"slug": "schema-evolution", "title": "Schema Evolution", "gloss": "why it matters here"}
+  ],
+  "summary": "the agent's explanation of this section",
+  "model": "claude-...",
+  "created_at": "2026-08-13T00:00:00Z"
+}
+```
+
+The concept edges here are the authoritative set for that section and, on the next
+`index build`, override the deterministic Tier-1 extraction (an empty `concepts` list
+prunes that section's mentions). See **`annotations.md`** for the field rules, the
+presence-based merge rule, and the `markdown-graph` non-goal.
 
 ## Future artifacts
 

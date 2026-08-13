@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+import os
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
 
@@ -119,6 +122,7 @@ def parse_book(
     original_source = _registered_original_path(workspace, resolved_book_id, book_manifest)
     parsed_dir = workspace.sources_parsed / resolved_book_id
     middle_json = parsed_dir / f"{resolved_book_id}_middle.json"
+    log_path = _parse_book_log_path(workspace, resolved_book_id)
     payload: dict[str, object] = {
         "command": "parse-book",
         "status": "placeholder",
@@ -157,6 +161,25 @@ def parse_book(
     if not original_source.is_file():
         raise typer.BadParameter(f"Registered original source not found: {original_source}")
 
+    pages = _registered_pdf_pages(book_manifest)
+    _write_parse_log_header(
+        log_path,
+        book_id=resolved_book_id,
+        runner=resolved_runner,
+        runner_command=resolved_runner_command,
+        method=resolved_method,
+        backend=resolved_backend,
+        timeout_seconds=resolved_timeout,
+        input_path=original_source,
+        pages=pages,
+    )
+    typer.echo(f"runner: {resolved_runner}")
+    typer.echo(f"book_id: {resolved_book_id}")
+    if pages is not None:
+        typer.echo(f"pages: {pages}")
+    typer.echo(f"log: {log_path}")
+    typer.echo("stage: running MinerU")
+
     try:
         run_result = MinerURunner(
             name=resolved_runner,
@@ -164,6 +187,7 @@ def parse_book(
             method=resolved_method,
             backend=resolved_backend,
             timeout_seconds=resolved_timeout,
+            log_path=log_path,
         ).run(original_source, parsed_dir)
         parser_plugin = default_parser_registry().get(parser_name)
         document = parser_plugin.parse(run_result.middle_json, parsed_dir)
@@ -174,7 +198,8 @@ def parse_book(
         MinerURunError,
         ValueError,
     ) as exc:
-        raise typer.BadParameter(str(exc)) from exc
+        _append_parse_log_summary(log_path, parsed_dir)
+        raise typer.BadParameter(f"{exc}\nLog: {log_path}") from exc
 
     if document.doc_id != resolved_book_id:
         document = type(document).model_validate(
@@ -191,9 +216,72 @@ def parse_book(
         }
     )
     document_path = write_document(document, parsed_dir)
-    typer.echo(f"runner: {resolved_runner}")
+    _append_parse_log_summary(log_path, parsed_dir)
     typer.echo(f"parser: {parser_name}")
     typer.echo(f"doc_id: {document.doc_id}")
     typer.echo(f"title: {document.title}")
     typer.echo(f"blocks: {len(document.blocks)}")
     typer.echo(f"document: {document_path}")
+
+
+def _parse_book_log_path(workspace: WorkspacePaths, book_id: str) -> Path:
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    return workspace.runs_root / "parse-book" / f"{timestamp}-{book_id}.log"
+
+
+def _registered_pdf_pages(book_manifest: Path) -> int | None:
+    try:
+        payload = json.loads(book_manifest.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    pdf = payload.get("pdf") if isinstance(payload, dict) else None
+    if not isinstance(pdf, dict):
+        return None
+    pages = pdf.get("pages")
+    return pages if isinstance(pages, int) and pages > 0 else None
+
+
+def _write_parse_log_header(
+    path: Path,
+    *,
+    book_id: str,
+    runner: str,
+    runner_command: str,
+    method: str,
+    backend: str | None,
+    timeout_seconds: int | None,
+    input_path: Path,
+    pages: int | None,
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = [
+        "[bookgraph] parse-book run",
+        f"book_id: {book_id}",
+        f"runner: {runner}",
+        f"runner_command: {runner_command}",
+        f"method: {method}",
+        f"backend: {backend}",
+        f"timeout_seconds: {timeout_seconds}",
+        f"input: {input_path}",
+        f"pages: {pages}",
+        f"HF_HOME: {os.environ.get('HF_HOME')}",
+        "stage: running MinerU",
+        "",
+    ]
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def _append_parse_log_summary(path: Path, parsed_dir: Path) -> None:
+    book_id = parsed_dir.name
+    checks = {
+        "document.json": parsed_dir / "document.json",
+        f"{book_id}_middle.json": parsed_dir / f"{book_id}_middle.json",
+        f"{book_id}.md": parsed_dir / f"{book_id}.md",
+        f"{book_id}_content_list.json": parsed_dir / f"{book_id}_content_list.json",
+    }
+    with path.open("a", encoding="utf-8") as log:
+        log.write("\n[bookgraph] artifact summary\n")
+        for name, artifact in checks.items():
+            state = "exists" if artifact.exists() else "missing"
+            log.write(f"{name}: {state}\n")
+        log.write("sections/index/plan: not touched by parse-book\n")

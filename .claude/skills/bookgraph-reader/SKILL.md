@@ -32,10 +32,15 @@ it must be prepared once via the CLI — you can run these if the user asks:
 
 ```bash
 bookgraph init /path/to/workspace
-bookgraph parse <file> -o /path/to/workspace     # Markdown/Office; raw PDF: add-book + parse-book
+bookgraph parse <file> -o /path/to/workspace     # Markdown/Office
+# raw PDF: add-book + parse-book; parse-book prints a runs/parse-book/*.log path
 bookgraph segment /path/to/workspace <doc_id>
 bookgraph index build /path/to/workspace          # enables search + concepts
 ```
+
+For large raw PDFs, do not let an agent/cron job silently wait with no progress:
+start or inspect `parse-book` via its durable log path under `runs/parse-book/`.
+Operational details live in `docs/cli/parse-book-large-pdfs.md`.
 
 ## The reading loop
 

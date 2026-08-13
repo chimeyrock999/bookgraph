@@ -29,7 +29,10 @@ bookgraph index build /path/to/workspace
 bookgraph mcp /path/to/workspace
 ```
 
-For raw registered PDFs, replace `parse` with `add-book` + `parse-book`.
+For raw registered PDFs, replace `parse` with `add-book` + `parse-book`. For
+large PDFs, `parse-book` can take a long time and should expose a durable log path
+under `runs/parse-book/`; do not silently wait in an agent/cron job without that
+log. See `docs/cli/parse-book-large-pdfs.md`.
 
 The MCP server is bound to one workspace. Tool calls should not ask for arbitrary
 workspace paths; they operate on the workspace used when `bookgraph mcp` started.

@@ -697,16 +697,28 @@ Dry run still writes a placeholder request artifact under:
 runs/cli-placeholders/parse-book-<book_id>.json
 ```
 
-Prints:
+Prints at run start:
 
 ```text
 runner: <runner>
+book_id: <book_id>
+pages: <page_count_if_known>
+log: <workspace>/runs/parse-book/<timestamp>-<book_id>.log
+stage: running MinerU
+```
+
+Prints after success:
+
+```text
 parser: <parser_name>
 doc_id: <book_id>
 title: <document_title>
 blocks: <block_count>
 document: <workspace>/sources/parsed/<book_id>/document.json
 ```
+
+Failures include `Log: <...>` so users/agents can inspect the durable run log.
+For large PDFs and agent/cron operation, see `docs/cli/parse-book-large-pdfs.md`.
 
 ### `bookgraph wiki compile`
 

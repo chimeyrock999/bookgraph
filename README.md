@@ -1,11 +1,42 @@
 # BookGraph
 
-BookGraph is a source-grounded book/document graph-wiki pipeline. It ingests documents,
-parses them into canonical blocks, segments long sources into human reading units, compiles
-those sections into a linked wiki backend, and exposes reading/query context through MCP.
+BookGraph is a source-grounded **book-to-graph pipeline for AI reading**.
 
-The project is intentionally pluggable: parsers, segmenters, wiki backends, indexes, and MCP
-servers are replaceable components behind small ports.
+The goal is simple: take long books and documents, parse them into a durable
+knowledge graph, and let an AI agent read that graph one section at a time. The
+agent can keep its place, follow the book's outline, jump to related sections,
+and connect recurring concepts across many books without losing source
+provenance.
+
+A BookGraph workspace is the source of truth. It stores inspectable artifacts for
+every stage: parsed blocks, human-sized sections, linked wiki pages,
+search/graph indexes, cross-book concept backlinks, and resumable reading plans
+served over MCP.
+
+BookGraph is **not just another RAG chunker**. It is built for studying and
+navigating long-form sources, where provenance, reading order, outlines, and
+cross-book concepts matter as much as keyword retrieval.
+
+What makes it different from a typical RAG pipeline:
+
+- **Artifact-first, not prompt-first** — every stage writes canonical files under
+  the workspace (`document.json`, `sections.jsonl`, `indexes/bookgraph.db`,
+  `reading_plans/*.json`, `wiki/`). The system is debuggable without rerunning an
+  LLM call.
+- **Human reading units, not arbitrary chunks** — segmentation prefers headings,
+  PDF bookmarks/TOCs, page boundaries, and only then token fallback. Sections are
+  meant to be read, discussed, and resumed.
+- **Source-grounded by construction** — downstream notes, wiki pages, MCP answers,
+  and reading plans preserve section/block provenance back to parser outputs.
+- **Graph + reading plan, not only vector search** — BookGraph keeps outline
+  structure, prev/next reading order, related sections, and cross-book concept
+  backlinks alongside search.
+- **Wiki and MCP are parallel projections** — the wiki is the human/external-LLM
+  rendering; MCP serves agents from the canonical sections and indexes. Neither
+  is the hidden source of truth.
+- **Pluggable ports** — parsers, segmenters, wiki backends, index backends, and
+  MCP serving are replaceable behind small interfaces, so heavy tools like
+  MinerU, MarkItDown, llm-wiki-compiler, and FastMCP stay optional adapters.
 
 ## Architecture
 
@@ -163,6 +194,7 @@ bookgraph parse book_middle.json -o /path/to/workspace
 bookgraph parse report.docx -o /path/to/workspace    # needs: uv sync --extra parsers
 bookgraph parse odd.bin -o /path/to/workspace --parser markdown
 bookgraph parse-book /path/to/workspace <book_id> --backend pipeline  # needs: uv sync --extra mineru
+# Large raw PDFs print a runs/parse-book/*.log path; see docs/cli/parse-book-large-pdfs.md
 ```
 
 Output lands in `sources/parsed/<doc_id>/document.json`. `<doc_id>` comes from the

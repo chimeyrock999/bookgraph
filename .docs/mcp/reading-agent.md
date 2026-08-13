@@ -16,6 +16,7 @@ uv sync --extra mcp
 
 bookgraph init /path/to/ws
 # ingest each document (Markdown/Office via `parse`; raw PDF via add-book + parse-book)
+# parse-book prints a runs/parse-book/*.log path for long raw-PDF runs
 bookgraph parse book.md -o /path/to/ws            # → sources/parsed/<doc_id>/document.json
 bookgraph segment /path/to/ws <doc_id>            # → sources/sections/<doc_id>/…
 bookgraph index build /path/to/ws                 # → indexes/bookgraph.db (search + graph + concepts)

@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import queue
 import shutil
 import subprocess
+import sys
+import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TextIO
 
 from bookgraph.parsers.errors import UnsupportedSourceError
 from bookgraph.utils import MINERU_MIDDLE_JSON_SUFFIX
@@ -69,6 +74,7 @@ class MinerURunner:
     backend: str | None = None
     timeout_seconds: int | None = _DEFAULT_TIMEOUT_SECONDS
     run_process: CommandRunner | None = field(default=None)
+    log_path: Path | None = None
 
     def run(self, pdf: Path, output_dir: Path) -> MinerURunResult:
         if pdf.suffix.lower() != ".pdf":
@@ -88,6 +94,8 @@ class MinerURunner:
             timeout = self.timeout_seconds
 
             def _run_default(argv: list[str]) -> subprocess.CompletedProcess[str]:
+                if self.log_path is not None:
+                    return _stream_run_process(argv, timeout, self.log_path)
                 return _default_run_process(argv, timeout)
 
             process = _run_default
@@ -132,6 +140,78 @@ def _default_run_process(
     return subprocess.run(  # noqa: S603
         argv, capture_output=True, text=True, check=False, timeout=timeout
     )
+
+
+def _stream_run_process(
+    argv: list[str], timeout: int | None, log_path: Path
+) -> subprocess.CompletedProcess[str]:
+    """Run a subprocess while teeing combined stdout/stderr to terminal and log.
+
+    MinerU can run for a long time on large PDFs and emits useful progress. The
+    default CLI path should surface that output immediately while also leaving a
+    durable log for agents/cron jobs to inspect. Unit tests can still inject
+    ``run_process`` to avoid spawning MinerU.
+    """
+
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    output: list[str] = []
+    deadline = time.monotonic() + timeout if timeout is not None else None
+    with log_path.open("a", encoding="utf-8") as log:
+        log.write(f"$ {' '.join(argv)}\n")
+        log.flush()
+        process = subprocess.Popen(  # noqa: S603
+            argv,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+        assert process.stdout is not None
+        lines: queue.Queue[str | None] = queue.Queue()
+        reader = threading.Thread(
+            target=_enqueue_output,
+            args=(process.stdout, lines),
+            daemon=True,
+        )
+        reader.start()
+        try:
+            while True:
+                if deadline is not None and time.monotonic() > deadline:
+                    process.kill()
+                    assert timeout is not None
+                    raise subprocess.TimeoutExpired(argv, timeout, output="".join(output))
+                try:
+                    line = lines.get(timeout=0.1)
+                except queue.Empty:
+                    if process.poll() is not None and not reader.is_alive():
+                        break
+                    continue
+                if line is None:
+                    break
+                output.append(line)
+                log.write(line)
+                log.flush()
+                print(line, end="", file=sys.stderr, flush=True)
+            returncode = process.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+            raise
+        log.write(f"\n[bookgraph] process exit code: {returncode}\n")
+        return subprocess.CompletedProcess(
+            argv,
+            returncode,
+            stdout="".join(output),
+            stderr="",
+        )
+
+
+def _enqueue_output(stream: TextIO, lines: queue.Queue[str | None]) -> None:
+    try:
+        for line in stream:
+            lines.put(line)
+    finally:
+        lines.put(None)
 
 
 def _select_middle_json(work_dir: Path, pdf: Path) -> Path:

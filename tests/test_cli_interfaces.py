@@ -382,3 +382,24 @@ def test_reading_plan_create_rejects_non_positive_daily_sections(tmp_path: Path)
 
     assert result.exit_code != 0
     assert "daily_sections must be at least 1" in result.output
+
+
+def test_reading_plan_list_reports_progress(tmp_path: Path) -> None:
+    runner = _init_workspace(tmp_path)
+    _write_sections_manifest(tmp_path, "deep-work", ["deep-work.a", "deep-work.b"])
+    runner.invoke(app, ["reading-plan", "create", str(tmp_path), "deep-work"])
+    runner.invoke(app, ["reading-plan", "mark-read", str(tmp_path), "deep-work"])
+
+    result = runner.invoke(app, ["reading-plan", "list", str(tmp_path)])
+
+    assert result.exit_code == 0, result.output
+    assert "deep-work\tdeep-work\t1/2" in result.output
+
+
+def test_reading_plan_list_reports_none_when_empty(tmp_path: Path) -> None:
+    runner = _init_workspace(tmp_path)
+
+    result = runner.invoke(app, ["reading-plan", "list", str(tmp_path)])
+
+    assert result.exit_code == 0, result.output
+    assert "reading_plans: (none)" in result.output

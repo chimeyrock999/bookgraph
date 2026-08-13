@@ -11,6 +11,7 @@ from bookgraph.cli._shared import _validate_id
 from bookgraph.models import ReadingPlan
 from bookgraph.reading_plans import (
     create_reading_plan,
+    list_plan_progress,
     mark_section_read,
     next_sections,
     read_reading_plan,
@@ -98,6 +99,20 @@ def reading_plan_create(
         return
     path = write_reading_plan(plan, _plan_path(workspace, resolved_plan_id))
     typer.echo(f"reading_plan: {path}")
+
+
+@reading_plan_app.command("list")
+def reading_plan_list(
+    workspace_path: Annotated[Path, typer.Argument(help="BookGraph workspace/output root path.")],
+) -> None:
+    """List reading plans in the workspace with their completion progress."""
+
+    workspace = WorkspacePaths(workspace_path.expanduser().resolve())
+    progress = list_plan_progress(workspace.reading_plans_root)
+    for plan in progress:
+        typer.echo(f"{plan.plan_id}\t{plan.doc_id}\t{plan.completed}/{plan.total}")
+    if not progress:
+        typer.echo("reading_plans: (none)")
 
 
 @reading_plan_app.command("next")

@@ -402,6 +402,31 @@ completed: <completed_count>/<section_count>
 reading_plan: <workspace>/reading_plans/<plan_id>.json
 ```
 
+### `bookgraph reading-plan list`
+
+List the workspace's reading plans with their completion progress.
+
+```bash
+bookgraph reading-plan list /path/to/workspace
+```
+
+#### Inputs
+
+- `workspace_path`: workspace/output root.
+
+#### Writes
+
+- None. `list` is read-only.
+
+#### Prints
+
+```text
+<plan_id>\t<doc_id>\t<completed>/<total>     # one line per plan, tab-separated
+```
+
+Prints `reading_plans: (none)` when the workspace has no plans. Unreadable/corrupt
+plan files are skipped rather than aborting the listing.
+
 ### Must not do (all reading-plan commands)
 
 - Must not parse, segment, or compile wiki.
@@ -511,8 +536,8 @@ bookgraph index concepts /path/to/workspace
 **Status:** Implemented (requires the optional `mcp` extra).
 
 Serve a workspace over MCP (stdio transport) so a reading client/agent can query
-sections and drive a reading plan. All tools are read-mostly; only `mark_read`
-mutates state (the reading plan).
+sections and drive a reading plan. All tools are read-mostly; only `mark_read` and
+`create_plan` write state (reading plans).
 
 ```bash
 uv sync --extra mcp
@@ -555,13 +580,30 @@ telling the user to `uv sync --extra mcp`.
   document. Returns empty when the slug is unknown. Backed by `concept_nodes` /
   `concept_mentions`; no live-scan fallback (a document's concepts exist only once
   it is built).
+- `list_documents()` → the workspace's segmented documents, each with `doc_id`,
+  `title` (from the parsed `document.json`, falling back to `doc_id`), and
+  `section_count`. Lets an agent discover what there is to read before picking a
+  document.
+- `create_plan(doc_id, plan_id=None, daily_sections=1, overwrite=False)` → create
+  and persist a reading plan for a segmented document (`plan_id` defaults to
+  `doc_id`). Returns `plan_id`, `doc_id`, `daily_sections`, `section_count`, and
+  `path`. Fails if the document is not segmented, or — unlike `bookgraph
+  reading-plan create` — if a plan with that `plan_id` already exists, so a
+  re-calling agent cannot silently wipe an in-progress plan; pass `overwrite=True`
+  to replace it.
+- `list_plans()` → the workspace's reading plans, each with `plan_id`, `doc_id`,
+  `completed`, `total`, and `done`. Lets an agent resume or track progress.
+
+Together `list_documents` → `create_plan` → `get_next_section`/`get_context` →
+`mark_read` → `list_plans` let a client drive a full reading session without any
+CLI step (see `.docs/mcp/reading-agent.md`).
 
 ### Reads / writes
 
 - Reads `indexes/bookgraph.db` (when built) and
   `sources/sections/<doc_id>/sections.jsonl`, plus `reading_plans/<plan_id>.json`.
-- `mark_read` writes `reading_plans/<plan_id>.json` (same contract as
-  `bookgraph reading-plan mark-read`). No other tool writes.
+- `mark_read` and `create_plan` write `reading_plans/<plan_id>.json` (same
+  contracts as `bookgraph reading-plan mark-read` / `create`). No other tool writes.
 
 MCP tool inputs are client-controlled, so `plan_id` and `doc_id` are validated as
 filesystem-safe slugs before they are used as path components; a traversal value

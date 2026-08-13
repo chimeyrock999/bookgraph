@@ -17,9 +17,12 @@ from fastmcp.exceptions import ToolError
 from bookgraph.mcp import service
 from bookgraph.mcp.service import (
     ConceptView,
+    CreatedPlan,
+    DocumentList,
     MarkReadResult,
     NextSection,
     Outline,
+    PlanList,
     ReadingServiceError,
     RelatedSections,
     SearchResult,
@@ -103,6 +106,44 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
 
         try:
             return service.get_concept(workspace, concept)
+        except ReadingServiceError as exc:
+            raise ToolError(str(exc)) from exc
+
+    @mcp.tool
+    def list_documents() -> DocumentList:
+        """List the workspace's segmented documents (doc_id, title, section count)."""
+
+        try:
+            return service.list_documents(workspace)
+        except ReadingServiceError as exc:
+            raise ToolError(str(exc)) from exc
+
+    @mcp.tool
+    def create_plan(
+        doc_id: str,
+        plan_id: str | None = None,
+        daily_sections: int = 1,
+        overwrite: bool = False,
+    ) -> CreatedPlan:
+        """Create a reading plan for a document (plan_id defaults to doc_id).
+
+        Errors if a plan with that id already exists, to avoid discarding an
+        in-progress plan on a re-call; pass overwrite=True to replace it.
+        """
+
+        try:
+            return service.create_plan(
+                workspace, doc_id, plan_id, daily_sections, overwrite=overwrite
+            )
+        except ReadingServiceError as exc:
+            raise ToolError(str(exc)) from exc
+
+    @mcp.tool
+    def list_plans() -> PlanList:
+        """List reading plans in the workspace with their completion progress."""
+
+        try:
+            return service.list_plans(workspace)
         except ReadingServiceError as exc:
             raise ToolError(str(exc)) from exc
 

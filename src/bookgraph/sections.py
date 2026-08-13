@@ -64,6 +64,17 @@ def read_sections(manifest: Path) -> list[Section]:
     return sections
 
 
+def count_sections(manifest: Path) -> int:
+    """Count sections in a ``sections.jsonl`` manifest without materializing them.
+
+    Counts non-blank lines (one ``Section`` per line, matching
+    :func:`read_sections`), so a discovery tool can report a section count without
+    parsing and validating every section's text/metadata.
+    """
+
+    return sum(1 for line in manifest.read_text().splitlines() if line.strip())
+
+
 def render_section_markdown(section: Section) -> str:
     """Render a section as Markdown with YAML frontmatter carrying provenance.
 

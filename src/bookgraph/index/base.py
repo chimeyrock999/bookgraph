@@ -147,5 +147,15 @@ class IndexBackend(ABC):
         """
 
     @abstractmethod
+    def section_concepts(
+        self, workspace: WorkspacePaths, doc_id: str, section_id: str
+    ) -> list[ConceptNode]:
+        """The concepts mentioned by one section, each with its cross-book totals.
+
+        Ordered most-connected first. Empty when the section (or its document) is
+        not indexed — concepts have no live-scan fallback.
+        """
+
+    @abstractmethod
     def location(self, workspace: WorkspacePaths) -> str:
         """A human-readable description of where the index is persisted."""

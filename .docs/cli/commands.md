@@ -530,7 +530,9 @@ telling the user to `uv sync --extra mcp`.
   graph: `parent`, `prev`, `next`, and `children` (each a lightweight
   id/title/level reference).
 - `get_context(doc_id, section_id)` → a section's full reading content (as
-  `get_section`) together with its graph neighbourhood (as `get_related`).
+  `get_section`), its graph neighbourhood (as `get_related`), and its `concepts`
+  (each with `slug`, `title`, and cross-book `doc_count` / `mention_count`) so a
+  reader can pivot into `get_concept`. Concepts are empty for an unindexed document.
 - `get_concept(concept)` → a cross-book concept lookup: the concept node (`slug`,
   `title`, `doc_count`, `mention_count`) plus its backlink mentions
   (`doc_id`, `section_id`, `title`) across every indexed book, grouped by

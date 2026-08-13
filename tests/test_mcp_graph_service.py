@@ -214,3 +214,28 @@ def test_get_concept_rejects_invalid_slug(tmp_path: Path) -> None:
 
     with pytest.raises(InvalidIdError):
         service.get_concept(workspace, "../escape")
+
+
+def test_get_context_includes_the_sections_concepts(tmp_path: Path) -> None:
+    workspace = WorkspacePaths(tmp_path)
+    sections = [
+        Section(id="ddia.a", doc_id="ddia", title="Schema Evolution", level=1,
+                heading_path=["Schema Evolution"], text="x")
+    ]
+    write_sections(sections, workspace.sources_sections / "ddia")
+    SqliteIndexBackend().build_document(workspace, "ddia", "DDIA", sections)
+
+    context = service.get_context(workspace, "ddia", "ddia.a")
+
+    node = next(c for c in context.concepts if c.slug == "schema-evolution")
+    assert node.title == "Schema Evolution"
+    assert node.doc_count == 1
+    assert node.mention_count == 1
+
+
+def test_get_context_has_no_concepts_without_an_index(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path, build_index=False)
+
+    context = service.get_context(workspace, "ddia", "ddia.ch-1")
+
+    assert context.concepts == []

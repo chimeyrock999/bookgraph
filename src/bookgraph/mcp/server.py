@@ -90,7 +90,7 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
 
     @mcp.tool
     def get_context(doc_id: str, section_id: str) -> SectionContext:
-        """Return a section's full content plus its graph neighbourhood."""
+        """Return a section's full content, graph neighbourhood, and its concepts."""
 
         try:
             return service.get_context(workspace, doc_id, section_id)

@@ -197,6 +197,27 @@ class SqliteIndexBackend(IndexBackend):
         finally:
             conn.close()
 
+    def section_concepts(
+        self, workspace: WorkspacePaths, doc_id: str, section_id: str
+    ) -> list[ConceptNode]:
+        conn = _open_read_only(workspace)
+        if conn is None:
+            return []
+        try:
+            return [
+                ConceptNode(
+                    slug=row["slug"],
+                    title=row["title"],
+                    doc_count=row["doc_count"],
+                    mention_count=row["mention_count"],
+                )
+                for row in _section_concepts(conn, doc_id, section_id)
+            ]
+        except sqlite3.Error:
+            return []  # a db without the concept schema (or unusable) has no concepts
+        finally:
+            conn.close()
+
     def location(self, workspace: WorkspacePaths) -> str:
         return str(db_path(workspace))
 
@@ -369,6 +390,22 @@ def _concept_node(conn: sqlite3.Connection, slug: str) -> ConceptNode | None:
         doc_count=row["doc_count"],
         mention_count=row["mention_count"],
     )
+
+
+def _section_concepts(
+    conn: sqlite3.Connection, doc_id: str, section_id: str
+) -> list[sqlite3.Row]:
+    # The section's concepts, joined to the cross-book aggregate for their totals,
+    # ordered most-connected first.
+    return conn.execute(
+        "SELECT cn.slug AS slug, cn.title AS title, "
+        "       cn.doc_count AS doc_count, cn.mention_count AS mention_count "
+        "FROM concept_mentions cm "
+        "JOIN concept_nodes cn ON cn.slug = cm.concept_slug "
+        "WHERE cm.doc_id = ? AND cm.section_id = ? "
+        "ORDER BY cn.doc_count DESC, cn.mention_count DESC, cn.slug",
+        (doc_id, section_id),
+    ).fetchall()
 
 
 def _concept_mentions(conn: sqlite3.Connection, slug: str) -> list[sqlite3.Row]:

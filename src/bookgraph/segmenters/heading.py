@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 from bookgraph.models import CanonicalBlock, Document, Section
 from bookgraph.ports import DocumentSegmenter
-from bookgraph.utils import slugify
+from bookgraph.utils import unique_slug
 
 
 @dataclass
@@ -52,10 +52,10 @@ class HeadingSegmenter(DocumentSegmenter):
             sections.append(current)
 
         materialized: list[Section] = []
-        seen_slugs: dict[str, int] = {}
+        used_slugs: set[str] = set()
         for index, draft in enumerate(sections):
             next_start_page = sections[index + 1].start_page if index + 1 < len(sections) else None
-            section_slug = _unique_section_slug(draft.title, seen_slugs)
+            section_slug = unique_slug(draft.title, used_slugs)
             materialized.append(
                 draft.to_section(
                     document.doc_id,
@@ -93,7 +93,7 @@ class _DraftSection:
             if block.type != "title" and block.text.strip()
         ]
         return Section(
-            id=f"{doc_id}.{section_slug or slugify(self.title)}",
+            id=f"{doc_id}.{section_slug or unique_slug(self.title, set())}",
             doc_id=doc_id,
             title=self.title,
             level=self.level,
@@ -103,10 +103,3 @@ class _DraftSection:
             text="\n\n".join(text_parts),
             block_ids=[block.id for block in self.blocks],
         )
-
-
-def _unique_section_slug(title: str, seen_slugs: dict[str, int]) -> str:
-    base = slugify(title)
-    count = seen_slugs.get(base, 0) + 1
-    seen_slugs[base] = count
-    return base if count == 1 else f"{base}-{count}"

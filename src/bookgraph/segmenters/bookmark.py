@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from bookgraph.models import CanonicalBlock, Document, Section
 from bookgraph.ports import DocumentSegmenter
 from bookgraph.segmenters.heading import HeadingSegmenter
-from bookgraph.utils import slugify
+from bookgraph.utils import unique_slug
 
 
 @dataclass(frozen=True)
@@ -41,12 +41,12 @@ class BookmarkSegmenter(DocumentSegmenter):
             return (self.fallback or HeadingSegmenter()).segment(document)
 
         sections: list[Section] = []
-        seen_slugs: dict[str, int] = {}
+        used_slugs: set[str] = set()
         for index, bookmark in enumerate(usable):
             start_page = bookmark.page_index
             next_page = usable[index + 1].page_index if index + 1 < len(usable) else None
             blocks = _blocks_in_range(document.blocks, start_page, next_page)
-            section_slug = _unique_section_slug(bookmark.title, seen_slugs)
+            section_slug = unique_slug(bookmark.title, used_slugs)
             sections.append(_to_section(document.doc_id, bookmark, blocks, next_page, section_slug))
 
         for index, section in enumerate(sections):
@@ -106,9 +106,3 @@ def _to_section(
         },
     )
 
-
-def _unique_section_slug(title: str, seen_slugs: dict[str, int]) -> str:
-    base = slugify(title)
-    count = seen_slugs.get(base, 0) + 1
-    seen_slugs[base] = count
-    return base if count == 1 else f"{base}-{count}"

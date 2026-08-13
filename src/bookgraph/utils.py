@@ -12,6 +12,19 @@ def slugify(value: str) -> str:
     return slug or "untitled"
 
 
+def unique_slug(value: str, used_slugs: set[str]) -> str:
+    """Return a deterministic slug that does not collide with already-used slugs."""
+
+    base = slugify(value)
+    candidate = base
+    suffix = 2
+    while candidate in used_slugs:
+        candidate = f"{base}-{suffix}"
+        suffix += 1
+    used_slugs.add(candidate)
+    return candidate
+
+
 def doc_id_from_path(source: Path) -> str:
     """Derive a stable doc id from a source path, ignoring parser-specific suffixes."""
 

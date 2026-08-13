@@ -238,6 +238,7 @@ Segment a parsed document into human reading sections.
 ```bash
 bookgraph segment /path/to/workspace <doc_id>
 bookgraph segment /path/to/workspace <doc_id> --segmenter heading
+bookgraph segment /path/to/workspace <doc_id> --segmenter bookmark
 bookgraph segment /path/to/workspace <doc_id> --target-level 1
 ```
 
@@ -248,10 +249,15 @@ bookgraph segment /path/to/workspace <doc_id> --target-level 1
 - `--segmenter/-s`: segmenter plugin name, validated against the segmenter registry.
   Defaults to `[segmenter].default` in `bookgraph.toml` (`heading` when unset).
 - `--target-level`: heading levels at or above this number start new sections for
-  the built-in heading segmenter. Defaults to `[segmenter].target_level` in
-  `bookgraph.toml` (`2` when unset). Other segmenters may ignore this option.
+  the built-in heading segmenter. For the `bookmark` segmenter, this selects the
+  deepest PDF bookmark level that starts sections. Defaults to
+  `[segmenter].target_level` in `bookgraph.toml` (`2` when unset). Other
+  segmenters may ignore this option.
 
-Reads `sources/parsed/<doc_id>/document.json` (fails if missing).
+Reads `sources/parsed/<doc_id>/document.json` (fails if missing). The `bookmark`
+segmenter also reads `sources/inbox/<doc_id>/book.json` and uses its
+`pdf.bookmarks` array when present; without usable bookmarks it falls back to the
+heading segmenter.
 
 ### Writes
 

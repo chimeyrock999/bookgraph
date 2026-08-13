@@ -5,6 +5,7 @@ from bookgraph.parsers.markitdown import MarkItDownParser
 from bookgraph.parsers.mineru import MinerUMiddleJsonParser
 from bookgraph.plugins import PluginRegistry
 from bookgraph.ports import DocumentParser, DocumentSegmenter, WikiBackend
+from bookgraph.segmenters.bookmark import BookmarkSegmenter
 from bookgraph.segmenters.heading import HeadingSegmenter
 from bookgraph.wiki_backends.llmwiki import LlmWikiBackend
 
@@ -20,6 +21,7 @@ def default_parser_registry() -> PluginRegistry[DocumentParser]:
 def default_segmenter_registry() -> PluginRegistry[DocumentSegmenter]:
     registry: PluginRegistry[DocumentSegmenter] = PluginRegistry(kind="segmenter")
     registry.register(HeadingSegmenter())
+    registry.register(BookmarkSegmenter(bookmarks=[]))
     return registry
 
 

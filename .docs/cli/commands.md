@@ -403,8 +403,12 @@ reading_plan: <workspace>/reading_plans/<plan_id>.json
 
 **Status:** Implemented.
 
-Build the persistent search index that backs MCP `search`, deriving a per-document
-inverted index from the sections manifest.
+Build the persistent indexes that back MCP query tools, deriving them per document
+from the sections manifest:
+
+- a **search** inverted index (`indexes/sections/<doc_id>.json`) backing `search`;
+- a **structural graph** (`indexes/graph/<doc_id>.json`) — hierarchy + sequence
+  edges — backing the graph/context tools.
 
 ```bash
 bookgraph index build /path/to/workspace                 # index every segmented document
@@ -419,8 +423,11 @@ bookgraph index build /path/to/workspace --doc-id ddia   # index one document
 
 ### Writes
 
-- `indexes/sections/<doc_id>.json` per document — the inverted index (see
-  `.docs/cli/artifacts.md`). Fully regenerable; safe to delete and rebuild.
+- `indexes/sections/<doc_id>.json` per document — the inverted search index.
+- `indexes/graph/<doc_id>.json` per document — the section graph.
+
+Both are derived from the same `sections.jsonl`, fully regenerable, and safe to
+delete and rebuild (see `.docs/cli/artifacts.md`).
 
 ### Must not do
 
@@ -429,7 +436,8 @@ bookgraph index build /path/to/workspace --doc-id ddia   # index one document
 
 ### Prints
 
-- `doc_id`, `sections`, `terms`, and the written `index` path per document.
+- `doc_id`, `sections`, `terms`, and the written `index` / `graph` paths per
+  document.
 
 ### Errors
 

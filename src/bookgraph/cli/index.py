@@ -7,6 +7,7 @@ import typer
 
 from bookgraph.cli._app import index_app
 from bookgraph.cli._shared import _validate_id
+from bookgraph.graph import build_section_graph, graph_path, write_graph
 from bookgraph.indexes import build_section_index, index_path, write_index
 from bookgraph.sections import read_sections
 from bookgraph.utils import ID_PATTERN
@@ -33,7 +34,7 @@ def index_build(
         ),
     ] = None,
 ) -> None:
-    """Build the search index under indexes/sections/<doc_id>.json from sections."""
+    """Build the search + graph indexes under indexes/ from a document's sections."""
 
     workspace = WorkspacePaths(workspace_path.expanduser().resolve())
     if doc_id is not None:
@@ -58,8 +59,11 @@ def index_build(
             raise typer.BadParameter(f"Invalid sections manifest: {manifest}: {exc}") from exc
 
         index = build_section_index(current_doc, sections)
-        path = write_index(index, index_path(workspace, current_doc))
+        search_index = write_index(index, index_path(workspace, current_doc))
+        graph = build_section_graph(current_doc, sections)
+        graph_index = write_graph(graph, graph_path(workspace, current_doc))
         typer.echo(f"doc_id: {current_doc}")
         typer.echo(f"sections: {len(index.sections)}")
         typer.echo(f"terms: {len(index.postings)}")
-        typer.echo(f"index: {path}")
+        typer.echo(f"index: {search_index}")
+        typer.echo(f"graph: {graph_index}")

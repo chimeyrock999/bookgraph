@@ -295,6 +295,50 @@ Per-document inverted index that backs MCP `search`. Mirrors
 Fully regenerable from `sections.jsonl`; safe to delete and rebuild. Rebuild
 after re-segmenting a document so the denormalised text stays in sync.
 
+## `indexes/graph/<doc_id>.json`
+
+Owner: the index stage (`bookgraph index build` command / `bookgraph.graph`).
+
+Per-document structural graph that backs the graph/context MCP tools. Mirrors
+`bookgraph.graph.SectionGraph`:
+
+```json
+{
+  "doc_id": "ddia",
+  "nodes": [
+    {
+      "id": "ddia.part-i",
+      "title": "Part I",
+      "level": 1,
+      "heading_path": ["Part I"],
+      "parent_id": null,
+      "prev_id": null,
+      "next_id": "ddia.chapter-1",
+      "child_ids": ["ddia.chapter-1"]
+    }
+  ]
+}
+```
+
+### Field rules
+
+- `doc_id`: parent document id; matches the `sources/sections/<doc_id>/` folder
+  and the `<doc_id>.json` filename.
+- `nodes`: one entry per section, in reading order.
+- `parent_id`: the nearest preceding section with a smaller heading `level` (the
+  containing chapter/part), or `null` for a top-level section. Derived from
+  `level` via a reading-order stack, so a jump from level 1 to level 3 still
+  nests under the nearest shallower section.
+- `child_ids`: the inverse of `parent_id` — direct children in reading order.
+- `prev_id` / `next_id`: linear reading-order neighbours, carried through from the
+  sections manifest; a neighbour id not present in this document is dropped to
+  `null`.
+
+Two edge kinds are represented: **hierarchy** (`parent_id` / `child_ids`) and
+**sequence** (`prev_id` / `next_id`). Fully regenerable from `sections.jsonl`;
+built from the same manifest as, and alongside, the search index. Rebuild after
+re-segmenting a document.
+
 ## `reading_plans/<plan_id>.json`
 
 Owner: the reading-plan stage (`bookgraph reading-plan` commands /

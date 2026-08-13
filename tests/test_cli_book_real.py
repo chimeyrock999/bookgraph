@@ -23,6 +23,7 @@ pdf = Path(argv[argv.index('-p') + 1])
 out = Path(argv[argv.index('-o') + 1])
 method = argv[argv.index('-m') + 1]
 backend = argv[argv.index('-b') + 1] if '-b' in argv else None
+print(f'fake mineru progress method={method} backend={backend}')
 auto = out / pdf.stem / 'auto'
 auto.mkdir(parents=True)
 (auto / f'{pdf.stem}_middle.json').write_text(json.dumps({
@@ -94,8 +95,21 @@ def test_parse_book_runs_mineru_then_parser_and_writes_document(
     assert not (parsed_dir / "_mineru").exists()
     assert not (workspace / "runs" / "cli-placeholders" / "parse-book-deep-work.json").exists()
     assert "runner: mineru" in result.output
+    assert "book_id: deep-work" in result.output
+    assert "log: " in result.output
+    assert "stage: running MinerU" in result.output
     assert "parser: mineru-middle-json" in result.output
     assert f"document: {document_path}" in result.output
+    logs = list((workspace / "runs" / "parse-book").glob("*-deep-work.log"))
+    assert len(logs) == 1
+    log = logs[0].read_text()
+    assert f"runner_command: {fake_mineru}" in log
+    assert "method: ocr" in log
+    assert "backend: pipeline" in log
+    assert "fake mineru progress method=ocr backend=pipeline" in log
+    assert "document.json: exists" in log
+    assert "deep-work_middle.json: exists" in log
+    assert "sections/index/plan: not touched by parse-book" in log
 
 
 def test_parse_book_uses_mineru_config_defaults(tmp_path: Path) -> None:
@@ -122,6 +136,47 @@ def test_parse_book_uses_mineru_config_defaults(tmp_path: Path) -> None:
     document = json.loads(document_path.read_text())
     assert document["blocks"][1]["text"] == "method=ocr backend=pipeline"
 
+
+def test_parse_book_failure_reports_log_path(tmp_path: Path) -> None:
+    runner = CliRunner()
+    workspace = tmp_path / "workspace"
+    pdf = tmp_path / "Deep Work.pdf"
+    pdf.write_bytes(b"%PDF-1.7")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    failing_mineru = bin_dir / "failing-mineru"
+    failing_mineru.write_text(
+        """#!/usr/bin/env python3
+print('starting fake mineru')
+raise SystemExit(7)
+"""
+    )
+    failing_mineru.chmod(0o755)
+
+    assert runner.invoke(app, ["init", str(workspace)]).exit_code == 0
+    assert runner.invoke(app, ["add-book", str(workspace), str(pdf)]).exit_code == 0
+
+    result = runner.invoke(
+        app,
+        [
+            "parse-book",
+            str(workspace),
+            "deep-work",
+            "--runner-command",
+            str(failing_mineru),
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "Log:" in result.output
+    assert "starting fake mineru" in result.output
+    logs = list((workspace / "runs" / "parse-book").glob("*-deep-work.log"))
+    assert len(logs) == 1
+    log = logs[0].read_text()
+    assert "starting fake mineru" in log
+    assert "[bookgraph] process exit code: 7" in log
+    assert "document.json: missing" in log
+    assert "deep-work_middle.json: missing" in log
 
 def test_parse_book_requires_registered_original_source(tmp_path: Path) -> None:
     runner = CliRunner()

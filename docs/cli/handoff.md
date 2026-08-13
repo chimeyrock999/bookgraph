@@ -4,7 +4,7 @@ This project may have multiple agents working concurrently. Use this workflow to
 
 ## Branching
 
-- Contract docs live on `main` under `.docs/cli/`.
+- Contract docs live on `main` under `docs/cli/`.
 - Each feature should be implemented on a feature branch.
 - Branch name pattern:
 
@@ -48,13 +48,13 @@ git checkout -b feature/<area>-<short-name>
 4. Read CLI contracts before editing code:
 
 ```bash
-ls .docs/cli
+ls docs/cli
 ```
 
 ## Editing rules
 
-- If the contract is missing or ambiguous, edit `.docs/cli/` first.
-- If a command fails because behavior is missing, read `.docs/cli/` before changing code.
+- If the contract is missing or ambiguous, edit `docs/cli/` first.
+- If a command fails because behavior is missing, read `docs/cli/` before changing code.
 - Implementation must add tests for the behavior it claims.
 - Keep stages separate unless a contract explicitly says a command orchestrates multiple stages.
 

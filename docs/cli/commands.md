@@ -449,7 +449,7 @@ from the sections manifest into one workspace-wide SQLite database
   — cross-book concept backlinks, populated per document and backing `get_concept`;
 - a **`doc_catalog`** row marking each document as indexed.
 
-See `.docs/cli/index.md` for the full schema and query contract.
+See `docs/cli/index.md` for the full schema and query contract.
 
 ```bash
 bookgraph index build /path/to/workspace                 # index every segmented document
@@ -476,7 +476,7 @@ bookgraph index build /path/to/workspace --doc-id ddia   # index one document
   `section_graph` + `concept_mentions` (Tier-1/Tier-2 merged, carrying `gloss`/`source`)
   + `section_annotations` (per-section summaries), delete-then-insert per `doc_id`;
   other documents' rows are never touched. Fully regenerable from `sections.jsonl` +
-  `annotations/` and safe to delete and rebuild (see `.docs/cli/index.md`).
+  `annotations/` and safe to delete and rebuild (see `docs/cli/index.md`).
 
 ### Must not do
 
@@ -517,7 +517,7 @@ bookgraph index concepts /path/to/workspace
   backlinks, rendered from `concept_nodes` + `concept_mentions`. Each backlink shows
   its per-mention `gloss` when present and an `(agent-verified)` marker when the
   mention's `source` is `agent`. Rewrites the whole `wiki/concepts/` directory so it
-  reflects exactly the currently indexed concepts (see `.docs/cli/artifacts.md`).
+  reflects exactly the currently indexed concepts (see `docs/cli/artifacts.md`).
 
 > Backlinks point into `wiki/books/<doc_id>/sections/`, which is materialized by
 > `bookgraph wiki compile <doc_id> --backend markdown-graph`, not by this command.
@@ -623,7 +623,7 @@ telling the user to `uv sync --extra mcp`.
 
 Together `list_documents` → `create_plan` → `get_next_section`/`get_context` →
 `mark_read` → `list_plans` let a client drive a full reading session without any
-CLI step (see `.docs/mcp/reading-agent.md`).
+CLI step (see `docs/mcp/reading-agent.md`).
 
 ### Reads / writes
 
@@ -650,7 +650,7 @@ is only ever matched against loaded plan/section data, never used as a raw path.
 > the `section_graph` table when the document is in `doc_catalog`, and rebuild the
 > graph from `sections.jsonl` otherwise, so they work before `index build` has run.
 > A document absent from `doc_catalog` is always treated as unindexed. See
-> `.docs/cli/index.md`.
+> `docs/cli/index.md`.
 
 ## Book-level parse / wiki compile contracts
 
@@ -697,16 +697,28 @@ Dry run still writes a placeholder request artifact under:
 runs/cli-placeholders/parse-book-<book_id>.json
 ```
 
-Prints:
+Prints at run start:
 
 ```text
 runner: <runner>
+book_id: <book_id>
+pages: <page_count_if_known>
+log: <workspace>/runs/parse-book/<timestamp>-<book_id>.log
+stage: running MinerU
+```
+
+Prints after success:
+
+```text
 parser: <parser_name>
 doc_id: <book_id>
 title: <document_title>
 blocks: <block_count>
 document: <workspace>/sources/parsed/<book_id>/document.json
 ```
+
+Failures include `Log: <...>` so users/agents can inspect the durable run log.
+For large PDFs and agent/cron operation, see `docs/cli/parse-book-large-pdfs.md`.
 
 ### `bookgraph wiki compile`
 

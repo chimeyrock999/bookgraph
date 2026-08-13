@@ -20,6 +20,7 @@ parsers = [
 mineru = [
   "mineru[pipeline]>=3.4.4",
   "six>=1.17.0",
+  "accelerate>=1.0",
 ]
 mcp = [
   "fastmcp>=2.0",

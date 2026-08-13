@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+import codecs
+import queue
 import shutil
 import subprocess
+import sys
+import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import BinaryIO
 
 from bookgraph.parsers.errors import UnsupportedSourceError
 from bookgraph.utils import MINERU_MIDDLE_JSON_SUFFIX
@@ -13,6 +19,8 @@ CommandRunner = Callable[[list[str]], "subprocess.CompletedProcess[str]"]
 
 _WORK_SUBDIR = "_mineru"
 _DEFAULT_TIMEOUT_SECONDS = 3600
+_PROCESS_EXIT_GRACE_SECONDS = 10
+_ERROR_EXCERPT_CHARS = 4000
 
 
 class MinerUNotInstalledError(RuntimeError):
@@ -21,6 +29,10 @@ class MinerUNotInstalledError(RuntimeError):
 
 class MinerURunError(RuntimeError):
     """Raised when MinerU runs but does not produce usable output."""
+
+
+class _MinerUProcessReapTimeoutError(MinerURunError):
+    """Raised when subprocess output ended but its exit status did not arrive."""
 
 
 @dataclass(frozen=True)
@@ -69,6 +81,7 @@ class MinerURunner:
     backend: str | None = None
     timeout_seconds: int | None = _DEFAULT_TIMEOUT_SECONDS
     run_process: CommandRunner | None = field(default=None)
+    log_path: Path | None = None
 
     def run(self, pdf: Path, output_dir: Path) -> MinerURunResult:
         if pdf.suffix.lower() != ".pdf":
@@ -88,6 +101,8 @@ class MinerURunner:
             timeout = self.timeout_seconds
 
             def _run_default(argv: list[str]) -> subprocess.CompletedProcess[str]:
+                if self.log_path is not None:
+                    return _stream_run_process(argv, timeout, self.log_path)
                 return _default_run_process(argv, timeout)
 
             process = _run_default
@@ -108,7 +123,7 @@ class MinerURunner:
             if completed.returncode != 0:
                 raise MinerURunError(
                     f"MinerU failed on {pdf.name} (exit {completed.returncode}): "
-                    f"{(completed.stderr or '').strip() or 'no stderr'}"
+                    f"{_process_error_excerpt(completed)}"
                 )
 
             middle_json = _select_middle_json(work_dir, pdf)
@@ -132,6 +147,104 @@ def _default_run_process(
     return subprocess.run(  # noqa: S603
         argv, capture_output=True, text=True, check=False, timeout=timeout
     )
+
+
+def _stream_run_process(
+    argv: list[str], timeout: int | None, log_path: Path
+) -> subprocess.CompletedProcess[str]:
+    """Run a subprocess while teeing combined stdout/stderr to terminal and log.
+
+    MinerU can run for a long time on large PDFs and emits useful progress. The
+    default CLI path should surface that output immediately while also leaving a
+    durable log for agents/cron jobs to inspect. Unit tests can still inject
+    ``run_process`` to avoid spawning MinerU.
+    """
+
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    output: list[str] = []
+    deadline = time.monotonic() + timeout if timeout is not None else None
+    with log_path.open("a", encoding="utf-8") as log:
+        log.write(f"$ {' '.join(argv)}\n")
+        log.flush()
+        process = subprocess.Popen(  # noqa: S603
+            argv,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            bufsize=0,
+        )
+        assert process.stdout is not None
+        lines: queue.Queue[str | None] = queue.Queue()
+        reader = threading.Thread(
+            target=_enqueue_output,
+            args=(process.stdout, lines),
+            daemon=True,
+        )
+        reader.start()
+        try:
+            while True:
+                if deadline is not None and time.monotonic() > deadline:
+                    process.kill()
+                    assert timeout is not None
+                    raise subprocess.TimeoutExpired(argv, timeout, output="".join(output))
+                try:
+                    line = lines.get(timeout=0.1)
+                except queue.Empty:
+                    if process.poll() is not None and not reader.is_alive():
+                        break
+                    continue
+                if line is None:
+                    break
+                output.append(line)
+                log.write(line)
+                if line in {"\n", "\r"}:
+                    log.flush()
+                print(line, end="", file=sys.stderr, flush=line in {"\n", "\r"})
+            log.flush()
+            try:
+                returncode = process.wait(timeout=_PROCESS_EXIT_GRACE_SECONDS)
+            except subprocess.TimeoutExpired as exc:
+                raise _MinerUProcessReapTimeoutError(
+                    "MinerU output stream ended, but the process did not exit within "
+                    f"{_PROCESS_EXIT_GRACE_SECONDS}s."
+                ) from exc
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+            raise
+        except _MinerUProcessReapTimeoutError:
+            process.kill()
+            process.wait()
+            raise
+        log.write(f"\n[bookgraph] process exit code: {returncode}\n")
+        return subprocess.CompletedProcess(
+            argv,
+            returncode,
+            stdout="".join(output),
+            stderr="".join(output),
+        )
+
+
+def _enqueue_output(stream: BinaryIO, lines: queue.Queue[str | None]) -> None:
+    decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+    try:
+        while chunk := stream.read(1):
+            text = decoder.decode(chunk)
+            if text:
+                lines.put(text)
+        remainder = decoder.decode(b"", final=True)
+        if remainder:
+            lines.put(remainder)
+    finally:
+        lines.put(None)
+
+
+def _process_error_excerpt(completed: subprocess.CompletedProcess[str]) -> str:
+    text = (completed.stderr or completed.stdout or "").strip()
+    if not text:
+        return "no subprocess output"
+    if len(text) <= _ERROR_EXCERPT_CHARS:
+        return text
+    return "…" + text[-_ERROR_EXCERPT_CHARS:]
 
 
 def _select_middle_json(work_dir: Path, pdf: Path) -> Path:

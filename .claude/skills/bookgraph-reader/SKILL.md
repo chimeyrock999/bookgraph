@@ -25,17 +25,22 @@ bookgraph mcp /path/to/workspace     # stdio; add to your MCP client config
 ```
 
 If the tools aren't available, tell the user to start/connect that server (see
-`.docs/mcp/reading-agent.md`).
+`docs/mcp/reading-agent.md`).
 
 **If the document isn't ingested yet** (`list_documents` is empty or missing it),
 it must be prepared once via the CLI — you can run these if the user asks:
 
 ```bash
 bookgraph init /path/to/workspace
-bookgraph parse <file> -o /path/to/workspace     # Markdown/Office; raw PDF: add-book + parse-book
+bookgraph parse <file> -o /path/to/workspace     # Markdown/Office
+# raw PDF: add-book + parse-book; parse-book prints a runs/parse-book/*.log path
 bookgraph segment /path/to/workspace <doc_id>
 bookgraph index build /path/to/workspace          # enables search + concepts
 ```
+
+For large raw PDFs, do not let an agent/cron job silently wait with no progress:
+start or inspect `parse-book` via its durable log path under `runs/parse-book/`.
+Operational details live in `docs/cli/parse-book-large-pdfs.md`.
 
 ## The reading loop
 
@@ -84,5 +89,5 @@ bookgraph index build /path/to/workspace          # enables search + concepts
   else is read-only.
 - Concepts require `bookgraph index build`; `search` and the graph tools also work
   before indexing (live scan), just with rougher ranking.
-- Full tool reference: `.docs/cli/commands.md`; setup + client config:
-  `.docs/mcp/reading-agent.md`.
+- Full tool reference: `docs/cli/commands.md`; setup + client config:
+  `docs/mcp/reading-agent.md`.

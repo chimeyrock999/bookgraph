@@ -576,6 +576,7 @@ document: <workspace>/sources/parsed/<book_id>/document.json
 ```bash
 bookgraph wiki compile /path/to/workspace <doc_id>
 bookgraph wiki compile /path/to/workspace <doc_id> --backend llmwiki
+bookgraph wiki compile /path/to/workspace <doc_id> --backend markdown-graph
 bookgraph wiki compile /path/to/workspace <doc_id> --dry-run
 ```
 
@@ -592,6 +593,10 @@ Writes:
 ```text
 wiki/books/<doc_id>/
 ```
+
+For `--backend markdown-graph`, section pages also include deterministic concept
+wikilinks in a `## Linked concepts` block. It does not materialize or reconcile
+`wiki/concepts/*.md`; cross-book concept nodes/backlinks belong to the index layer.
 
 Dry run still writes a placeholder request artifact under:
 

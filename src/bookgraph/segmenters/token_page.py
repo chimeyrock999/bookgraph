@@ -29,8 +29,9 @@ class TokenPageSegmenter(DocumentSegmenter):
 
     It is intended for documents without useful headings or PDF bookmarks. Blocks
     are kept whole for provenance; an oversized block/page becomes its own
-    section. When possible, the segmenter avoids crossing page boundaries if
-    adding the next page would exceed the configured token budget.
+    section. When page numbers are present, the segmenter avoids crossing page
+    boundaries if adding the next page would exceed the configured token budget.
+    Blocks without page numbers fall back to plain token-budget packing.
     """
 
     max_tokens: int = 800
@@ -102,19 +103,17 @@ def _page_groups(blocks: list[CanonicalBlock]) -> list[_BlockGroup]:
     current_page: int | None = None
 
     for block in blocks:
-        starts_new_group = (
-            current
-            and block.page_idx is not None
-            and current_page is not None
-            and block.page_idx != current_page
+        starts_new_group = current and (
+            block.page_idx is None
+            or current_page is None
+            or block.page_idx != current_page
         )
         if starts_new_group:
             groups.append(_group(current))
             current = []
 
         current.append(block)
-        if block.page_idx is not None:
-            current_page = block.page_idx
+        current_page = block.page_idx
 
     if current:
         groups.append(_group(current))

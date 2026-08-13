@@ -103,6 +103,30 @@ def test_token_page_segmenter_preserves_non_textual_block_provenance() -> None:
     assert sections[0].text == "body\n\nnext body"
 
 
+def test_token_page_segmenter_honors_token_budget_without_page_indices() -> None:
+    document = Document(
+        doc_id="paper",
+        title="A Paper",
+        blocks=[
+            CanonicalBlock(id=f"b{index}", type="text", text="one two three")
+            for index in range(6)
+        ],
+    )
+
+    sections = TokenPageSegmenter(max_tokens=4).segment(document)
+
+    assert [section.block_ids for section in sections] == [
+        ["b0"],
+        ["b1"],
+        ["b2"],
+        ["b3"],
+        ["b4"],
+        ["b5"],
+    ]
+    assert [section.metadata["token_count"] for section in sections] == [3, 3, 3, 3, 3, 3]
+    assert [section.page_start for section in sections] == [None, None, None, None, None, None]
+
+
 def test_token_page_segmenter_keeps_oversized_single_block_whole() -> None:
     document = Document(
         doc_id="paper",
@@ -121,6 +145,19 @@ def test_token_page_segmenter_keeps_oversized_single_block_whole() -> None:
 
     assert len(sections) == 1
     assert sections[0].text == "one two three four five six"
+    assert sections[0].metadata["token_count"] == 6
+
+
+def test_token_page_segmenter_keeps_oversized_unpaged_single_block_whole() -> None:
+    document = Document(
+        doc_id="paper",
+        title="A Paper",
+        blocks=[CanonicalBlock(id="b1", type="text", text="one two three four five six")],
+    )
+
+    sections = TokenPageSegmenter(max_tokens=3).segment(document)
+
+    assert [section.block_ids for section in sections] == [["b1"]]
     assert sections[0].metadata["token_count"] == 6
 
 

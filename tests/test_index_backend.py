@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 
 from bookgraph.index import default_index_backend, tokenize
@@ -163,3 +164,55 @@ def test_load_graph_returns_none_for_a_document_not_in_the_catalog(tmp_path: Pat
     )
 
     assert backend.load_graph(workspace, "ddia") is None
+
+
+def _partial_db(workspace: WorkspacePaths, statements: list[str]) -> None:
+    """Create a bookgraph.db with only the given schema statements (no full build)."""
+
+    path = db_path(workspace)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(path)
+    try:
+        for statement in statements:
+            conn.execute(statement)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_partial_db_with_only_doc_catalog_degrades_to_not_indexed(tmp_path: Path) -> None:
+    workspace = WorkspacePaths(tmp_path)
+    _partial_db(
+        workspace,
+        [
+            "CREATE TABLE doc_catalog "
+            "(doc_id TEXT PRIMARY KEY, title TEXT NOT NULL, section_count INTEGER NOT NULL)",
+            "INSERT INTO doc_catalog VALUES ('deep-work', 'Deep Work', 1)",
+        ],
+    )
+    backend = SqliteIndexBackend()
+
+    # A half-built db (missing sections_fts / section_graph) must read as "not
+    # indexed" so the service falls back to a live scan, not raise OperationalError.
+    assert backend.indexed_doc_ids(workspace) == set()
+    assert backend.search(workspace, ["storage"], None, 10) == []
+    assert backend.load_graph(workspace, "deep-work") is None
+
+
+def test_partial_db_missing_section_graph_degrades_to_not_indexed(tmp_path: Path) -> None:
+    workspace = WorkspacePaths(tmp_path)
+    _partial_db(
+        workspace,
+        [
+            "CREATE TABLE doc_catalog "
+            "(doc_id TEXT PRIMARY KEY, title TEXT NOT NULL, section_count INTEGER NOT NULL)",
+            "INSERT INTO doc_catalog VALUES ('deep-work', 'Deep Work', 1)",
+            "CREATE VIRTUAL TABLE sections_fts USING fts5("
+            "doc_id UNINDEXED, section_id UNINDEXED, title, text)",
+        ],
+    )
+    backend = SqliteIndexBackend()
+
+    # sections_fts present but section_graph missing: graph tools must fall back too.
+    assert backend.indexed_doc_ids(workspace) == set()
+    assert backend.load_graph(workspace, "deep-work") is None

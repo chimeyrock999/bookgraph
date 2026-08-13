@@ -22,6 +22,11 @@ from bookgraph.workspace import WorkspacePaths
 
 DB_FILENAME = "bookgraph.db"
 
+# Every table this backend owns. A database missing any of them is treated as
+# "not indexed" (see ``_open_read_only``) so the service degrades to a live scan
+# rather than crashing on a half-built or schema-mismatched file.
+_REQUIRED_TABLES = ("doc_catalog", "sections_fts", "section_graph")
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS doc_catalog (
     doc_id        TEXT PRIMARY KEY,
@@ -107,6 +112,8 @@ class SqliteIndexBackend(IndexBackend):
                 )
                 for row in _search(conn, terms, doc_ids, limit)
             ]
+        except sqlite3.Error:
+            return []  # a db that turns unusable mid-read degrades to "not indexed"
         finally:
             conn.close()
 
@@ -118,6 +125,8 @@ class SqliteIndexBackend(IndexBackend):
             if not _is_indexed(conn, doc_id):
                 return None
             return _load_graph(conn, doc_id)
+        except sqlite3.Error:
+            return None  # a db that turns unusable mid-read degrades to "not indexed"
         finally:
             conn.close()
 
@@ -138,7 +147,11 @@ def _open_read_only(workspace: WorkspacePaths) -> sqlite3.Connection | None:
     try:
         conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
         conn.row_factory = sqlite3.Row
-        conn.execute("SELECT 1 FROM doc_catalog LIMIT 1")  # smoke-test the schema
+        # Every backend-owned table must be present and queryable. A file with a
+        # partial schema (e.g. only ``doc_catalog``) is not usable: the search and
+        # graph reads would raise "no such table" instead of degrading cleanly.
+        for table in _REQUIRED_TABLES:
+            conn.execute(f"SELECT 1 FROM {table} LIMIT 1")  # smoke-test the schema
         return conn
     except sqlite3.Error:
         return None

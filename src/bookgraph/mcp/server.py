@@ -124,7 +124,10 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
         Feeds a reading agent's judgment back into the concept graph. Writes only the
         annotation artifact; the summary shows immediately via get_context, while the
         concepts take effect on the next 'bookgraph index build <doc_id>'. Each concept
-        is {title, slug?, gloss?}; an empty concepts list prunes the section's concepts.
+        is {title, slug?, gloss?}. The concepts argument has three intents: omit it
+        (null) to leave the section's auto concepts untouched (e.g. a summary-only
+        annotation); pass [] to prune the section's concepts; pass a list to replace
+        them with the agent's authoritative set.
         """
 
         try:

@@ -386,6 +386,26 @@ def test_annotated_section_overrides_auto_and_carries_gloss_and_source(tmp_path:
     assert backend.get_concept(workspace, "schema-evolution") is None
 
 
+def test_build_ignores_misplaced_wrong_doc_annotation(tmp_path: Path) -> None:
+    workspace = WorkspacePaths(tmp_path)
+    backend = SqliteIndexBackend()
+    sections = [_section("ddia.a", "Schema Evolution", "Schema Evolution matters", doc_id="ddia")]
+
+    # A misplaced file under ddia/ whose payload claims doc_id="other" must not
+    # override or prune ddia's real Tier-1 concepts on rebuild.
+    write_annotation(
+        build_annotation("other", "ddia.a", [AnnotatedConcept(slug="", title="Wrong Doc")]),
+        annotation_path(workspace.annotations_root, "ddia", "ddia.a"),
+    )
+
+    backend.build_document(workspace, "ddia", "DDIA", sections)
+
+    concepts = backend.section_concepts(workspace, "ddia", "ddia.a")
+    assert [c.source for c in concepts] == ["auto"] * len(concepts)
+    assert concepts  # the auto concepts survived
+    assert backend.get_concept(workspace, "wrong-doc") is None
+
+
 def test_empty_annotation_prunes_the_sections_concepts(tmp_path: Path) -> None:
     workspace = WorkspacePaths(tmp_path)
     backend = SqliteIndexBackend()

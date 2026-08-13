@@ -370,9 +370,14 @@ def _build_document(
         (edge.slug, edge.title, doc_id, edge.section_id, edge.gloss, edge.source)
         for edge in merge_section_concepts(sections, annotations)
     ]
+    # Scope stored summaries to sections that still exist, mirroring concept_rows:
+    # a stale annotation left over from a re-segment (its section id is gone) must not
+    # keep re-inserting a dead section_annotations row on every rebuild.
+    section_ids = {section.id for section in sections}
     annotation_rows = [
         (doc_id, annotation.section_id, annotation.summary, annotation.model, annotation.created_at)
         for annotation in annotations.values()
+        if annotation.section_id in section_ids
     ]
     with conn:  # one transaction: BEGIN/COMMIT, or ROLLBACK on error
         conn.execute("DELETE FROM doc_catalog WHERE doc_id = ?", (doc_id,))

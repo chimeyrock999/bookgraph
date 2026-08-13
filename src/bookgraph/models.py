@@ -78,16 +78,22 @@ class AnnotatedConcept(BaseModel):
 class SectionAnnotation(BaseModel):
     """A reading agent's Tier-2 annotation of one section.
 
-    The authoritative concept edge set for its section (see
-    ``.docs/cli/annotations.md``): on the next ``index build`` it overrides the
-    deterministic Tier-1 extraction, and an empty ``concepts`` list prunes that
-    section's concept mentions. ``summary`` is the agent's explanation of the section,
-    surfaced immediately by the MCP ``get_context`` tool.
+    ``concepts`` has three states that the merge (see ``docs/cli/annotations.md``)
+    treats distinctly on the next ``index build``:
+
+    - ``None`` — the agent expressed **no opinion** on concepts (e.g. a summary-only
+      annotation); the section keeps its deterministic Tier-1 concepts.
+    - ``[]`` — a **deliberate prune**: the section's concept mentions are zeroed out
+      (the tokenizer-false-positive fix).
+    - a non-empty list — the **authoritative** concept edge set, replacing Tier-1.
+
+    ``summary`` is the agent's explanation of the section, surfaced immediately by the
+    MCP ``get_context`` tool.
     """
 
     doc_id: str
     section_id: str
-    concepts: list[AnnotatedConcept] = Field(default_factory=list)
+    concepts: list[AnnotatedConcept] | None = None
     summary: str = ""
     model: str | None = None
     created_at: str | None = None

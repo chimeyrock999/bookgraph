@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 from collections import Counter
+from datetime import UTC, datetime
 from pathlib import Path
 
 from pydantic import BaseModel, Field
@@ -598,7 +599,13 @@ def annotate_section(
     artifact (``annotations/<doc_id>/<section_id>.json``). It is **deferred**: it does
     not touch the index — the summary shows immediately via ``get_context``, while the
     concept edges (and their prune of Tier-1 false positives) take effect on the next
-    ``bookgraph index build <doc_id>``. See ``.docs/cli/annotations.md``.
+    ``bookgraph index build <doc_id>``. See ``docs/cli/annotations.md``.
+
+    ``concepts`` has three intents that the next build treats distinctly: **omit it**
+    (``None``) to leave the section's Tier-1 concepts untouched (e.g. a summary-only
+    annotation); pass ``[]`` to **prune** the section's concepts (the tokenizer-false-
+    positive fix); pass a list to make it the **authoritative** concept edge set,
+    replacing Tier-1.
 
     ``doc_id`` is validated as a filesystem-safe slug; ``section_id`` is validated by
     **membership** — it must be a real section of the document (its dotted
@@ -610,13 +617,25 @@ def annotate_section(
     # Membership check: raises SectionNotFoundError for an unknown or traversal id.
     get_section(workspace, resolved_doc_id, section_id)
 
-    inputs = [
-        AnnotatedConcept(slug=concept.slug, title=concept.title, gloss=concept.gloss)
-        for concept in (concepts or [])
-    ]
+    # None (concepts omitted) is passed through as "no concept opinion → keep the
+    # section's auto concepts"; an explicit list — including [] — is the agent taking
+    # over the section (empty = deliberate prune). Only a summary-only call omits it.
+    inputs = (
+        None
+        if concepts is None
+        else [
+            AnnotatedConcept(slug=concept.slug, title=concept.title, gloss=concept.gloss)
+            for concept in concepts
+        ]
+    )
     try:
         annotation = build_annotation(
-            resolved_doc_id, section_id, inputs, summary=summary, model=model
+            resolved_doc_id,
+            section_id,
+            inputs,
+            summary=summary,
+            model=model,
+            created_at=datetime.now(UTC).isoformat(),
         )
     except ValueError as exc:
         raise ReadingServiceError(str(exc)) from exc
@@ -627,7 +646,7 @@ def annotate_section(
     return AnnotationResult(
         doc_id=annotation.doc_id,
         section_id=annotation.section_id,
-        concept_count=len(annotation.concepts),
+        concept_count=len(annotation.concepts or []),
         path=str(path),
     )
 

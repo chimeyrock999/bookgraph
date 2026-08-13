@@ -127,6 +127,29 @@ def test_read_annotations_for_doc_skips_corrupt_files(tmp_path: Path) -> None:
     assert set(annotations) == {"ddia.a"}
 
 
+def test_read_annotations_for_doc_skips_wrong_doc_id_payload(tmp_path: Path) -> None:
+    # A misplaced file under ddia/ whose payload claims a different doc_id must not
+    # be applied when rebuilding ddia (it could otherwise override/prune ddia's
+    # Tier-1 concepts via the section_id key).
+    write_annotation(
+        build_annotation("other", "ddia.a", [_concept("Wrong Doc Concept")]),
+        annotation_path(tmp_path, "ddia", "ddia.a"),
+    )
+
+    assert read_annotations_for_doc(tmp_path, "ddia") == {}
+
+
+def test_read_annotations_for_doc_skips_section_id_filename_mismatch(tmp_path: Path) -> None:
+    # A file whose payload targets a different section than its filename is misplaced
+    # and skipped, so a file cannot masquerade as another section.
+    write_annotation(
+        build_annotation("ddia", "ddia.b", [_concept("Mismatch")]),
+        annotation_path(tmp_path, "ddia", "ddia.a"),
+    )
+
+    assert read_annotations_for_doc(tmp_path, "ddia") == {}
+
+
 def test_merge_annotated_section_wins_and_carries_gloss() -> None:
     sections = [_section("ddia.a", "Schema Evolution", text="Schema Evolution")]
     annotations = {

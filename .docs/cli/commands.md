@@ -403,12 +403,16 @@ reading_plan: <workspace>/reading_plans/<plan_id>.json
 
 **Status:** Implemented.
 
-Build the persistent indexes that back MCP query tools, deriving them per document
-from the sections manifest:
+Build the persistent index that backs MCP query tools, deriving it per document
+from the sections manifest into one workspace-wide SQLite database
+(`indexes/bookgraph.db`):
 
-- a **search** inverted index (`indexes/sections/<doc_id>.json`) backing `search`;
-- a **structural graph** (`indexes/graph/<doc_id>.json`) — hierarchy + sequence
-  edges — backing the graph/context tools.
+- a **search** full-text index (FTS5 `sections_fts`) backing `search`;
+- a **structural graph** (`section_graph`) — hierarchy + sequence edges — backing
+  the graph/context tools;
+- a **`doc_catalog`** row marking each document as indexed.
+
+See `.docs/cli/index.md` for the full schema and query contract.
 
 ```bash
 bookgraph index build /path/to/workspace                 # index every segmented document
@@ -423,11 +427,11 @@ bookgraph index build /path/to/workspace --doc-id ddia   # index one document
 
 ### Writes
 
-- `indexes/sections/<doc_id>.json` per document — the inverted search index.
-- `indexes/graph/<doc_id>.json` per document — the section graph.
-
-Both are derived from the same `sections.jsonl`, fully regenerable, and safe to
-delete and rebuild (see `.docs/cli/artifacts.md`).
+- `indexes/bookgraph.db` — the workspace-wide SQLite index. Each document is
+  (re)built idempotently and atomically into `doc_catalog` + `sections_fts` +
+  `section_graph` (delete-then-insert per `doc_id`); other documents' rows are
+  never touched. Fully regenerable from `sections.jsonl` and safe to delete and
+  rebuild (see `.docs/cli/index.md`).
 
 ### Must not do
 
@@ -436,8 +440,7 @@ delete and rebuild (see `.docs/cli/artifacts.md`).
 
 ### Prints
 
-- `doc_id`, `sections`, `terms`, and the written `index` / `graph` paths per
-  document.
+- `doc_id`, `sections`, and the written `db` path per document.
 
 ### Errors
 
@@ -473,9 +476,10 @@ telling the user to `uv sync --extra mcp`.
 - `get_section(doc_id, section_id)` → one section's full reading content.
 - `mark_read(plan_id, section_id=None)` → mark a section read (defaults to the
   next unread one) and persist the plan; returns `completed`/`total`/`done`.
-- `search(query, doc_id=None, limit=10)` → sections ranked by query-term
-  frequency in title and text, with a short snippet. `doc_id` scopes to one
-  document; omit it to search every segmented document.
+- `search(query, doc_id=None, limit=10)` → sections ranked by FTS5 `bm25` over
+  title and text, with a short snippet. `doc_id` scopes to one document; omit it
+  to search across every indexed document (cross-document search), each hit
+  carrying its `doc_id`.
 - `get_outline(doc_id)` → the document's section outline (heading hierarchy) in
   reading order: one node per section with `title`, `level`, `parent_id`, and
   `child_ids`.
@@ -487,9 +491,8 @@ telling the user to `uv sync --extra mcp`.
 
 ### Reads / writes
 
-- Reads `indexes/sections/<doc_id>.json` and `indexes/graph/<doc_id>.json` (each
-  when built) and `sources/sections/<doc_id>/sections.jsonl`, plus
-  `reading_plans/<plan_id>.json`.
+- Reads `indexes/bookgraph.db` (when built) and
+  `sources/sections/<doc_id>/sections.jsonl`, plus `reading_plans/<plan_id>.json`.
 - `mark_read` writes `reading_plans/<plan_id>.json` (same contract as
   `bookgraph reading-plan mark-read`). No other tool writes.
 
@@ -498,16 +501,17 @@ filesystem-safe slugs before they are used as path components; a traversal value
 (e.g. `../secret`) is rejected before any file is read or written. `section_id`
 is only ever matched against loaded plan/section data, never used as a raw path.
 
-> `search` uses the persisted inverted index under `indexes/sections/<doc_id>.json`
-> (built by `bookgraph index build`) when present, and falls back to a live scan of
-> `sections.jsonl` for documents that have not been indexed yet. Both paths share
-> the same tokenizer, so results are identical whether or not an index exists.
+> `search` uses the FTS5 index in `indexes/bookgraph.db` (built by `bookgraph
+> index build`) for documents present in `doc_catalog`, and falls back to a live
+> scan of `sections.jsonl` for documents not yet indexed. The fallback keeps the
+> legacy term-frequency scorer, so ranking is not byte-identical to `bm25`, but
+> results stay correct whether or not an index exists.
 >
-> The graph tools (`get_outline` / `get_related` / `get_context`) likewise use the
-> persisted graph under `indexes/graph/<doc_id>.json` when present and rebuild it
-> from `sections.jsonl` otherwise, so they work before `index build` has run. A
-> graph file whose stored `doc_id` does not match its filename is treated as stale
-> and rebuilt from the manifest.
+> The graph tools (`get_outline` / `get_related` / `get_context`) likewise read
+> the `section_graph` table when the document is in `doc_catalog`, and rebuild the
+> graph from `sections.jsonl` otherwise, so they work before `index build` has run.
+> A document absent from `doc_catalog` is always treated as unindexed. See
+> `.docs/cli/index.md`.
 
 ## Book-level parse / wiki compile contracts
 

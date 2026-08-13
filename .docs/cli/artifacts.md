@@ -259,85 +259,19 @@ titles with colons or quotes cannot corrupt the frontmatter.
 > read this manifest and emit compiled output under `wiki/`, not rewrite section
 > source artifacts.
 
-## `indexes/sections/<doc_id>.json`
+## `indexes/bookgraph.db`
 
-Owner: the index stage (`bookgraph index build` command /
-`bookgraph.indexes`).
+Owner: the index stage (`bookgraph index build` command / `bookgraph.indexes`).
 
-Per-document inverted index that backs MCP `search`. Mirrors
-`bookgraph.indexes.SectionIndex`:
+The search index and the structural graph are compiled into **one workspace-wide
+SQLite database** (`sections_fts` FTS5 + `section_graph` + `doc_catalog`), not
+per-document JSON. It is a derived, fully rebuildable artifact — the canonical
+source of truth stays in `sources/sections/<doc_id>/`. See **`index.md`** for the
+full schema, build, query, and fallback contract.
 
-```json
-{
-  "doc_id": "ddia",
-  "sections": [
-    {"id": "ddia.chapter-3-storage", "title": "Chapter 3. Storage", "text": "Opening paragraph."}
-  ],
-  "postings": {
-    "storage": {"ddia.chapter-3-storage": 2},
-    "opening": {"ddia.chapter-3-storage": 1}
-  }
-}
-```
-
-### Field rules
-
-- `doc_id`: parent document id; matches the `sources/sections/<doc_id>/` folder
-  and the `<doc_id>.json` filename.
-- `sections`: one entry per indexed section, in reading order, holding the `id`,
-  `title`, and `text` — a denormalised copy carried purely so `search` can build
-  result snippets without re-reading `sections.jsonl`.
-- `postings`: `token -> {section_id: term frequency}`. Tokens are lowercased
-  maximal `[a-z0-9]+` runs from each section's `title` + `text`; the same
-  tokenizer scores the live-scan fallback, so an unindexed document ranks
-  identically.
-
-Fully regenerable from `sections.jsonl`; safe to delete and rebuild. Rebuild
-after re-segmenting a document so the denormalised text stays in sync.
-
-## `indexes/graph/<doc_id>.json`
-
-Owner: the index stage (`bookgraph index build` command / `bookgraph.graph`).
-
-Per-document structural graph that backs the graph/context MCP tools. Mirrors
-`bookgraph.graph.SectionGraph`:
-
-```json
-{
-  "doc_id": "ddia",
-  "nodes": [
-    {
-      "id": "ddia.part-i",
-      "title": "Part I",
-      "level": 1,
-      "heading_path": ["Part I"],
-      "parent_id": null,
-      "prev_id": null,
-      "next_id": "ddia.chapter-1",
-      "child_ids": ["ddia.chapter-1"]
-    }
-  ]
-}
-```
-
-### Field rules
-
-- `doc_id`: parent document id; matches the `sources/sections/<doc_id>/` folder
-  and the `<doc_id>.json` filename.
-- `nodes`: one entry per section, in reading order.
-- `parent_id`: the nearest preceding section with a smaller heading `level` (the
-  containing chapter/part), or `null` for a top-level section. Derived from
-  `level` via a reading-order stack, so a jump from level 1 to level 3 still
-  nests under the nearest shallower section.
-- `child_ids`: the inverse of `parent_id` — direct children in reading order.
-- `prev_id` / `next_id`: linear reading-order neighbours, carried through from the
-  sections manifest; a neighbour id not present in this document is dropped to
-  `null`.
-
-Two edge kinds are represented: **hierarchy** (`parent_id` / `child_ids`) and
-**sequence** (`prev_id` / `next_id`). Fully regenerable from `sections.jsonl`;
-built from the same manifest as, and alongside, the search index. Rebuild after
-re-segmenting a document.
+> Supersedes the earlier `indexes/sections/<doc_id>.json` (inverted index) and
+> `indexes/graph/<doc_id>.json` (structural graph) files, which are removed once a
+> document is built into the database.
 
 ## `reading_plans/<plan_id>.json`
 

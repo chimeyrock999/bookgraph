@@ -5,13 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from bookgraph.indexes import (
-    IndexedSection,
-    SectionIndex,
-    build_section_index,
-    index_path,
-    write_index,
-)
+from bookgraph.index.sqlite import SqliteIndexBackend, db_path
 from bookgraph.mcp import service
 from bookgraph.mcp.service import (
     InvalidIdError,
@@ -24,6 +18,13 @@ from bookgraph.models import ReadingPlan, Section
 from bookgraph.reading_plans import write_reading_plan
 from bookgraph.sections import read_sections, write_sections
 from bookgraph.workspace import WorkspacePaths
+
+
+def _build_index(workspace: WorkspacePaths, doc_id: str) -> None:
+    """Index a segmented document exactly as ``bookgraph index build`` would."""
+
+    sections = read_sections(workspace.sources_sections / doc_id / "sections.jsonl")
+    SqliteIndexBackend().build_document(workspace, doc_id, doc_id, sections)
 
 
 def _section(section_id: str, title: str, text: str = "Body.") -> Section:
@@ -153,13 +154,15 @@ def test_mark_read_raises_for_unknown_section(tmp_path: Path) -> None:
         service.mark_read(workspace, "daily", "deep-work.ghost")
 
 
-def test_search_ranks_by_term_frequency(tmp_path: Path) -> None:
+def test_search_scan_fallback_ranks_by_term_frequency(tmp_path: Path) -> None:
+    # No index built: search scores via the live-scan term-frequency fallback.
     workspace = _workspace(
         tmp_path,
         _section("deep-work.a", "Storage engines", "storage storage storage index"),
         _section("deep-work.b", "Replication", "leaders and followers"),
         _section("deep-work.c", "Indexes", "an index on storage"),
     )
+    assert not db_path(workspace).exists()
 
     result = service.search_sections(workspace, "storage")
 
@@ -214,14 +217,14 @@ def test_search_uses_persisted_index_when_present(tmp_path: Path) -> None:
         _section("deep-work.a", "Storage engines", "storage storage storage index"),
         _section("deep-work.c", "Indexes", "an index on storage"),
     )
-    sections = read_sections(workspace.sources_sections / "deep-work" / "sections.jsonl")
-    write_index(build_section_index("deep-work", sections), index_path(workspace, "deep-work"))
+    _build_index(workspace, "deep-work")
+    assert db_path(workspace).is_file()
 
     result = service.search_sections(workspace, "storage")
 
-    # Same ranking as the scan fallback — the index and scan share tokenization.
+    # FTS5 bm25 ranks the storage-heavy section first, same order as the scan.
     assert [hit.section_id for hit in result.hits] == ["deep-work.a", "deep-work.c"]
-    assert result.hits[0].score == 4
+    assert result.hits[0].score > result.hits[1].score
     assert "storage" in result.hits[0].snippet.lower()
 
 
@@ -230,34 +233,41 @@ def test_search_falls_back_to_scan_for_a_corrupt_index(tmp_path: Path) -> None:
         tmp_path,
         _section("deep-work.a", "Storage", "storage text"),
     )
-    path = index_path(workspace, "deep-work")
+    path = db_path(workspace)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("{ not valid json")
+    path.write_bytes(b"not a sqlite database")
 
     result = service.search_sections(workspace, "storage")
 
     assert [hit.section_id for hit in result.hits] == ["deep-work.a"]
 
 
-def test_search_ignores_index_whose_doc_id_does_not_match_its_filename(tmp_path: Path) -> None:
-    """A schema-valid index carrying another document's doc_id is stale: scan instead."""
+def test_search_mixes_indexed_and_unindexed_documents(tmp_path: Path) -> None:
+    """Cross-document search covers indexed docs (via the DB) and unindexed ones."""
 
     workspace = _workspace(
         tmp_path,
-        _section("deep-work.a", "Focus", "needle in the real section"),
+        _section("deep-work.a", "Storage", "storage text"),
     )
-    # An index file at deep-work.json that claims to be a different document.
-    mismatched = SectionIndex(
-        doc_id="other-doc",
-        sections=[IndexedSection(id="other.x", title="Wrong", text="needle")],
-        postings={"needle": {"other.x": 1}},
+    write_sections(
+        [
+            Section(
+                id="ddia.x",
+                doc_id="ddia",
+                title="Storage",
+                level=1,
+                heading_path=["Storage"],
+                text="storage text",
+            )
+        ],
+        workspace.sources_sections / "ddia",
     )
-    write_index(mismatched, index_path(workspace, "deep-work"))
+    # Only 'deep-work' is indexed; 'ddia' is served by the scan fallback.
+    _build_index(workspace, "deep-work")
 
-    result = service.search_sections(workspace, "needle", doc_id="deep-work")
+    everything = service.search_sections(workspace, "storage")
 
-    # The mismatched index is discarded; only the authoritative scan hit remains.
-    assert [(hit.doc_id, hit.section_id) for hit in result.hits] == [("deep-work", "deep-work.a")]
+    assert sorted(hit.doc_id for hit in everything.hits) == ["ddia", "deep-work"]
 
 
 def test_search_rejects_empty_query(tmp_path: Path) -> None:

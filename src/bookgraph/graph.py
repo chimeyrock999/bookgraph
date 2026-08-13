@@ -1,8 +1,8 @@
-"""Persistent section graph backing the graph/context MCP tools.
+"""Section graph model + builder backing the graph/context MCP tools.
 
 The segment stage writes ``sources/sections/<doc_id>/sections.jsonl`` in reading
-order; this module derives a per-document graph under
-``indexes/graph/<doc_id>.json`` capturing how sections relate structurally:
+order; :func:`build_section_graph` derives from it how sections relate
+structurally:
 
 - **hierarchy** — each section's parent is the nearest preceding section with a
   smaller heading ``level`` (so a chapter parents its subsections), with the
@@ -11,19 +11,16 @@ order; this module derives a per-document graph under
   carried straight through from the sections manifest.
 
 The graph is fully regenerable from the sections manifest and depends only on it
-(never on the compiled wiki), so it can be built the moment a document is
-segmented. It stores each section's ``title``/``level``/``heading_path`` so the
-graph/context tools can render an outline without re-reading the manifest.
+(never on the compiled wiki). It is persisted by the index stage (see
+:mod:`bookgraph.index`) and rebuilt on demand from the manifest when a document
+has not been indexed yet.
 """
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from pydantic import BaseModel, Field
 
 from bookgraph.models import Section
-from bookgraph.workspace import WorkspacePaths
 
 
 class SectionNode(BaseModel):
@@ -44,12 +41,6 @@ class SectionGraph(BaseModel):
 
     doc_id: str
     nodes: list[SectionNode] = Field(default_factory=list)
-
-
-def graph_path(workspace: WorkspacePaths, doc_id: str) -> Path:
-    """Canonical location of a document's section graph."""
-
-    return workspace.indexes_root / "graph" / f"{doc_id}.json"
 
 
 def build_section_graph(doc_id: str, sections: list[Section]) -> SectionGraph:
@@ -95,17 +86,3 @@ def build_section_graph(doc_id: str, sections: list[Section]) -> SectionGraph:
             node.next_id = None
 
     return SectionGraph(doc_id=doc_id, nodes=nodes)
-
-
-def write_graph(graph: SectionGraph, path: Path) -> Path:
-    """Persist a section graph to ``path``."""
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(graph.model_dump_json(indent=2) + "\n")
-    return path
-
-
-def read_graph(path: Path) -> SectionGraph:
-    """Load a section graph written by :func:`write_graph`."""
-
-    return SectionGraph.model_validate_json(path.read_text())

@@ -1,11 +1,16 @@
 # Index contract — `indexes/bookgraph.db`
 
-Owner: the index stage (`bookgraph index build` command / `bookgraph.indexes`).
+Owner: the index stage (`bookgraph index build` command / `bookgraph.index`).
 
 The index stage compiles the file artifacts under `sources/sections/<doc_id>/`
 into **one workspace-wide SQLite database** at `indexes/bookgraph.db`. It backs
 the MCP `search` tool and the graph/context tools (`get_outline`, `get_related`,
 `get_context`).
+
+The storage engine is pluggable behind an `IndexBackend` port (in
+`bookgraph.index`); SQLite/FTS5 is the default backend, and the schema below is
+its contract. A different engine is added by implementing the port and
+registering it — the CLI and MCP service depend only on the interface.
 
 The database is a **derived, fully rebuildable** artifact — never a source of
 truth. The canonical artifacts remain the files `sources/parsed/<doc_id>/document.json`,
@@ -133,8 +138,8 @@ Query tools preserve the existing **index-or-scan** behaviour: if
 `indexes/bookgraph.db` is missing, or the requested `doc_id` has no row in
 `doc_catalog`, the tool falls back to a live scan/build from that document's
 `sections.jsonl`. Results stay correct; only ranking fidelity and latency differ
-(the live-scan path keeps the legacy lowercased `[a-z0-9]+` term-frequency scorer,
-which will not rank byte-identically to FTS5 `bm25`).
+(the live-scan path uses a Unicode-aware, diacritic-folding term-frequency scorer,
+which matches the same terms as FTS5 but will not rank byte-identically to `bm25`).
 
 ## Concurrency
 

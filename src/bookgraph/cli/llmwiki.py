@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shlex
 import shutil
 import subprocess
 from pathlib import Path
@@ -36,15 +37,17 @@ def llmwiki_serve(
         raise typer.BadParameter(f"Workspace not found: {workspace}. Run 'bookgraph init' first.")
 
     wiki_dir = WorkspacePaths(workspace).wiki_root
-    if not wiki_dir.is_dir():
+    # `bookgraph init` mkdir's the empty wiki/ skeleton, so directory existence is
+    # not enough — require actual compiled content (any .md page) before serving.
+    if not any(wiki_dir.rglob("*.md")):
         raise typer.BadParameter(
-            f"Wiki directory not found: {wiki_dir}. Compile a wiki first, e.g. "
+            f"No compiled wiki found under {wiki_dir}. Compile a wiki first, e.g. "
             "'bookgraph wiki compile <workspace> <doc_id>'."
         )
 
     command = ["llmwiki", "serve", str(wiki_dir)]
     if print_command:
-        typer.echo(" ".join(command))
+        typer.echo(shlex.join(command))
         return
 
     if shutil.which("llmwiki") is None:

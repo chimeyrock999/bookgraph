@@ -50,11 +50,11 @@ flowchart TD
 
     subgraph W["Wiki backend plugins — bookgraph wiki compile"]
         direction LR
-        W1["llmwiki staging<br/>(placeholder)"]:::planned
+        W1["llmwiki staging"]
         W2["markdown graph backend<br/>(planned)"]:::planned
     end
 
-    W --> WIKI["Linked wiki<br/>wiki/ (planned)"]:::planned
+    W --> WIKI["Wiki output<br/>wiki/books/ · linked concepts (planned)"]:::planned
 
     IDX --> MCP
     SEC --> MCP

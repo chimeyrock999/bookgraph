@@ -13,8 +13,8 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
-from bookgraph.graph import SectionGraph, build_section_graph, graph_path, read_graph
-from bookgraph.indexes import SectionIndex, index_path, read_index, tokenize
+from bookgraph.graph import SectionGraph, build_section_graph
+from bookgraph.index import default_index_backend, tokenize
 from bookgraph.models import ReadingPlan, Section
 from bookgraph.reading_plans import mark_section_read, next_sections, read_reading_plan
 from bookgraph.sections import read_sections
@@ -85,7 +85,7 @@ class SearchHit(BaseModel):
     section_id: str
     doc_id: str
     title: str
-    score: int
+    score: float
     snippet: str
 
 
@@ -271,30 +271,9 @@ def _snippet(text: str, terms: list[str], width: int = 160) -> str:
     return prefix + excerpt + suffix
 
 
-def _hits_from_index(index: SectionIndex, terms: list[str]) -> list[SearchHit]:
-    by_id = {section.id: section for section in index.sections}
-    scores: dict[str, int] = {}
-    for term in terms:
-        for section_id, freq in index.postings.get(term, {}).items():
-            scores[section_id] = scores.get(section_id, 0) + freq
-    hits: list[SearchHit] = []
-    for section_id, score in scores.items():
-        indexed = by_id.get(section_id)
-        if indexed is None or score <= 0:
-            continue
-        hits.append(
-            SearchHit(
-                section_id=section_id,
-                doc_id=index.doc_id,
-                title=indexed.title,
-                score=score,
-                snippet=_snippet(indexed.text, terms),
-            )
-        )
-    return hits
-
-
 def _hits_from_sections(sections: list[Section], terms: list[str]) -> list[SearchHit]:
+    """Score sections by a live scan — the fallback for unindexed documents."""
+
     hits: list[SearchHit] = []
     for section in sections:
         counts = Counter(tokenize(f"{section.title}\n{section.text}"))
@@ -305,30 +284,28 @@ def _hits_from_sections(sections: list[Section], terms: list[str]) -> list[Searc
                     section_id=section.id,
                     doc_id=section.doc_id,
                     title=section.title,
-                    score=score,
+                    score=float(score),
                     snippet=_snippet(section.text, terms),
                 )
             )
     return hits
 
 
-def _hits_for_doc(workspace: WorkspacePaths, doc_id: str, terms: list[str]) -> list[SearchHit]:
-    """Score one document, preferring its persisted index over a live scan."""
+def _segmented_doc_ids(workspace: WorkspacePaths) -> list[str]:
+    """Slug-shaped document directories that have a sections manifest.
 
-    path = index_path(workspace, doc_id)
-    if path.is_file():
-        try:
-            index = read_index(path)
-        except (OSError, ValueError):
-            index = None
-        # Only trust an index whose stored doc_id matches the file it was loaded
-        # from. A corrupt file, or a schema-valid one carrying another document's
-        # doc_id (a stale/misplaced index), would otherwise return hits attributed
-        # to the wrong document and violate a caller's doc_id scope — so both cases
-        # fall back to the authoritative sections scan.
-        if index is not None and index.doc_id == doc_id:
-            return _hits_from_index(index, terms)
-    return _hits_from_sections(_load_doc_sections(workspace, doc_id), terms)
+    Enumerated directory names are workspace-internal, not client input, but only
+    slug-shaped ones can have been produced by ``segment``; skipping the rest keeps
+    the per-doc id validation in ``_load_doc_sections`` from aborting a
+    workspace-wide search on a stray directory.
+    """
+
+    root = workspace.sources_sections
+    return sorted(
+        child.name
+        for child in (root.iterdir() if root.is_dir() else [])
+        if (child / "sections.jsonl").is_file() and ID_PATTERN.fullmatch(child.name)
+    )
 
 
 def search_sections(
@@ -337,13 +314,14 @@ def search_sections(
     doc_id: str | None = None,
     limit: int = 10,
 ) -> SearchResult:
-    """Rank sections by how often the query terms appear in title and text.
+    """Rank sections by relevance of the query terms in title and text.
 
-    Uses the persisted inverted index under ``indexes/sections/<doc_id>.json``
-    when present (built by ``bookgraph index build``), and falls back to a live
-    scan of ``sources/sections/<doc_id>/sections.jsonl`` for documents that have
-    not been indexed yet. Pass ``doc_id`` to search a single document, or omit it
-    to search every segmented document in the workspace.
+    Uses the persisted index (built by ``bookgraph index build``) for indexed
+    documents via the :class:`~bookgraph.index.IndexBackend`, and falls back to a
+    live scan of ``sources/sections/<doc_id>/sections.jsonl`` for documents not
+    yet indexed. Pass ``doc_id`` to search a single document, or omit it to search
+    across every indexed/segmented document in the workspace (each hit carries its
+    ``doc_id``).
     """
 
     terms = tokenize(query)
@@ -352,26 +330,35 @@ def search_sections(
     if limit < 1:
         raise ReadingServiceError("limit must be at least 1")
 
+    scoped = doc_id is not None
     if doc_id is not None:
-        doc_ids = [_validate_id(doc_id, "doc_id")]
+        targets = [_validate_id(doc_id, "doc_id")]
     else:
-        # Enumerated directory names are workspace-internal, not client input, but
-        # only slug-shaped ones can have been produced by ``segment``; skipping the
-        # rest keeps the per-doc id validation in ``_load_doc_sections`` from
-        # aborting a workspace-wide search on a stray directory.
-        root = workspace.sources_sections
-        doc_ids = sorted(
-            child.name
-            for child in (root.iterdir() if root.is_dir() else [])
-            if (child / "sections.jsonl").is_file() and ID_PATTERN.fullmatch(child.name)
-        )
+        targets = _segmented_doc_ids(workspace)
+
+    backend = default_index_backend()
+    indexed = backend.indexed_doc_ids(workspace)
+    db_targets = [current for current in targets if current in indexed]
+    scan_targets = [current for current in targets if current not in indexed]
 
     hits: list[SearchHit] = []
-    for current_doc in doc_ids:
+    if db_targets:
+        for hit in backend.search(workspace, terms, db_targets, limit):
+            hits.append(
+                SearchHit(
+                    section_id=hit.section_id,
+                    doc_id=hit.doc_id,
+                    title=hit.title,
+                    score=hit.score,
+                    snippet=_snippet(hit.text, terms),
+                )
+            )
+
+    for current_doc in scan_targets:
         try:
-            hits.extend(_hits_for_doc(workspace, current_doc, terms))
+            hits.extend(_hits_from_sections(_load_doc_sections(workspace, current_doc), terms))
         except SectionsNotFoundError:
-            if doc_id is not None:
+            if scoped:
                 raise
 
     hits.sort(key=lambda hit: (-hit.score, hit.doc_id, hit.section_id))
@@ -381,22 +368,16 @@ def search_sections(
 def _load_graph(workspace: WorkspacePaths, doc_id: str) -> SectionGraph:
     """Load a document's section graph, preferring the persisted index.
 
-    Uses ``indexes/graph/<doc_id>.json`` when present and self-consistent, and
-    otherwise rebuilds the graph from ``sections.jsonl`` — so the graph/context
-    tools work before ``bookgraph index build`` has run, and a stale/corrupt graph
-    file degrades to the authoritative sections manifest rather than serving wrong
-    structure (mirrors :func:`_hits_for_doc`).
+    Uses the :class:`~bookgraph.index.IndexBackend` when the document is indexed,
+    and otherwise rebuilds the graph from ``sections.jsonl`` — so the graph/context
+    tools work before ``bookgraph index build`` has run, and a missing/corrupt
+    index degrades to the authoritative sections manifest.
     """
 
     _validate_id(doc_id, "doc_id")
-    path = graph_path(workspace, doc_id)
-    if path.is_file():
-        try:
-            graph = read_graph(path)
-        except (OSError, ValueError):
-            graph = None
-        if graph is not None and graph.doc_id == doc_id:
-            return graph
+    graph = default_index_backend().load_graph(workspace, doc_id)
+    if graph is not None:
+        return graph
     return build_section_graph(doc_id, _load_doc_sections(workspace, doc_id))
 
 

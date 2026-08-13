@@ -44,7 +44,7 @@ flowchart TD
 
     subgraph IDX["Index stage — bookgraph index build"]
         direction LR
-        IDX1["SQLite FTS/search index<br/>indexes/bookgraph.db"]
+        IDX1["FTS5 search<br/>indexes/bookgraph.db"]
         IDX2["section graph<br/>indexes/bookgraph.db"]
     end
 
@@ -88,8 +88,10 @@ src/bookgraph/
   sections.py               # sections.jsonl + <section_id>.md reader/writer
   pdf_metadata.py           # cheap PDF metadata/bookmark inspection
   reading_plans.py          # reading plan store (create/next/mark-read core)
-  indexes.py                # SQLite FTS index build/read/write core
-  graph.py                  # section graph: hierarchy + sequence edges
+  graph.py                  # section graph model + builder (hierarchy + sequence)
+  index/
+    base.py                 # IndexBackend port + IndexSearchHit + tokenizer
+    sqlite.py               # default backend: SQLite/FTS5 (indexes/bookgraph.db)
   parsers/
     mineru.py               # MinerU *_middle.json adapter
     markdown.py             # Markdown -> canonical blocks (shared by Markdown-producing parsers)
@@ -217,13 +219,16 @@ Implemented:
   (`get_next_section`, `get_section`, `mark_read`), `search`, and graph/context
   tools (`get_outline`, `get_related`, `get_context`) over the sections,
   reading-plan, and index artifacts
-- SQLite FTS/search index (`bookgraph index build`) under `indexes/bookgraph.db`
-  backing MCP `search`, with a live-scan fallback for unindexed documents
-- Section graph (`bookgraph index build`) under `indexes/bookgraph.db` capturing
-  heading hierarchy + reading sequence, backing the graph/context MCP tools,
-  with an on-the-fly rebuild from sections when unindexed
+- SQLite index (`bookgraph index build`) in `indexes/bookgraph.db` behind a
+  pluggable `IndexBackend` port (default: SQLite/FTS5): an FTS5 `bm25` search
+  table backing MCP `search` (with cross-document search and a live-scan fallback
+  for unindexed documents) and a section-graph table capturing heading hierarchy
+  + reading sequence, backing the graph/context tools (rebuilt from sections when
+  unindexed)
 
 Planned next:
 
 - Cross-document / semantic edges in the section graph (beyond hierarchy +
   sequence) to widen graph/context results
+- Alternative `IndexBackend` implementations (e.g. a vector/embedding store) via
+  the same port

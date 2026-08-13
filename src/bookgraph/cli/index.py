@@ -7,8 +7,8 @@ import typer
 
 from bookgraph.cli._app import index_app
 from bookgraph.cli._shared import _validate_id
-from bookgraph.graph import build_section_graph, graph_path, write_graph
-from bookgraph.indexes import build_section_index, index_path, write_index
+from bookgraph.documents import read_document
+from bookgraph.index import IndexUnavailableError, default_index_backend
 from bookgraph.sections import read_sections
 from bookgraph.utils import ID_PATTERN
 from bookgraph.workspace import WorkspacePaths
@@ -23,6 +23,18 @@ def _segmented_doc_ids(workspace: WorkspacePaths) -> list[str]:
     )
 
 
+def _doc_title(workspace: WorkspacePaths, doc_id: str) -> str:
+    """The parsed document title when available, else the doc id."""
+
+    parsed = workspace.sources_parsed / doc_id / "document.json"
+    if parsed.is_file():
+        try:
+            return read_document(parsed).title
+        except (OSError, ValueError):
+            pass
+    return doc_id
+
+
 @index_app.command("build")
 def index_build(
     workspace_path: Annotated[Path, typer.Argument(help="BookGraph workspace/output root path.")],
@@ -34,7 +46,7 @@ def index_build(
         ),
     ] = None,
 ) -> None:
-    """Build the search + graph indexes under indexes/ from a document's sections."""
+    """Build the SQLite index (search + graph) under indexes/ from sections."""
 
     workspace = WorkspacePaths(workspace_path.expanduser().resolve())
     if doc_id is not None:
@@ -47,23 +59,25 @@ def index_build(
                 "Run 'bookgraph segment' first."
             )
 
-    for current_doc in doc_ids:
-        manifest = workspace.sources_sections / current_doc / "sections.jsonl"
-        if not manifest.is_file():
-            raise typer.BadParameter(
-                f"Sections manifest not found: {manifest}. Run 'bookgraph segment' first."
-            )
-        try:
-            sections = read_sections(manifest)
-        except (OSError, ValueError) as exc:
-            raise typer.BadParameter(f"Invalid sections manifest: {manifest}: {exc}") from exc
+    backend = default_index_backend()
+    try:
+        for current_doc in doc_ids:
+            manifest = workspace.sources_sections / current_doc / "sections.jsonl"
+            if not manifest.is_file():
+                raise typer.BadParameter(
+                    f"Sections manifest not found: {manifest}. Run 'bookgraph segment' first."
+                )
+            try:
+                sections = read_sections(manifest)
+            except (OSError, ValueError) as exc:
+                raise typer.BadParameter(f"Invalid sections manifest: {manifest}: {exc}") from exc
 
-        index = build_section_index(current_doc, sections)
-        search_index = write_index(index, index_path(workspace, current_doc))
-        graph = build_section_graph(current_doc, sections)
-        graph_index = write_graph(graph, graph_path(workspace, current_doc))
-        typer.echo(f"doc_id: {current_doc}")
-        typer.echo(f"sections: {len(index.sections)}")
-        typer.echo(f"terms: {len(index.postings)}")
-        typer.echo(f"index: {search_index}")
-        typer.echo(f"graph: {graph_index}")
+            title = _doc_title(workspace, current_doc)
+            count = backend.build_document(workspace, current_doc, title, sections)
+            typer.echo(f"doc_id: {current_doc}")
+            typer.echo(f"sections: {count}")
+    except IndexUnavailableError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+    typer.echo(f"backend: {backend.name}")
+    typer.echo(f"index: {backend.location(workspace)}")

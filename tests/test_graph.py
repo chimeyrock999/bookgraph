@@ -1,10 +1,7 @@
 from __future__ import annotations
 
-from pathlib import Path
-
-from bookgraph.graph import build_section_graph, graph_path, read_graph, write_graph
+from bookgraph.graph import build_section_graph
 from bookgraph.models import Section
-from bookgraph.workspace import WorkspacePaths
 
 
 def _section(
@@ -82,13 +79,3 @@ def test_dangling_sequence_links_are_dropped() -> None:
     node = graph.nodes[0]
     assert node.prev_id is None
     assert node.next_id is None
-
-
-def test_write_and_read_graph_round_trips(tmp_path: Path) -> None:
-    workspace = WorkspacePaths(tmp_path)
-    graph = build_section_graph("ddia", _chapter_document())
-
-    path = write_graph(graph, graph_path(workspace, "ddia"))
-
-    assert path == workspace.indexes_root / "graph" / "ddia.json"
-    assert read_graph(path) == graph

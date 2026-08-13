@@ -5,8 +5,7 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from bookgraph.cli import app
-from bookgraph.graph import read_graph
-from bookgraph.indexes import read_index
+from bookgraph.index.sqlite import SqliteIndexBackend, db_path
 from bookgraph.models import Section
 from bookgraph.sections import write_sections
 from bookgraph.workspace import WorkspacePaths
@@ -41,11 +40,12 @@ def test_index_build_writes_index_for_one_document(tmp_path: Path) -> None:
     result = runner.invoke(app, ["index", "build", str(tmp_path), "--doc-id", "deep-work"])
 
     assert result.exit_code == 0, result.output
-    index = read_index(workspace.indexes_root / "sections" / "deep-work.json")
-    assert index.doc_id == "deep-work"
-    assert index.postings["storage"] == {"deep-work.a": 3}
-    # index build also emits the section graph.
-    graph = read_graph(workspace.indexes_root / "graph" / "deep-work.json")
+    backend = SqliteIndexBackend()
+    assert db_path(workspace).is_file()
+    assert backend.indexed_doc_ids(workspace) == {"deep-work"}
+    # The build also persists the section graph.
+    graph = backend.load_graph(workspace, "deep-work")
+    assert graph is not None
     assert [node.id for node in graph.nodes] == ["deep-work.a"]
 
 
@@ -63,8 +63,7 @@ def test_index_build_indexes_every_segmented_document(tmp_path: Path) -> None:
     result = runner.invoke(app, ["index", "build", str(tmp_path)])
 
     assert result.exit_code == 0, result.output
-    assert (workspace.indexes_root / "sections" / "deep-work.json").is_file()
-    assert (workspace.indexes_root / "sections" / "ddia.json").is_file()
+    assert SqliteIndexBackend().indexed_doc_ids(workspace) == {"ddia", "deep-work"}
 
 
 def test_index_build_errors_when_nothing_is_segmented(tmp_path: Path) -> None:

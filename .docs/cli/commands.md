@@ -440,7 +440,8 @@ bookgraph index build /path/to/workspace --doc-id ddia   # index one document
 
 ### Prints
 
-- `doc_id`, `sections`, and the written `db` path per document.
+- `doc_id` and `sections` per document, then the `backend` name and the `index`
+  location (for the default backend, the `indexes/bookgraph.db` path) once.
 
 ### Errors
 

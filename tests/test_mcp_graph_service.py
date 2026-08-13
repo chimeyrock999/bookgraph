@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from bookgraph.graph import SectionGraph, SectionNode, build_section_graph, graph_path, write_graph
+from bookgraph.index.sqlite import SqliteIndexBackend, db_path
 from bookgraph.mcp import service
 from bookgraph.mcp.service import InvalidIdError, SectionNotFoundError, SectionsNotFoundError
 from bookgraph.models import Section
@@ -55,7 +55,7 @@ def _workspace(tmp_path: Path, *, build_index: bool = False) -> WorkspacePaths:
     sections = _sections()
     write_sections(sections, workspace.sources_sections / "ddia")
     if build_index:
-        write_graph(build_section_graph("ddia", sections), graph_path(workspace, "ddia"))
+        SqliteIndexBackend().build_document(workspace, "ddia", "DDIA", sections)
     return workspace
 
 
@@ -107,7 +107,7 @@ def test_get_context_combines_full_content_with_neighbourhood(tmp_path: Path) ->
 def test_graph_tools_work_without_a_built_index(tmp_path: Path) -> None:
     # No `index build` run: the graph is rebuilt from sections on demand.
     workspace = _workspace(tmp_path, build_index=False)
-    assert not graph_path(workspace, "ddia").exists()
+    assert not db_path(workspace).exists()
 
     outline = service.get_outline(workspace, "ddia")
     assert len(outline.nodes) == 4
@@ -115,7 +115,7 @@ def test_graph_tools_work_without_a_built_index(tmp_path: Path) -> None:
 
 def test_graph_tools_prefer_the_persisted_index_when_present(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path, build_index=True)
-    assert graph_path(workspace, "ddia").is_file()
+    assert db_path(workspace).is_file()
 
     outline = service.get_outline(workspace, "ddia")
     assert [node.id for node in outline.nodes] == [n.id for n in read_sections(
@@ -123,19 +123,20 @@ def test_graph_tools_prefer_the_persisted_index_when_present(tmp_path: Path) -> 
     )]
 
 
-def test_graph_tools_ignore_a_graph_whose_doc_id_mismatches_its_filename(tmp_path: Path) -> None:
-    """A schema-valid graph carrying another doc's id is stale: rebuild from sections."""
+def test_graph_tools_rebuild_from_sections_for_a_document_not_in_the_index(tmp_path: Path) -> None:
+    """A document absent from the catalog is unindexed: rebuild from its sections."""
 
     workspace = _workspace(tmp_path)
-    mismatched = SectionGraph(
-        doc_id="other-doc",
-        nodes=[SectionNode(id="other.x", title="Wrong", level=1)],
+    # Build a *different* document into the index so the database exists but does
+    # not contain 'ddia'.
+    SqliteIndexBackend().build_document(
+        workspace, "other", "Other", [_section("other.x", "X", 1)]
     )
-    write_graph(mismatched, graph_path(workspace, "ddia"))
+    assert db_path(workspace).is_file()
 
     outline = service.get_outline(workspace, "ddia")
 
-    # The mismatched graph is discarded; the real 4-section structure is served.
+    # 'ddia' is served from its sections manifest, not the index.
     assert [node.id for node in outline.nodes] == [
         "ddia.part-1",
         "ddia.ch-1",

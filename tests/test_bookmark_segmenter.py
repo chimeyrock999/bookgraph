@@ -41,7 +41,7 @@ def test_bookmark_segmenter_uses_top_level_pdf_bookmarks_as_reading_units() -> N
     assert sections[1].prev_id == "iceberg.chapter-1"
 
 
-def test_bookmark_segmenter_preserves_nested_bookmarks_in_heading_path_without_splitting() -> None:
+def test_bookmark_segmenter_collapses_nested_bookmarks_at_split_level() -> None:
     segmenter = BookmarkSegmenter(
         bookmarks=[
             PdfBookmark(title="Part I", page_index=1, level=1),
@@ -57,6 +57,33 @@ def test_bookmark_segmenter_preserves_nested_bookmarks_in_heading_path_without_s
     assert sections[0].heading_path == ["Part I"]
     assert sections[0].metadata["bookmark_level"] == 1
     assert sections[0].metadata["bookmark_page_index"] == 1
+
+
+def test_bookmark_segmenter_suffixes_duplicate_bookmark_titles() -> None:
+    segmenter = BookmarkSegmenter(
+        bookmarks=[
+            PdfBookmark(title="Summary", page_index=1, level=1),
+            PdfBookmark(title="Summary", page_index=3, level=1),
+        ]
+    )
+
+    sections = segmenter.segment(_document())
+
+    assert [section.id for section in sections] == ["iceberg.summary", "iceberg.summary-2"]
+
+
+def test_bookmark_segmenter_clamps_same_page_bookmark_ranges() -> None:
+    segmenter = BookmarkSegmenter(
+        bookmarks=[
+            PdfBookmark(title="First", page_index=1, level=1),
+            PdfBookmark(title="Second", page_index=1, level=1),
+        ]
+    )
+
+    sections = segmenter.segment(_document())
+
+    assert sections[0].page_start == 1
+    assert sections[0].page_end == 1
 
 
 def test_bookmark_segmenter_falls_back_to_heading_when_no_usable_bookmarks() -> None:

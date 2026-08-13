@@ -41,11 +41,13 @@ class BookmarkSegmenter(DocumentSegmenter):
             return (self.fallback or HeadingSegmenter()).segment(document)
 
         sections: list[Section] = []
+        seen_slugs: dict[str, int] = {}
         for index, bookmark in enumerate(usable):
             start_page = bookmark.page_index
             next_page = usable[index + 1].page_index if index + 1 < len(usable) else None
             blocks = _blocks_in_range(document.blocks, start_page, next_page)
-            sections.append(_to_section(document.doc_id, bookmark, blocks, next_page))
+            section_slug = _unique_section_slug(bookmark.title, seen_slugs)
+            sections.append(_to_section(document.doc_id, bookmark, blocks, next_page, section_slug))
 
         for index, section in enumerate(sections):
             section.prev_id = sections[index - 1].id if index > 0 else None
@@ -71,7 +73,11 @@ def _blocks_in_range(
 
 
 def _to_section(
-    doc_id: str, bookmark: PdfBookmark, blocks: list[CanonicalBlock], next_page: int | None
+    doc_id: str,
+    bookmark: PdfBookmark,
+    blocks: list[CanonicalBlock],
+    next_page: int | None,
+    section_slug: str,
 ) -> Section:
     page_indices = [block.page_idx for block in blocks if block.page_idx is not None]
     text_parts = [
@@ -82,9 +88,9 @@ def _to_section(
     page_start = bookmark.page_index
     page_end = max(page_indices) if page_indices else None
     if next_page is not None:
-        page_end = next_page - 1
+        page_end = max(page_start, next_page - 1) if page_start is not None else next_page - 1
     return Section(
-        id=f"{doc_id}.{slugify(bookmark.title)}",
+        id=f"{doc_id}.{section_slug}",
         doc_id=doc_id,
         title=bookmark.title,
         level=bookmark.level,
@@ -99,3 +105,10 @@ def _to_section(
             "bookmark_page_index": bookmark.page_index,
         },
     )
+
+
+def _unique_section_slug(title: str, seen_slugs: dict[str, int]) -> str:
+    base = slugify(title)
+    count = seen_slugs.get(base, 0) + 1
+    seen_slugs[base] = count
+    return base if count == 1 else f"{base}-{count}"

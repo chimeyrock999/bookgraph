@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 from bookgraph.models import CanonicalBlock, Document, Section
 from bookgraph.ports import DocumentSegmenter
-from bookgraph.utils import slugify
+from bookgraph.utils import unique_slug
 
 
 @dataclass
@@ -52,9 +52,17 @@ class HeadingSegmenter(DocumentSegmenter):
             sections.append(current)
 
         materialized: list[Section] = []
+        used_slugs: set[str] = set()
         for index, draft in enumerate(sections):
             next_start_page = sections[index + 1].start_page if index + 1 < len(sections) else None
-            materialized.append(draft.to_section(document.doc_id, next_start_page=next_start_page))
+            section_slug = unique_slug(draft.title, used_slugs)
+            materialized.append(
+                draft.to_section(
+                    document.doc_id,
+                    next_start_page=next_start_page,
+                    section_slug=section_slug,
+                )
+            )
         for index, section in enumerate(materialized):
             section.prev_id = materialized[index - 1].id if index > 0 else None
             section.next_id = materialized[index + 1].id if index + 1 < len(materialized) else None
@@ -69,7 +77,12 @@ class _DraftSection:
     blocks: list[CanonicalBlock]
     start_page: int | None
 
-    def to_section(self, doc_id: str, next_start_page: int | None = None) -> Section:
+    def to_section(
+        self,
+        doc_id: str,
+        next_start_page: int | None = None,
+        section_slug: str | None = None,
+    ) -> Section:
         page_indices = [block.page_idx for block in self.blocks if block.page_idx is not None]
         page_end = max(page_indices) if page_indices else None
         if next_start_page is not None:
@@ -80,7 +93,7 @@ class _DraftSection:
             if block.type != "title" and block.text.strip()
         ]
         return Section(
-            id=f"{doc_id}.{slugify(self.title)}",
+            id=f"{doc_id}.{section_slug or unique_slug(self.title, set())}",
             doc_id=doc_id,
             title=self.title,
             level=self.level,

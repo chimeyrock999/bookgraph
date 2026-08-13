@@ -72,6 +72,24 @@ def test_bookmark_segmenter_suffixes_duplicate_bookmark_titles() -> None:
     assert [section.id for section in sections] == ["iceberg.summary", "iceberg.summary-2"]
 
 
+def test_bookmark_segmenter_avoids_suffix_collisions_with_existing_titles() -> None:
+    segmenter = BookmarkSegmenter(
+        bookmarks=[
+            PdfBookmark(title="Summary", page_index=1, level=1),
+            PdfBookmark(title="Summary 2", page_index=2, level=1),
+            PdfBookmark(title="Summary", page_index=3, level=1),
+        ]
+    )
+
+    sections = segmenter.segment(_document())
+
+    assert [section.id for section in sections] == [
+        "iceberg.summary",
+        "iceberg.summary-2",
+        "iceberg.summary-3",
+    ]
+
+
 def test_bookmark_segmenter_clamps_same_page_bookmark_ranges() -> None:
     segmenter = BookmarkSegmenter(
         bookmarks=[

@@ -1,6 +1,6 @@
 [project]
 name = "bookgraph"
-version = "0.1.0"
+version = "0.1.1"
 description = "Source-grounded book/document graph wiki pipeline with pluggable parsers, segmenters, wiki backends, and MCP serving."
 readme = "README.md"
 requires-python = ">=3.11"

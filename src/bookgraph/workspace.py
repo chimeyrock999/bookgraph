@@ -27,6 +27,32 @@ class WorkspacePaths:
         return self.root / "sources" / "sections"
 
     @property
+    def llmwiki_root(self) -> Path:
+        """Dedicated project root for the standalone llmwiki compiler.
+
+        The ``llm-wiki-compiler`` contract is ``llmwiki serve --root <project>``
+        over a project whose top-level ``sources/*.md`` are ingested and whose
+        ``wiki/`` + ``.llmwiki/`` are generated output. That project lives in its
+        own ``llmwiki/`` subtree — deliberately **not** the workspace root — so
+        llmwiki's generated ``wiki/concepts/`` and ``wiki/index.md`` never collide
+        with BookGraph's own ``wiki/`` tree (which ``bookgraph index concepts``
+        deletes and rewrites unconditionally) or ``sources/`` tree. The bridge
+        stages sections into :attr:`llmwiki_sources` and llmwiki owns its whole
+        lifecycle under this root without touching BookGraph's canonical inputs.
+        """
+        return self.root / "llmwiki"
+
+    @property
+    def llmwiki_sources(self) -> Path:
+        """``sources/*.md`` directory the llmwiki compiler ingests (bridge target)."""
+        return self.llmwiki_root / "sources"
+
+    @property
+    def llmwiki_state(self) -> Path:
+        """llmwiki's compile state file; its presence means a compile has run."""
+        return self.llmwiki_root / ".llmwiki" / "state.json"
+
+    @property
     def wiki_root(self) -> Path:
         return self.root / "wiki"
 

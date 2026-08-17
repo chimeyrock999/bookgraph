@@ -38,10 +38,6 @@ class BridgeResult:
     staged: list[Path] = field(default_factory=list)
     unchanged: list[Path] = field(default_factory=list)
 
-    @property
-    def total(self) -> int:
-        return len(self.staged) + len(self.unchanged)
-
 
 def staged_source_name(section: Section) -> str:
     """Filename for a staged llmwiki source.

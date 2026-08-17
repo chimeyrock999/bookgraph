@@ -28,27 +28,29 @@ class WorkspacePaths:
 
     @property
     def llmwiki_root(self) -> Path:
-        """Project root the standalone llmwiki compiler serves.
+        """Dedicated project root for the standalone llmwiki compiler.
 
         The ``llm-wiki-compiler`` contract is ``llmwiki serve --root <project>``
         over a project whose top-level ``sources/*.md`` are ingested and whose
-        ``wiki/`` + ``.llmwiki/`` are generated output. That project root is the
-        BookGraph workspace root itself; the bridge stages sections into
-        :attr:`llmwiki_sources` (``sources/``) and llmwiki owns its own lifecycle
-        under this root without touching BookGraph's canonical inputs.
+        ``wiki/`` + ``.llmwiki/`` are generated output. That project lives in its
+        own ``llmwiki/`` subtree — deliberately **not** the workspace root — so
+        llmwiki's generated ``wiki/concepts/`` and ``wiki/index.md`` never collide
+        with BookGraph's own ``wiki/`` tree (which ``bookgraph index concepts``
+        deletes and rewrites unconditionally) or ``sources/`` tree. The bridge
+        stages sections into :attr:`llmwiki_sources` and llmwiki owns its whole
+        lifecycle under this root without touching BookGraph's canonical inputs.
         """
-        return self.root
+        return self.root / "llmwiki"
 
     @property
     def llmwiki_sources(self) -> Path:
-        """Top-level ``sources/*.md`` directory the llmwiki compiler ingests.
+        """``sources/*.md`` directory the llmwiki compiler ingests (bridge target)."""
+        return self.llmwiki_root / "sources"
 
-        The bridge writes one staged source file per section here. BookGraph's own
-        canonical inputs live in *sub*directories (``sources/inbox``,
-        ``sources/parsed``, ``sources/sections``); staged llmwiki sources are
-        top-level ``sources/*.md`` files and never collide with them.
-        """
-        return self.root / "sources"
+    @property
+    def llmwiki_state(self) -> Path:
+        """llmwiki's compile state file; its presence means a compile has run."""
+        return self.llmwiki_root / ".llmwiki" / "state.json"
 
     @property
     def wiki_root(self) -> Path:

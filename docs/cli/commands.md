@@ -656,11 +656,13 @@ is only ever matched against loaded plan/section data, never used as a raw path.
 
 **Status:** Implemented.
 
-Stages BookGraph sections into the workspace's llmwiki `sources/` project so a
+Stages BookGraph sections into the workspace's isolated `llmwiki/` project so a
 compiled llmwiki project can be built and served. Each section becomes its own
-bounded `sources/<section_id>.md` file carrying BookGraph provenance
+bounded `llmwiki/sources/<section_id>.md` file carrying BookGraph provenance
 (`bookgraph_doc_id`, `bookgraph_section_id`) — a large book is never routed
-through one truncating full-book ingest. See `docs/mcp/llmwiki-integration.md`.
+through one truncating full-book ingest. The `llmwiki/` subtree is isolated from
+BookGraph's own `wiki/` and `sources/` trees. See
+`docs/mcp/llmwiki-integration.md`.
 
 ```bash
 bookgraph llmwiki bridge /path/to/workspace <doc_id>                     # stage all sections
@@ -676,13 +678,14 @@ bookgraph llmwiki bridge /path/to/workspace <doc_id> --compile --print   # print
 - `--plan <plan_id>`: restrict staging to sections already read in this reading
   plan, so the compiled wiki compounds with reading progress. Omit to stage every
   section of the document.
-- `--compile`: after staging, run `llmwiki compile --root <workspace>` incrementally.
+- `--compile`: after staging, run `llmwiki compile --root <workspace>/llmwiki`
+  incrementally.
 - `--print`: with `--compile`, print the compile command instead of running it.
 
 ### Behavior
 
 - Reads the canonical sections manifest and writes one staged
-  `sources/<section_id>.md` per selected section.
+  `llmwiki/sources/<section_id>.md` per selected section.
 - **Idempotent**: an unchanged section is left untouched on disk (stable mtime), so
   llmwiki's incremental compile skips it and a daily batch is added without
   reprocessing the whole book. Reports `staged` / `unchanged` counts.
@@ -691,7 +694,7 @@ bookgraph llmwiki bridge /path/to/workspace <doc_id> --compile --print   # print
 ### Must not do
 
 - Must not read or mutate BookGraph's canonical inputs beyond *reading* the
-  sections manifest and reading plan; it only *writes* derived `sources/*.md`.
+  sections manifest and reading plan; it only *writes* derived files into `llmwiki/`.
 
 ### Errors
 
@@ -699,6 +702,7 @@ bookgraph llmwiki bridge /path/to/workspace <doc_id> --compile --print   # print
 - Missing sections manifest → an actionable message pointing at `bookgraph segment`.
 - `--plan` for a plan that does not exist / is for a different document → an
   actionable message.
+- `--print` without `--compile` → rejected (the flag only applies to the compile step).
 - `--compile` with `llmwiki` not installed (without `--print`) → an actionable message.
 
 ## `bookgraph llmwiki serve`
@@ -719,13 +723,13 @@ bookgraph llmwiki serve /path/to/workspace --print
 ### Inputs
 
 - `workspace_path`: workspace/output root. Must already exist.
-- `--print`: print the resolved `llmwiki serve --root <workspace>` command and exit
-  without launching anything (does not require a staged/compiled project).
+- `--print`: print the resolved `llmwiki serve --root <workspace>/llmwiki` command
+  and exit without launching anything (does not require a compiled project).
 
 ### Behavior
 
-- Runs `llmwiki serve --root <workspace>` — the real `llm-wiki-compiler` v1.1
-  contract (`--root <project>`, no positional root) — forwarding its exit code.
+- Runs `llmwiki serve --root <workspace>/llmwiki` — the real `llm-wiki-compiler`
+  v1.1 contract (`--root <project>`, no positional root) — forwarding its exit code.
 - With `--print`, emits the command with shell-safe quoting instead of running it.
 
 ### Must not do
@@ -738,8 +742,8 @@ bookgraph llmwiki serve /path/to/workspace --print
 ### Errors
 
 - Missing workspace directory → `Workspace not found: … Run 'bookgraph init' first.`
-- No section bridged yet (no top-level `sources/*.md`, without `--print`) → an
-  actionable message pointing at `bookgraph llmwiki bridge`.
+- Project not compiled yet (`llmwiki/.llmwiki/state.json` missing, without `--print`)
+  → an actionable message pointing at `bookgraph llmwiki bridge … --compile`.
 - `llmwiki` not installed / not on PATH (without `--print`) → an actionable message
   telling the user to install `llm-wiki-compiler` or re-run with `--print`.
 

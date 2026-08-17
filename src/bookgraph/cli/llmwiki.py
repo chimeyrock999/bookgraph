@@ -23,6 +23,22 @@ def _resolve_workspace(workspace_path: Path) -> WorkspacePaths:
     return WorkspacePaths(workspace)
 
 
+def _run_llmwiki(command: list[str]) -> None:
+    """Launch an ``llmwiki`` subcommand, forwarding its exit code.
+
+    Shared by ``serve`` and ``bridge --compile`` so a future change (better error,
+    timeout, env passthrough) is made once. Fails with an actionable message when
+    ``llmwiki`` is not installed rather than a bare ``FileNotFoundError``.
+    """
+
+    if shutil.which("llmwiki") is None:
+        raise typer.BadParameter(
+            "llmwiki is not installed or not on PATH. Install the optional "
+            "llm-wiki-compiler tool, or re-run with --print to see the command to run."
+        )
+    raise typer.Exit(subprocess.call(command))
+
+
 @llmwiki_app.command("serve")
 def llmwiki_serve(
     workspace_path: Annotated[Path, typer.Argument(help="BookGraph workspace/output root path.")],
@@ -36,11 +52,12 @@ def llmwiki_serve(
 ) -> None:
     """Launch the optional llmwiki MCP server over the workspace's llmwiki project.
 
-    Convenience wrapper that runs ``llmwiki serve --root <workspace>`` — the real
-    ``llm-wiki-compiler`` v1.1 contract, which takes ``--root <project>`` and has
-    no positional root argument. The llmwiki project root is the workspace root;
-    the compiler ingests the ``sources/*.md`` staged by ``bookgraph llmwiki
-    bridge`` and serves its compiled pages.
+    Convenience wrapper that runs ``llmwiki serve --root <workspace>/llmwiki`` —
+    the real ``llm-wiki-compiler`` v1.1 contract, which takes ``--root <project>``
+    and has no positional root argument. The llmwiki project lives in its own
+    ``llmwiki/`` subtree (isolated from BookGraph's ``wiki/`` and ``sources/``);
+    the compiler ingests the sources staged by ``bookgraph llmwiki bridge`` and
+    serves its compiled pages.
 
     BookGraph MCP (``bookgraph mcp``) stays the primary reading server; this only
     serves the derived, compiled llmwiki projection and never changes BookGraph's
@@ -56,23 +73,16 @@ def llmwiki_serve(
         typer.echo(shlex.join(command))
         return
 
-    # `bookgraph init` mkdir's sources/{inbox,parsed,sections}, so directory
-    # existence is not enough — require at least one top-level staged source
-    # (`sources/*.md`) before serving, otherwise llmwiki serves an empty project.
-    if not any(paths.llmwiki_sources.glob("*.md")):
+    # Staging alone is not enough — llmwiki serves an empty project until a compile
+    # has run, so require the compile-state marker before launching.
+    if not paths.llmwiki_state.is_file():
         raise typer.BadParameter(
-            f"No llmwiki sources staged under {paths.llmwiki_sources}. Bridge and "
-            "compile a book first, e.g. 'bookgraph llmwiki bridge <workspace> "
-            "<doc_id> --compile'."
+            f"No compiled llmwiki project at {paths.llmwiki_root} "
+            f"({paths.llmwiki_state} missing). Bridge and compile a book first, e.g. "
+            "'bookgraph llmwiki bridge <workspace> <doc_id> --compile'."
         )
 
-    if shutil.which("llmwiki") is None:
-        raise typer.BadParameter(
-            "llmwiki is not installed or not on PATH. Install the optional "
-            "llm-wiki-compiler tool, or re-run with --print to see the command to run."
-        )
-
-    raise typer.Exit(subprocess.call(command))
+    _run_llmwiki(command)
 
 
 @llmwiki_app.command("bridge")
@@ -94,7 +104,7 @@ def llmwiki_bridge(
         bool,
         typer.Option(
             "--compile",
-            help="After staging, run 'llmwiki compile --root <workspace>' incrementally.",
+            help="After staging, run 'llmwiki compile --root <workspace>/llmwiki' incrementally.",
         ),
     ] = False,
     print_command: Annotated[
@@ -113,6 +123,11 @@ def llmwiki_bridge(
     so llmwiki's incremental compile adds only a daily batch without reprocessing
     the whole book. BookGraph's canonical inputs are only read, never mutated.
     """
+
+    # --print only has meaning for the compile step; reject it early rather than
+    # silently dropping the flag when the user forgot --compile.
+    if print_command and not compile_wiki:
+        raise typer.BadParameter("--print applies to the compile step; pass --compile as well.")
 
     paths = _resolve_workspace(workspace_path)
     resolved_doc_id = _validate_id(doc_id, "doc_id")
@@ -167,10 +182,4 @@ def llmwiki_bridge(
         typer.echo(shlex.join(compile_command))
         return
 
-    if shutil.which("llmwiki") is None:
-        raise typer.BadParameter(
-            "llmwiki is not installed or not on PATH. Install the optional "
-            "llm-wiki-compiler tool, or re-run with --print to see the command to run."
-        )
-
-    raise typer.Exit(subprocess.call(compile_command))
+    _run_llmwiki(compile_command)

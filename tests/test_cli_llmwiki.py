@@ -71,29 +71,30 @@ def test_llmwiki_serve_missing_workspace(tmp_path: Path) -> None:
     assert "Workspace not found" in result.output
 
 
-def test_llmwiki_serve_uncompiled_wiki(tmp_path: Path) -> None:
-    # Realistic flow: init creates the sources/ skeleton but no section has been
-    # bridged into an llmwiki source yet, so serving must fail cleanly instead of
-    # serving an empty llmwiki project.
+def test_llmwiki_serve_uncompiled_project(tmp_path: Path) -> None:
+    # Staging alone is not enough: without a compile the llmwiki project has no
+    # state, so serving must fail cleanly instead of serving an empty project.
     assert runner.invoke(app, ["init", str(tmp_path)]).exit_code == 0
+    _write_sections_manifest(tmp_path, "deep-work")
+    assert runner.invoke(app, ["llmwiki", "bridge", str(tmp_path), "deep-work"]).exit_code == 0
 
     result = runner.invoke(app, ["llmwiki", "serve", str(tmp_path)])
 
     assert result.exit_code != 0
-    assert "No llmwiki sources staged" in result.output
+    assert "No compiled llmwiki project" in result.output
 
 
 def test_llmwiki_serve_print_emits_root_contract(tmp_path: Path) -> None:
-    # --print is pure command generation and must not require a staged project.
+    # --print is pure command generation and must not require a compiled project.
     assert runner.invoke(app, ["init", str(tmp_path)]).exit_code == 0
 
     result = runner.invoke(app, ["llmwiki", "serve", str(tmp_path), "--print"])
 
     assert result.exit_code == 0, result.output
-    workspace = tmp_path.resolve()
-    # Real llm-wiki-compiler v1.1 contract: `serve --root <project>`, not a
-    # positional root, and not the workspace's wiki/ subdirectory.
-    assert result.output.strip() == f"llmwiki serve --root {workspace}"
+    project = (tmp_path / "llmwiki").resolve()
+    # Real llm-wiki-compiler v1.1 contract: `serve --root <project>`, where the
+    # project is the isolated llmwiki/ subtree, not the workspace root or wiki/.
+    assert result.output.strip() == f"llmwiki serve --root {project}"
 
 
 def test_llmwiki_serve_print_quotes_spaced_paths(tmp_path: Path) -> None:
@@ -103,8 +104,8 @@ def test_llmwiki_serve_print_quotes_spaced_paths(tmp_path: Path) -> None:
     result = runner.invoke(app, ["llmwiki", "serve", str(workspace), "--print"])
 
     assert result.exit_code == 0, result.output
-    resolved = workspace.resolve()
-    assert result.output.strip() == f"llmwiki serve --root '{resolved}'"
+    project = (workspace / "llmwiki").resolve()
+    assert result.output.strip() == f"llmwiki serve --root '{project}'"
 
 
 def test_llmwiki_bridge_stages_sections_with_provenance(tmp_path: Path) -> None:
@@ -117,7 +118,7 @@ def test_llmwiki_bridge_stages_sections_with_provenance(tmp_path: Path) -> None:
     assert "staged: 2" in result.output
     assert "unchanged: 0" in result.output
 
-    intro = tmp_path / "sources" / "deep-work.intro.md"
+    intro = tmp_path / "llmwiki" / "sources" / "deep-work.intro.md"
     assert intro.is_file()
     text = intro.read_text()
     assert 'bookgraph_doc_id: "deep-work"' in text
@@ -125,7 +126,7 @@ def test_llmwiki_bridge_stages_sections_with_provenance(tmp_path: Path) -> None:
     assert "# Intro" in text
     assert "Hello wiki." in text
     # BookGraph's canonical section markdown must not be touched — staged llmwiki
-    # sources are top-level sources/*.md, not the sources/sections/ tree.
+    # sources live in the isolated llmwiki/ subtree, not the sources/sections/ tree.
     assert (tmp_path / "sources" / "sections" / "deep-work" / "sections.jsonl").is_file()
 
 
@@ -160,8 +161,8 @@ def test_llmwiki_bridge_plan_stages_only_read_sections(tmp_path: Path) -> None:
 
     assert result.exit_code == 0, result.output
     assert "staged: 1" in result.output
-    assert (tmp_path / "sources" / "deep-work.intro.md").is_file()
-    assert not (tmp_path / "sources" / "deep-work.chapter-1.md").exists()
+    assert (tmp_path / "llmwiki" / "sources" / "deep-work.intro.md").is_file()
+    assert not (tmp_path / "llmwiki" / "sources" / "deep-work.chapter-1.md").exists()
 
 
 def test_llmwiki_bridge_plan_with_nothing_read_stages_nothing(tmp_path: Path) -> None:
@@ -180,7 +181,7 @@ def test_llmwiki_bridge_plan_with_nothing_read_stages_nothing(tmp_path: Path) ->
 
     assert result.exit_code == 0, result.output
     assert "nothing to stage" in result.output
-    assert not any((tmp_path / "sources").glob("*.md"))
+    assert not (tmp_path / "llmwiki").exists()
 
 
 def test_llmwiki_bridge_compile_print_emits_root_contract(tmp_path: Path) -> None:
@@ -192,8 +193,22 @@ def test_llmwiki_bridge_compile_print_emits_root_contract(tmp_path: Path) -> Non
     )
 
     assert result.exit_code == 0, result.output
-    workspace = tmp_path.resolve()
-    assert f"llmwiki compile --root {workspace}" in result.output
+    project = (tmp_path / "llmwiki").resolve()
+    assert f"llmwiki compile --root {project}" in result.output
+
+
+def test_llmwiki_bridge_print_without_compile_errors(tmp_path: Path) -> None:
+    # --print only means anything for the compile step; without --compile it must
+    # not silently no-op.
+    assert runner.invoke(app, ["init", str(tmp_path)]).exit_code == 0
+    _write_sections_manifest(tmp_path, "deep-work")
+
+    result = runner.invoke(app, ["llmwiki", "bridge", str(tmp_path), "deep-work", "--print"])
+
+    assert result.exit_code != 0
+    assert "--print applies to the compile step" in result.output
+    # Rejected before any staging happened.
+    assert not (tmp_path / "llmwiki").exists()
 
 
 def test_llmwiki_bridge_missing_sections(tmp_path: Path) -> None:
@@ -205,14 +220,14 @@ def test_llmwiki_bridge_missing_sections(tmp_path: Path) -> None:
     assert "Sections manifest not found" in result.output
 
 
-def test_llmwiki_serve_after_bridge_passes_guard_print(tmp_path: Path) -> None:
+def test_llmwiki_serve_guard_passes_once_compiled_print(tmp_path: Path) -> None:
     assert runner.invoke(app, ["init", str(tmp_path)]).exit_code == 0
     _write_sections_manifest(tmp_path, "deep-work")
     assert runner.invoke(app, ["llmwiki", "bridge", str(tmp_path), "deep-work"]).exit_code == 0
+    # Simulate a completed llmwiki compile by writing its state marker.
+    state = tmp_path / "llmwiki" / ".llmwiki" / "state.json"
+    state.parent.mkdir(parents=True, exist_ok=True)
+    state.write_text("{}\n")
 
-    # After bridging, a staged source exists so the serve guard is satisfied; use
-    # --print so the test does not require llmwiki on PATH.
-    result = runner.invoke(app, ["llmwiki", "serve", str(tmp_path), "--print"])
-
-    assert result.exit_code == 0, result.output
-    assert "--root" in result.output
+    # --print never needs the guard; but confirm the compiled project also serves.
+    assert runner.invoke(app, ["llmwiki", "serve", str(tmp_path), "--print"]).exit_code == 0

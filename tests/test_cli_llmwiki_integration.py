@@ -17,6 +17,7 @@ import pytest
 from typer.testing import CliRunner
 
 from bookgraph.cli import app
+from bookgraph.workspace import WorkspacePaths
 
 runner = CliRunner()
 
@@ -56,9 +57,9 @@ def _write_sections_manifest(workspace: Path, doc_id: str) -> None:
     )
 
 
-def _llmwiki_status(workspace: Path) -> dict:
+def _llmwiki_status(project_root: Path) -> dict:
     proc = subprocess.run(
-        ["llmwiki", "status", "--root", str(workspace), "--json"],
+        ["llmwiki", "status", "--root", str(project_root), "--json"],
         capture_output=True,
         text=True,
         check=False,
@@ -66,7 +67,7 @@ def _llmwiki_status(workspace: Path) -> dict:
     if proc.returncode != 0:
         # Fall back to a plain status invocation if this build lacks --json.
         proc = subprocess.run(
-            ["llmwiki", "status", "--root", str(workspace)],
+            ["llmwiki", "status", "--root", str(project_root)],
             capture_output=True,
             text=True,
             check=False,
@@ -84,9 +85,10 @@ def test_bridge_then_compile_produces_a_non_empty_llmwiki_project(tmp_path: Path
     )
 
     assert result.exit_code == 0, result.output
-    # llmwiki compiled a project: state + at least one compiled page exist, and the
-    # bridged sources are non-empty (no full-book truncation to worry about here).
-    assert (workspace / ".llmwiki" / "state.json").is_file()
-    status = _llmwiki_status(workspace)
+    # llmwiki compiled its isolated project: state + at least one compiled page
+    # exist, and the bridged sources are non-empty (no full-book truncation here).
+    paths = WorkspacePaths(workspace.resolve())
+    assert paths.llmwiki_state.is_file()
+    status = _llmwiki_status(paths.llmwiki_root)
     assert status["sources"] > 0
     assert status["pages"]["total"] > 0

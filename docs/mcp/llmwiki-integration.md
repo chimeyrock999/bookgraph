@@ -7,10 +7,12 @@ These are two different things that happen to share a name, and the distinction 
 | | BookGraph wiki projection | Compiled llmwiki project |
 |---|---|---|
 | Produced by | `bookgraph wiki compile … --backend llmwiki` | `llmwiki compile` |
-| Lives under | `wiki/books/<doc_id>/README.md`, `wiki/books/<doc_id>/sections/*.md` | `sources/*.md` → `wiki/concepts/`, `wiki/index.md`, `.llmwiki/state.json` |
+| Lives under | `wiki/books/<doc_id>/README.md`, `wiki/books/<doc_id>/sections/*.md` | `llmwiki/sources/*.md` → `llmwiki/wiki/concepts/`, `llmwiki/wiki/index.md`, `llmwiki/.llmwiki/state.json` |
 | Queryable by `llmwiki serve`? | **No** — llmwiki does not adopt `wiki/books/**` as compiled pages | Yes |
 
 A BookGraph wiki projection is *not* a compiled llmwiki project. Pointing `llmwiki serve` at a workspace that only has `wiki/books/**` reports `{"pages": {"total": 0}, "stateStatus": "missing"}` — there is nothing compiled to serve. To make llmwiki queryable you must **bridge** BookGraph sections into an llmwiki project and compile them (see below).
+
+The compiled llmwiki project lives in its **own isolated `llmwiki/` subtree**, deliberately *not* the workspace root: llmwiki's generated `wiki/concepts/` and `wiki/index.md` would otherwise collide with BookGraph's own `wiki/` tree — which `bookgraph index concepts` deletes and rewrites unconditionally — silently wiping compiled llmwiki pages. Keeping llmwiki under `llmwiki/` guarantees the two never step on each other.
 
 **Short answer:** run both — BookGraph MCP as the primary reading server, llmwiki MCP as an optional secondary server for compiled-wiki queries. Do **not** replace one with the other.
 
@@ -41,9 +43,9 @@ Treat its answers as derived-from-wiki, not as the reading graph's ground truth.
 
 ## Bridging BookGraph sections into a compiled llmwiki project
 
-`llmwiki` compiles top-level `sources/*.md` files. Ingesting one full-book Markdown file as a single source is **lossy** — llmwiki truncates a large source (e.g. a 653k-char book was cut to 100k chars), silently excluding most of the book.
+`llmwiki` compiles the `sources/*.md` files under its project root. Ingesting one full-book Markdown file as a single source is **lossy** — llmwiki truncates a large source (e.g. a 653k-char book was cut to 100k chars), silently excluding most of the book.
 
-BookGraph avoids this with an **incremental, per-section bridge**: each section becomes its own bounded `sources/<section_id>.md` file, carrying BookGraph provenance in its frontmatter so compiled pages can trace back to `doc_id` / `section_id`.
+BookGraph avoids this with an **incremental, per-section bridge**: each section becomes its own bounded `llmwiki/sources/<section_id>.md` file, carrying BookGraph provenance in its frontmatter so compiled pages can trace back to `doc_id` / `section_id`.
 
 ```bash
 # Stage every section of a document as individual llmwiki sources, then compile.
@@ -61,22 +63,22 @@ Properties of the bridge:
 - **No full-book truncation** — one bounded source file per section.
 - **Idempotent** — an unchanged section is left untouched on disk, so llmwiki's own incremental compile skips it and a daily batch is added without reprocessing the whole book.
 - **Provenance preserved** — each staged file's frontmatter records `bookgraph_doc_id` and `bookgraph_section_id`.
-- **Canonical state untouched** — the bridge only *writes* derived `sources/*.md` files; it never mutates BookGraph's canonical inputs, and the staged files are top-level `sources/*.md` that never collide with BookGraph's `sources/inbox`, `sources/parsed`, or `sources/sections` subtrees.
+- **Canonical state untouched** — the bridge only *writes* derived files into the isolated `llmwiki/` subtree; it never mutates BookGraph's canonical inputs and never touches BookGraph's own `wiki/` or `sources/` trees.
 
 ## Serving the compiled llmwiki project
 
-The llmwiki project root is the workspace root. Serve it with the real `llm-wiki-compiler` v1.1 contract — `llmwiki serve --root <project>` (there is **no** positional root argument):
+The llmwiki project root is the workspace's `llmwiki/` subtree. Serve it with the real `llm-wiki-compiler` v1.1 contract — `llmwiki serve --root <project>` (there is **no** positional root argument):
 
 ```bash
-bookgraph llmwiki serve /path/to/workspace          # runs `llmwiki serve --root /path/to/workspace`
+bookgraph llmwiki serve /path/to/workspace          # runs `llmwiki serve --root /path/to/workspace/llmwiki`
 bookgraph llmwiki serve /path/to/workspace --print  # just print the command, do not launch
 ```
 
-The wrapper resolves the workspace root and emits the `--root` command with shell-safe quoting. With `--print` it emits the command without running anything (handy for pasting into a client config). When launching, it fails with an actionable message if no section has been bridged yet, or if `llmwiki` is not installed.
+The wrapper resolves the `llmwiki/` project root and emits the `--root` command with shell-safe quoting. With `--print` it emits the command without running anything (handy for pasting into a client config). When launching, it fails with an actionable message if the project has not been compiled yet (`.llmwiki/state.json` missing), or if `llmwiki` is not installed.
 
 ## Side-by-side MCP client config
 
-Run both servers in one client config. BookGraph MCP is bound to the workspace root; llmwiki MCP serves the compiled llmwiki project rooted at the same workspace:
+Run both servers in one client config. BookGraph MCP is bound to the workspace root; llmwiki MCP serves the compiled llmwiki project in the workspace's `llmwiki/` subtree:
 
 ```json
 {
@@ -87,7 +89,7 @@ Run both servers in one client config. BookGraph MCP is bound to the workspace r
     },
     "llmwiki": {
       "command": "llmwiki",
-      "args": ["serve", "--root", "/path/to/workspace"]
+      "args": ["serve", "--root", "/path/to/workspace/llmwiki"]
     }
   }
 }
@@ -96,7 +98,7 @@ Run both servers in one client config. BookGraph MCP is bound to the workspace r
 Prerequisites for the llmwiki entry:
 
 - `llmwiki` (the `llm-wiki-compiler` tool) must be installed and on the client's PATH. It is **optional** — BookGraph MCP does not depend on it.
-- Sections must be bridged and compiled first: `bookgraph llmwiki bridge /path/to/workspace <doc_id> --compile`, so the compiled `wiki/` + `.llmwiki/state.json` exist.
+- Sections must be bridged and compiled first: `bookgraph llmwiki bridge /path/to/workspace <doc_id> --compile`, so the compiled `llmwiki/wiki/` + `llmwiki/.llmwiki/state.json` exist.
 
 If `llmwiki` is not on the client's PATH, use its absolute path (or the appropriate `uv run …` invocation) the same way you would for `bookgraph`.
 

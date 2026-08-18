@@ -13,22 +13,49 @@ extras** — install only what your workflow needs.
   models on first run — see [Optional extras](#optional-extras) and
   [`cli/parse-book-large-pdfs.md`](cli/parse-book-large-pdfs.md).
 
-## Install from source (recommended)
+## Install from a release (recommended)
+
+Each [GitHub release](https://github.com/chimeyrock999/bookgraph/releases) ships a
+built wheel and sdist, so you can install BookGraph without cloning the repo. The `gh`
+CLI grabs the latest release by default, so nothing here pins a version:
+
+```bash
+# Download the latest release wheel into the current directory:
+gh release download --repo chimeyrock999/bookgraph --pattern '*.whl'
+
+# Install it — core only:
+python -m pip install ./bookgraph-*.whl
+
+# …or with extras (MCP server + raw-PDF parsing):
+WHEEL=$(ls bookgraph-*.whl)
+python -m pip install "${WHEEL}[mcp,mineru]"
+```
+
+Run it as a one-off isolated tool with uv (no environment to manage):
+
+```bash
+uvx --from "$(ls bookgraph-*.whl)" bookgraph --help
+```
+
+> Prefer a specific version? `gh release list --repo chimeyrock999/bookgraph` lists the
+> tags; pass one to `gh release download <tag> …`, or copy a wheel URL from the releases
+> page and `pip install "bookgraph[mcp] @ <wheel-url>"`.
+
+## Install from source
+
+For development, or to run an unreleased revision, work from a clone. `uv run
+bookgraph …` runs against the locked project environment with no activation step:
 
 ```bash
 git clone https://github.com/chimeyrock999/bookgraph.git
 cd bookgraph
 
-# Run the CLI without a manual install — uv resolves the environment on demand:
-uv run bookgraph --help
+uv run bookgraph --help      # run the CLI (uv resolves deps on demand)
 
 # …or create a persistent project environment:
 uv sync                      # core dependencies only
 uv run bookgraph paths /path/to/workspace
 ```
-
-`uv run bookgraph …` is the primary entry point used throughout the docs. It always
-runs against the locked project environment, so no separate activation step is needed.
 
 ## Optional extras
 
@@ -85,8 +112,8 @@ uv run --extra mcp bookgraph mcp --help
 
 ## Next steps
 
-- [Workspace layout](../README.md#workspace-layout) — `bookgraph init`, `add-book`,
-  `parse`, and the canonical output paths.
+- [Quickstart](../README.md#quickstart) — `bookgraph init`, `add-book`, `parse`, and
+  the canonical output paths.
 - [`mcp/reading-agent.md`](mcp/reading-agent.md) — point an MCP client at a workspace
   and read section by section.
 - [`cli/`](cli/) — full CLI command and artifact contracts.

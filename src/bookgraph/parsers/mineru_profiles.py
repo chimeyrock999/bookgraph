@@ -11,8 +11,30 @@ spawning MinerU.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TypeVar
 
 DEFAULT_PROFILE = "balanced"
+
+# MinerU CLI enums. Kept here (the lowest layer that knows the knobs) so both the
+# resolver and the CLI validate against one source of truth.
+VALID_METHODS = frozenset({"auto", "txt", "ocr"})
+VALID_BACKENDS = frozenset(
+    {"pipeline", "vlm-engine", "hybrid-engine", "vlm-http-client", "hybrid-http-client"}
+)
+VALID_EFFORTS = frozenset({"medium", "high"})
+
+_T = TypeVar("_T")
+
+
+def first_set(override: _T | None, fallback: _T | None) -> _T | None:
+    """Return ``override`` unless it is unset (``None``), then ``fallback``.
+
+    The single "an explicit value wins unless it is None" rule, shared by the
+    profile resolver and the CLI's config-over-flag merge so the two layers can
+    never drift apart.
+    """
+
+    return override if override is not None else fallback
 
 
 class UnknownMinerUProfileError(ValueError):
@@ -71,9 +93,10 @@ PROFILES: dict[str, _ProfileDefaults] = {
         table=True,
         image_analysis=True,
     ),
-    # Local VLM/hybrid backend for machines with enough CUDA/VRAM.
+    # Pure local VLM backend for machines with enough CUDA/VRAM. Distinct from
+    # `accurate` (hybrid-engine): this drives the VLM engine directly.
     "local-gpu": _ProfileDefaults(
-        backend="hybrid-engine",
+        backend="vlm-engine",
         method="auto",
         effort="high",
         formula=True,
@@ -127,16 +150,15 @@ def resolve_mineru_options(
             f"Unknown MinerU profile: {key}. Available: {available}"
         ) from exc
 
-    def pick(override: object, default: object) -> object:
-        return override if override is not None else default
-
+    resolved_method = first_set(method, defaults.method)
+    assert resolved_method is not None  # profile method is always concrete
     return MinerUOptions(
-        backend=pick(backend, defaults.backend),  # type: ignore[arg-type]
-        method=pick(method, defaults.method),  # type: ignore[arg-type]
-        effort=pick(effort, defaults.effort),  # type: ignore[arg-type]
-        formula=pick(formula, defaults.formula),  # type: ignore[arg-type]
-        table=pick(table, defaults.table),  # type: ignore[arg-type]
-        image_analysis=pick(image_analysis, defaults.image_analysis),  # type: ignore[arg-type]
+        backend=first_set(backend, defaults.backend),
+        method=resolved_method,
+        effort=first_set(effort, defaults.effort),
+        formula=first_set(formula, defaults.formula),
+        table=first_set(table, defaults.table),
+        image_analysis=first_set(image_analysis, defaults.image_analysis),
         url=url,
         start_page=start_page,
         end_page=end_page,

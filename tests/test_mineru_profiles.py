@@ -45,12 +45,16 @@ def test_fast_text_profile_disables_heavy_passes() -> None:
     assert options.image_analysis is False
 
 
-def test_local_gpu_profile_selects_high_effort_hybrid() -> None:
+def test_local_gpu_profile_uses_local_vlm_engine() -> None:
     options = resolve_mineru_options("local-gpu")
 
-    assert options.backend == "hybrid-engine"
+    assert options.backend == "vlm-engine"
     assert options.effort == "high"
     assert options.table is True
+
+
+def test_accurate_and_local_gpu_are_distinct() -> None:
+    assert resolve_mineru_options("accurate") != resolve_mineru_options("local-gpu")
 
 
 def test_remote_gpu_profile_uses_http_client_backend() -> None:

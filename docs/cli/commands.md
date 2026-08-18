@@ -806,7 +806,7 @@ A `*-http-client` backend without a `--url` is rejected before MinerU is invoked
 | Text-heavy digital book; reading sections / search matter more than layout | `fast-text` | `pipeline` + `txt`, table/formula/image off — skips the slow layout/VLM/OCR passes. |
 | Default, mixed content | `balanced` | MinerU's stock medium-effort path (unchanged behavior). |
 | Scanned / image-heavy PDF needing good tables & layout | `accurate` | Hybrid/VLM at `--effort high`. |
-| Local machine with enough CUDA/VRAM | `local-gpu` | Local VLM/hybrid backend, high effort. |
+| Local machine with enough CUDA/VRAM | `local-gpu` | Pure local `vlm-engine` backend, high effort. |
 | External GPU server | `remote-gpu` (+ `--url`) | `hybrid-http-client` offloads to the server. |
 | Apple Silicon / CPU | `fast-text` | No CUDA-like speed is promised; prefer the fast text path unless accuracy needs VLM. |
 

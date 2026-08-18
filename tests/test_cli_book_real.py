@@ -320,6 +320,50 @@ def test_parse_book_http_client_backend_requires_url(tmp_path: Path) -> None:
     assert not (workspace / "sources" / "parsed" / "deep-work").exists()
 
 
+def test_parse_book_empty_url_falls_back_and_still_guards_http_client(tmp_path: Path) -> None:
+    runner = CliRunner()
+    workspace = tmp_path / "workspace"
+    pdf = tmp_path / "Deep Work.pdf"
+    pdf.write_bytes(b"%PDF-1.7")
+
+    assert runner.invoke(app, ["init", str(workspace)]).exit_code == 0
+    assert runner.invoke(app, ["add-book", str(workspace), str(pdf)]).exit_code == 0
+
+    # An empty --url is normalized to unset, so the http-client guard still fires.
+    result = runner.invoke(
+        app,
+        [
+            "parse-book",
+            str(workspace),
+            "deep-work",
+            "--backend",
+            "hybrid-http-client",
+            "--url",
+            "",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "needs a server URL" in _failure_text(result)
+
+
+def test_parse_book_rejects_unknown_method(tmp_path: Path) -> None:
+    runner = CliRunner()
+    workspace = tmp_path / "workspace"
+    pdf = tmp_path / "Deep Work.pdf"
+    pdf.write_bytes(b"%PDF-1.7")
+
+    assert runner.invoke(app, ["init", str(workspace)]).exit_code == 0
+    assert runner.invoke(app, ["add-book", str(workspace), str(pdf)]).exit_code == 0
+
+    result = runner.invoke(
+        app, ["parse-book", str(workspace), "deep-work", "--method", "txxt"]
+    )
+
+    assert result.exit_code != 0
+    assert "Unknown MinerU method 'txxt'" in _failure_text(result)
+
+
 def test_parse_book_rejects_unknown_profile(tmp_path: Path) -> None:
     runner = CliRunner()
     workspace = tmp_path / "workspace"

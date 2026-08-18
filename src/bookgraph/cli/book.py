@@ -4,7 +4,7 @@ import json
 import os
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated, TypeVar
+from typing import Annotated
 
 import typer
 
@@ -23,15 +23,17 @@ from bookgraph.documents import write_document
 from bookgraph.parsers.errors import UnsupportedSourceError
 from bookgraph.parsers.markitdown import MissingParserDependencyError
 from bookgraph.parsers.mineru_profiles import (
+    VALID_BACKENDS,
+    VALID_EFFORTS,
+    VALID_METHODS,
     MinerUOptions,
     UnknownMinerUProfileError,
     available_profiles,
+    first_set,
     resolve_mineru_options,
 )
 from bookgraph.parsers.mineru_runner import MinerUNotInstalledError, MinerURunError, MinerURunner
 from bookgraph.workspace import WorkspacePaths
-
-_T = TypeVar("_T")
 
 
 @app.command("add-book")
@@ -189,26 +191,29 @@ def parse_book(
     workspace = WorkspacePaths(workspace_path.expanduser().resolve())
     config = load_config(workspace)
     resolved_book_id = _validate_id(book_id, "book_id")
+    book_manifest = workspace.sources_inbox / resolved_book_id / "book.json"
+    pages = _registered_pdf_pages(book_manifest)
     resolved_runner = runner or config.mineru.runner
     resolved_runner_command = runner_command or config.mineru.command
     resolved_profile = profile or config.mineru.profile
     # CLI flags win over config, which in turn overrides the profile's defaults.
+    # ``url or None`` normalizes an empty --url the way the config loader does.
     try:
         options = resolve_mineru_options(
             resolved_profile,
-            backend=_first_set(backend, config.mineru.backend),
-            method=_first_set(method, config.mineru.method),
-            effort=_first_set(effort, config.mineru.effort),
-            formula=_first_set(formula, config.mineru.formula),
-            table=_first_set(table, config.mineru.table),
-            image_analysis=_first_set(image_analysis, config.mineru.image_analysis),
-            url=_first_set(url, config.mineru.url),
-            start_page=_first_set(start_page, config.mineru.start_page),
-            end_page=_first_set(end_page, config.mineru.end_page),
+            backend=first_set(backend, config.mineru.backend),
+            method=first_set(method, config.mineru.method),
+            effort=first_set(effort, config.mineru.effort),
+            formula=first_set(formula, config.mineru.formula),
+            table=first_set(table, config.mineru.table),
+            image_analysis=first_set(image_analysis, config.mineru.image_analysis),
+            url=first_set(url or None, config.mineru.url),
+            start_page=first_set(start_page, config.mineru.start_page),
+            end_page=first_set(end_page, config.mineru.end_page),
         )
     except UnknownMinerUProfileError as exc:
         raise typer.BadParameter(str(exc)) from exc
-    _validate_mineru_options(options)
+    _validate_mineru_options(options, pages=pages)
     resolved_timeout = config.mineru.timeout_seconds if timeout_seconds is None else timeout_seconds
     if resolved_timeout is not None and resolved_timeout < 0:
         raise typer.BadParameter("timeout_seconds must be non-negative")
@@ -216,7 +221,6 @@ def parse_book(
     parser_name = _validate_plugin_name(
         default_parser_registry(), parser or config.parsers.default_pdf
     )
-    book_manifest = workspace.sources_inbox / resolved_book_id / "book.json"
     original_source = _registered_original_path(workspace, resolved_book_id, book_manifest)
     parsed_dir = workspace.sources_parsed / resolved_book_id
     middle_json = parsed_dir / f"{resolved_book_id}_middle.json"
@@ -267,7 +271,6 @@ def parse_book(
     if not original_source.is_file():
         raise typer.BadParameter(f"Registered original source not found: {original_source}")
 
-    pages = _registered_pdf_pages(book_manifest)
     _write_parse_log_header(
         log_path,
         book_id=resolved_book_id,
@@ -356,28 +359,45 @@ def _registered_pdf_pages(book_manifest: Path) -> int | None:
     return pages if isinstance(pages, int) and pages > 0 else None
 
 
-def _first_set(override: _T | None, fallback: _T | None) -> _T | None:
-    """Return ``override`` unless it is unset (``None``), then ``fallback``."""
+def _validate_mineru_options(options: MinerUOptions, *, pages: int | None) -> None:
+    """Reject knobs MinerU cannot honor before spawning it, for a clear CLI error."""
 
-    return override if override is not None else fallback
-
-
-def _validate_mineru_options(options: MinerUOptions) -> None:
-    """Reject knob combinations MinerU cannot honor before spawning it."""
-
+    if options.method not in VALID_METHODS:
+        raise typer.BadParameter(
+            f"Unknown MinerU method '{options.method}'. Allowed: {_sorted(VALID_METHODS)}."
+        )
+    if options.backend is not None and options.backend not in VALID_BACKENDS:
+        raise typer.BadParameter(
+            f"Unknown MinerU backend '{options.backend}'. Allowed: {_sorted(VALID_BACKENDS)}."
+        )
+    if options.effort is not None and options.effort not in VALID_EFFORTS:
+        raise typer.BadParameter(
+            f"Unknown MinerU effort '{options.effort}'. Allowed: {_sorted(VALID_EFFORTS)}."
+        )
     if options.backend and options.backend.endswith("http-client") and not options.url:
         raise typer.BadParameter(
             f"MinerU backend '{options.backend}' needs a server URL; pass --url."
         )
     for label, value in (("start-page", options.start_page), ("end-page", options.end_page)):
-        if value is not None and value < 0:
+        if value is None:
+            continue
+        if value < 0:
             raise typer.BadParameter(f"{label} must be non-negative")
+        # Pages are 0-based, so the last valid index is pages - 1.
+        if pages is not None and value >= pages:
+            raise typer.BadParameter(
+                f"{label} {value} is past the last page (book has {pages} pages, 0-based)."
+            )
     if (
         options.start_page is not None
         and options.end_page is not None
         and options.end_page < options.start_page
     ):
         raise typer.BadParameter("end-page must not be before start-page")
+
+
+def _sorted(values: frozenset[str]) -> str:
+    return ", ".join(sorted(values))
 
 
 def _write_parse_log_header(

@@ -596,6 +596,62 @@ def test_doc_blocks_cache_is_bounded(tmp_path: Path) -> None:
     assert len(service._DOC_BLOCKS_CACHE) <= service._DOC_BLOCKS_CACHE_MAX
 
 
+def test_asset_with_embedded_nul_degrades_instead_of_crashing(tmp_path: Path) -> None:
+    # A corrupt/adversarial document.json can carry a NUL byte in a path; resolving it
+    # raises ValueError, which must degrade to "no asset", not crash the section fetch.
+    section = Section(
+        id="deep-work.figs",
+        doc_id="deep-work",
+        title="Figures",
+        level=1,
+        heading_path=["Figures"],
+        text="Body.",
+        block_ids=["img1"],
+    )
+    workspace = _workspace(tmp_path, section)
+    write_document(
+        Document(
+            doc_id="deep-work",
+            title="Deep Work",
+            blocks=[CanonicalBlock(id="img1", type="image", asset_path="fig\x00.jpg")],
+        ),
+        workspace.sources_parsed / "deep-work",
+    )
+
+    view = service.get_section(workspace, "deep-work", "deep-work.figs")
+
+    assert view.assets == []
+
+
+def test_get_next_section_include_assets_toggle(tmp_path: Path) -> None:
+    section = Section(
+        id="deep-work.figs",
+        doc_id="deep-work",
+        title="Figures",
+        level=1,
+        heading_path=["Figures"],
+        text="Body.",
+        block_ids=["img1"],
+    )
+    workspace = _workspace(tmp_path, section)
+    _stage_asset(workspace, "deep-work", "images/fig1.jpg")
+    write_document(
+        Document(
+            doc_id="deep-work",
+            title="Deep Work",
+            blocks=[CanonicalBlock(id="img1", type="image", asset_path="fig1.jpg")],
+        ),
+        workspace.sources_parsed / "deep-work",
+    )
+    _plan(workspace, "deep-work.figs")
+
+    with_assets = service.get_next_section(workspace, "daily")
+    assert [a.block_id for a in with_assets.sections[0].assets] == ["img1"]
+
+    without = service.get_next_section(workspace, "daily", include_assets=False)
+    assert without.sections[0].assets == []
+
+
 def test_mark_read_with_traversal_plan_id_writes_nothing_outside(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path, _section("deep-work.a", "Alpha"))
     _plan(workspace, "deep-work.a")

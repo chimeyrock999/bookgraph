@@ -329,9 +329,15 @@ def _resolve_asset_path(
     lexical = Path(os.path.normpath(base / candidate))
     # Resolve symlinks and check containment against the real root: a lexical-only check
     # would let a symlink under images/ point outside the workspace, and would accept a
-    # ".."-style path that lands on the root directory itself rather than a file.
-    real = lexical.resolve()
-    if not real.is_relative_to(parsed_root.resolve()) or not real.is_file():
+    # ".."-style path that lands on the root directory itself rather than a file. The
+    # filesystem calls are guarded because a corrupt/adversarial document.json can carry a
+    # path with an embedded NUL (ValueError) or other bad bytes — a single malformed asset
+    # must degrade to "no asset", never crash the whole section fetch.
+    try:
+        real = lexical.resolve()
+        if not real.is_relative_to(parsed_root.resolve()) or not real.is_file():
+            return None
+    except (OSError, ValueError):
         return None
     return str(lexical)
 
@@ -463,13 +469,19 @@ def _load_plan(workspace: WorkspacePaths, plan_id: str) -> tuple[Path, ReadingPl
         raise PlanNotFoundError(f"Invalid reading plan: {path}: {exc}") from exc
 
 
-def get_next_section(workspace: WorkspacePaths, plan_id: str) -> NextSection:
-    """Return the next unread sections for a plan, with full content."""
+def get_next_section(
+    workspace: WorkspacePaths, plan_id: str, include_assets: bool = True
+) -> NextSection:
+    """Return the next unread sections for a plan, with full content.
+
+    ``include_assets`` (default true) mirrors ``get_section`` — set it false to skip the
+    figure/table resolution (and its ``document.json`` read) on plans read for prose only.
+    """
 
     _, plan = _load_plan(workspace, plan_id)
     pack = next_sections(plan)
     by_id = {section.id: section for section in _load_doc_sections(workspace, plan.doc_id)}
-    blocks_by_id = _load_doc_blocks(workspace, plan.doc_id)
+    blocks_by_id = _load_doc_blocks(workspace, plan.doc_id) if include_assets else None
     views: list[SectionView] = []
     for section_id in pack.sections:
         section = by_id.get(section_id)
@@ -478,7 +490,11 @@ def get_next_section(workspace: WorkspacePaths, plan_id: str) -> NextSection:
                 f"Reading plan '{plan_id}' references unknown section '{section_id}' "
                 f"in document '{plan.doc_id}'."
             )
-        views.append(_section_view(workspace, section, blocks_by_id=blocks_by_id))
+        views.append(
+            _section_view(
+                workspace, section, include_assets=include_assets, blocks_by_id=blocks_by_id
+            )
+        )
     return NextSection(
         plan_id=plan.plan_id,
         doc_id=plan.doc_id,

@@ -40,11 +40,15 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
     mcp: FastMCP = FastMCP("bookgraph")
 
     @mcp.tool
-    def get_next_section(plan_id: str) -> NextSection:
-        """Return the next unread sections for a reading plan, with full content."""
+    def get_next_section(plan_id: str, include_assets: bool = True) -> NextSection:
+        """Return the next unread sections for a reading plan, with full content.
+
+        With ``include_assets`` (default) each section carries its structured figure/table
+        ``assets``; set it false to skip asset resolution when reading for prose only.
+        """
 
         try:
-            return service.get_next_section(workspace, plan_id)
+            return service.get_next_section(workspace, plan_id, include_assets)
         except ReadingServiceError as exc:
             raise ToolError(str(exc)) from exc
 

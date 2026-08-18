@@ -88,6 +88,80 @@ def test_run_builds_expected_argv(tmp_path: Path) -> None:
     assert argv[argv.index("-b") + 1] == "pipeline"
 
 
+def _capture_argv(tmp_path: Path, **runner_kwargs: object) -> list[str]:
+    captured: list[list[str]] = []
+
+    def spy(argv: list[str]) -> subprocess.CompletedProcess[str]:
+        captured.append(argv)
+        return _fake_mineru()(argv)
+
+    runner = MinerURunner(run_process=spy, **runner_kwargs)  # type: ignore[arg-type]
+    runner.run(_pdf(tmp_path), tmp_path / "parsed" / "doc")
+    return captured[0]
+
+
+def test_argv_fast_text_profile_toggles_off_heavy_passes(tmp_path: Path) -> None:
+    argv = _capture_argv(
+        tmp_path,
+        method="txt",
+        backend="pipeline",
+        effort="medium",
+        formula=False,
+        table=False,
+        image_analysis=False,
+    )
+
+    assert argv[argv.index("-m") + 1] == "txt"
+    assert argv[argv.index("-b") + 1] == "pipeline"
+    assert argv[argv.index("--effort") + 1] == "medium"
+    assert argv[argv.index("-f") + 1] == "false"
+    assert argv[argv.index("-t") + 1] == "false"
+    assert argv[argv.index("--image-analysis") + 1] == "false"
+
+
+def test_argv_local_gpu_profile_enables_features(tmp_path: Path) -> None:
+    argv = _capture_argv(
+        tmp_path,
+        backend="hybrid-engine",
+        effort="high",
+        formula=True,
+        table=True,
+        image_analysis=True,
+    )
+
+    assert argv[argv.index("-b") + 1] == "hybrid-engine"
+    assert argv[argv.index("--effort") + 1] == "high"
+    assert argv[argv.index("-f") + 1] == "true"
+    assert argv[argv.index("-t") + 1] == "true"
+    assert argv[argv.index("--image-analysis") + 1] == "true"
+
+
+def test_argv_remote_http_backend_passes_url(tmp_path: Path) -> None:
+    argv = _capture_argv(
+        tmp_path,
+        backend="hybrid-http-client",
+        url="http://gpu-box:30000",
+    )
+
+    assert argv[argv.index("-b") + 1] == "hybrid-http-client"
+    assert argv[argv.index("-u") + 1] == "http://gpu-box:30000"
+
+
+def test_argv_includes_page_range_when_set(tmp_path: Path) -> None:
+    argv = _capture_argv(tmp_path, start_page=2, end_page=9)
+
+    assert argv[argv.index("-s") + 1] == "2"
+    assert argv[argv.index("-e") + 1] == "9"
+
+
+def test_argv_omits_unset_optional_knobs(tmp_path: Path) -> None:
+    argv = _capture_argv(tmp_path)
+
+    # Balanced/default run adds no optional flags beyond the base -m.
+    for flag in ("-b", "--effort", "-f", "-t", "--image-analysis", "-u", "-s", "-e"):
+        assert flag not in argv
+
+
 def test_run_only_stages_artifacts_mineru_produced(tmp_path: Path) -> None:
     runner = MinerURunner(run_process=_fake_mineru(siblings=False))
 

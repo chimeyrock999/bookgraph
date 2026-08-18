@@ -4,7 +4,7 @@ import json
 import os
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, TypeVar
 
 import typer
 
@@ -22,8 +22,16 @@ from bookgraph.defaults import default_parser_registry
 from bookgraph.documents import write_document
 from bookgraph.parsers.errors import UnsupportedSourceError
 from bookgraph.parsers.markitdown import MissingParserDependencyError
+from bookgraph.parsers.mineru_profiles import (
+    MinerUOptions,
+    UnknownMinerUProfileError,
+    available_profiles,
+    resolve_mineru_options,
+)
 from bookgraph.parsers.mineru_runner import MinerUNotInstalledError, MinerURunError, MinerURunner
 from bookgraph.workspace import WorkspacePaths
+
+_T = TypeVar("_T")
 
 
 @app.command("add-book")
@@ -70,16 +78,90 @@ def parse_book(
         str | None,
         typer.Option("--runner-command", help="Executable name. Defaults to [mineru].command."),
     ] = None,
+    profile: Annotated[
+        str | None,
+        typer.Option(
+            "--profile",
+            "--mineru-profile",
+            help=(
+                "MinerU profile picking hardware/quality defaults "
+                f"({', '.join(available_profiles())}). Defaults to [mineru].profile."
+            ),
+        ),
+    ] = None,
     method: Annotated[
         str | None,
-        typer.Option("--method", "-m", help="MinerU method. Defaults to [mineru].method."),
+        typer.Option(
+            "--method",
+            "-m",
+            "--mineru-method",
+            help="MinerU method [auto|txt|ocr]. Overrides the profile / [mineru].method.",
+        ),
     ] = None,
     backend: Annotated[
         str | None,
         typer.Option(
             "--backend",
             "-b",
-            help="Optional MinerU backend reserved for the future runner.",
+            "--mineru-backend",
+            help=(
+                "MinerU backend [pipeline|vlm-engine|hybrid-engine|"
+                "vlm-http-client|hybrid-http-client]. Overrides the profile / [mineru].backend."
+            ),
+        ),
+    ] = None,
+    effort: Annotated[
+        str | None,
+        typer.Option(
+            "--effort",
+            "--mineru-effort",
+            help="MinerU effort [medium|high]. Overrides the profile / [mineru].effort.",
+        ),
+    ] = None,
+    formula: Annotated[
+        bool | None,
+        typer.Option(
+            "--formula/--no-formula",
+            help="Toggle MinerU formula parsing. Overrides the profile / [mineru].formula.",
+        ),
+    ] = None,
+    table: Annotated[
+        bool | None,
+        typer.Option(
+            "--table/--no-table",
+            help="Toggle MinerU table parsing. Overrides the profile / [mineru].table.",
+        ),
+    ] = None,
+    image_analysis: Annotated[
+        bool | None,
+        typer.Option(
+            "--image-analysis/--no-image-analysis",
+            help="Toggle MinerU image analysis. Overrides the profile / [mineru].image_analysis.",
+        ),
+    ] = None,
+    url: Annotated[
+        str | None,
+        typer.Option(
+            "--url",
+            "-u",
+            "--mineru-url",
+            help="Remote GPU server URL for the *-http-client backends. Defaults to [mineru].url.",
+        ),
+    ] = None,
+    start_page: Annotated[
+        int | None,
+        typer.Option(
+            "--start-page",
+            "-s",
+            help="First 0-based page to parse (MinerU -s). Defaults to [mineru].start_page.",
+        ),
+    ] = None,
+    end_page: Annotated[
+        int | None,
+        typer.Option(
+            "--end-page",
+            "-e",
+            help="Last 0-based page to parse (MinerU -e). Defaults to [mineru].end_page.",
         ),
     ] = None,
     timeout_seconds: Annotated[
@@ -109,8 +191,24 @@ def parse_book(
     resolved_book_id = _validate_id(book_id, "book_id")
     resolved_runner = runner or config.mineru.runner
     resolved_runner_command = runner_command or config.mineru.command
-    resolved_method = method or config.mineru.method
-    resolved_backend = backend if backend is not None else config.mineru.backend
+    resolved_profile = profile or config.mineru.profile
+    # CLI flags win over config, which in turn overrides the profile's defaults.
+    try:
+        options = resolve_mineru_options(
+            resolved_profile,
+            backend=_first_set(backend, config.mineru.backend),
+            method=_first_set(method, config.mineru.method),
+            effort=_first_set(effort, config.mineru.effort),
+            formula=_first_set(formula, config.mineru.formula),
+            table=_first_set(table, config.mineru.table),
+            image_analysis=_first_set(image_analysis, config.mineru.image_analysis),
+            url=_first_set(url, config.mineru.url),
+            start_page=_first_set(start_page, config.mineru.start_page),
+            end_page=_first_set(end_page, config.mineru.end_page),
+        )
+    except UnknownMinerUProfileError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    _validate_mineru_options(options)
     resolved_timeout = config.mineru.timeout_seconds if timeout_seconds is None else timeout_seconds
     if resolved_timeout is not None and resolved_timeout < 0:
         raise typer.BadParameter("timeout_seconds must be non-negative")
@@ -130,8 +228,16 @@ def parse_book(
         "runner": {
             "name": resolved_runner,
             "command": resolved_runner_command,
-            "method": resolved_method,
-            "backend": resolved_backend,
+            "profile": resolved_profile,
+            "method": options.method,
+            "backend": options.backend,
+            "effort": options.effort,
+            "formula": options.formula,
+            "table": options.table,
+            "image_analysis": options.image_analysis,
+            "url": options.url,
+            "start_page": options.start_page,
+            "end_page": options.end_page,
             "timeout_seconds": resolved_timeout,
         },
         "parser": parser_name,
@@ -167,14 +273,15 @@ def parse_book(
         book_id=resolved_book_id,
         runner=resolved_runner,
         runner_command=resolved_runner_command,
-        method=resolved_method,
-        backend=resolved_backend,
+        profile=resolved_profile,
+        options=options,
         timeout_seconds=resolved_timeout,
         input_path=original_source,
         pages=pages,
     )
     typer.echo(f"runner: {resolved_runner}")
     typer.echo(f"book_id: {resolved_book_id}")
+    typer.echo(f"profile: {resolved_profile}")
     if pages is not None:
         typer.echo(f"pages: {pages}")
     typer.echo(f"log: {log_path}")
@@ -184,8 +291,15 @@ def parse_book(
         run_result = MinerURunner(
             name=resolved_runner,
             command=resolved_runner_command,
-            method=resolved_method,
-            backend=resolved_backend,
+            method=options.method,
+            backend=options.backend,
+            effort=options.effort,
+            formula=options.formula,
+            table=options.table,
+            image_analysis=options.image_analysis,
+            url=options.url,
+            start_page=options.start_page,
+            end_page=options.end_page,
             timeout_seconds=resolved_timeout,
             log_path=log_path,
         ).run(original_source, parsed_dir)
@@ -212,6 +326,7 @@ def parse_book(
                 **document.metadata,
                 "runner": resolved_runner,
                 "runner_command": resolved_runner_command,
+                "runner_profile": resolved_profile,
             },
         }
     )
@@ -241,14 +356,38 @@ def _registered_pdf_pages(book_manifest: Path) -> int | None:
     return pages if isinstance(pages, int) and pages > 0 else None
 
 
+def _first_set(override: _T | None, fallback: _T | None) -> _T | None:
+    """Return ``override`` unless it is unset (``None``), then ``fallback``."""
+
+    return override if override is not None else fallback
+
+
+def _validate_mineru_options(options: MinerUOptions) -> None:
+    """Reject knob combinations MinerU cannot honor before spawning it."""
+
+    if options.backend and options.backend.endswith("http-client") and not options.url:
+        raise typer.BadParameter(
+            f"MinerU backend '{options.backend}' needs a server URL; pass --url."
+        )
+    for label, value in (("start-page", options.start_page), ("end-page", options.end_page)):
+        if value is not None and value < 0:
+            raise typer.BadParameter(f"{label} must be non-negative")
+    if (
+        options.start_page is not None
+        and options.end_page is not None
+        and options.end_page < options.start_page
+    ):
+        raise typer.BadParameter("end-page must not be before start-page")
+
+
 def _write_parse_log_header(
     path: Path,
     *,
     book_id: str,
     runner: str,
     runner_command: str,
-    method: str,
-    backend: str | None,
+    profile: str,
+    options: MinerUOptions,
     timeout_seconds: int | None,
     input_path: Path,
     pages: int | None,
@@ -259,8 +398,16 @@ def _write_parse_log_header(
         f"book_id: {book_id}",
         f"runner: {runner}",
         f"runner_command: {runner_command}",
-        f"method: {method}",
-        f"backend: {backend}",
+        f"profile: {profile}",
+        f"method: {options.method}",
+        f"backend: {options.backend}",
+        f"effort: {options.effort}",
+        f"formula: {options.formula}",
+        f"table: {options.table}",
+        f"image_analysis: {options.image_analysis}",
+        f"url: {options.url}",
+        f"start_page: {options.start_page}",
+        f"end_page: {options.end_page}",
         f"timeout_seconds: {timeout_seconds}",
         f"input: {input_path}",
         f"pages: {pages}",

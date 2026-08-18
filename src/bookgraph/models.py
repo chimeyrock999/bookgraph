@@ -25,6 +25,7 @@ class CanonicalBlock(BaseModel):
     level: int | None = None
     page_idx: int | None = None
     bbox: tuple[float, float, float, float] | None = None
+    asset_path: str | None = None
     source_path: str | None = None
     order: int | None = None
     metadata: dict[str, str | int | float | bool | None] = Field(default_factory=dict)

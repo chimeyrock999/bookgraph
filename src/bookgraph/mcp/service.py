@@ -21,9 +21,10 @@ from bookgraph.annotations import (
     read_annotation,
     write_annotation,
 )
+from bookgraph.documents import read_document
 from bookgraph.graph import SectionGraph, build_section_graph
 from bookgraph.index import default_index_backend, tokenize
-from bookgraph.models import AnnotatedConcept, ReadingPlan, Section
+from bookgraph.models import AnnotatedConcept, CanonicalBlock, ReadingPlan, Section
 from bookgraph.reading_plans import (
     create_reading_plan,
     list_plan_progress,
@@ -61,6 +62,23 @@ class ConceptNotFoundError(ReadingServiceError):
     """A requested concept slug is not present in the index."""
 
 
+class AssetRef(BaseModel):
+    """A figure/table asset that belongs to a section, resolved to a real file.
+
+    ``caption`` is the block's text (a MinerU image/table block surfaces only its
+    caption as text — the labels/data live inside ``path``). ``order`` is the block's
+    position in the parsed document, so a client can place the asset relative to the
+    section's prose.
+    """
+
+    block_id: str
+    type: str
+    path: str
+    caption: str = ""
+    order: int | None = None
+    page_idx: int | None = None
+
+
 class SectionView(BaseModel):
     """A section's full reading content plus provenance and its Markdown path."""
 
@@ -76,6 +94,8 @@ class SectionView(BaseModel):
     next_id: str | None = None
     block_ids: list[str] = Field(default_factory=list)
     markdown_path: str
+    assets: list[AssetRef] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
 
 
 class NextSection(BaseModel):
@@ -228,8 +248,105 @@ def _section_markdown_path(workspace: WorkspacePaths, doc_id: str, section_id: s
     return workspace.sources_sections / doc_id / f"{section_id}.md"
 
 
-def _section_view(workspace: WorkspacePaths, section: Section) -> SectionView:
+_ASSET_BLOCK_TYPES = {"image", "table", "chart"}
+
+
+def _load_doc_blocks(workspace: WorkspacePaths, doc_id: str) -> dict[str, CanonicalBlock]:
+    """Index the parsed ``document.json`` blocks by id, or ``{}`` when unavailable.
+
+    ``Section.block_ids`` is the only link back to the parser's richer blocks (where the
+    image/table asset paths live). A document that was never parsed to ``document.json``
+    (e.g. a fixture that only writes ``sections.jsonl``) simply yields no assets.
+    """
+
+    document_path = workspace.sources_parsed / doc_id / "document.json"
+    if not document_path.is_file():
+        return {}
+    try:
+        document = read_document(document_path)
+    except (OSError, ValueError):
+        return {}
+    return {block.id: block for block in document.blocks}
+
+
+def _resolve_asset_path(workspace: WorkspacePaths, doc_id: str, block: CanonicalBlock) -> str:
+    """Turn a parser's relative asset filename into a workspace-resolved path.
+
+    Prefers the typed ``asset_path`` (MinerU); falls back to the markdown parser's
+    ``metadata["src"]``. A bare filename is resolved under the staged ``images/`` dir
+    that ``MinerURunner`` copies alongside ``document.json``.
+    """
+
+    raw = block.asset_path
+    if not raw:
+        meta_src = block.metadata.get("src") or block.metadata.get("asset_path")
+        raw = str(meta_src) if meta_src else ""
+    if not raw:
+        return ""
+    parsed_root = workspace.sources_parsed / doc_id
+    if "/" in raw or "\\" in raw:
+        return str(parsed_root / raw)
+    return str(parsed_root / "images" / raw)
+
+
+def _section_assets(
+    workspace: WorkspacePaths,
+    section: Section,
+    blocks_by_id: dict[str, CanonicalBlock],
+) -> list[AssetRef]:
+    assets: list[AssetRef] = []
+    for block_id in section.block_ids:
+        block = blocks_by_id.get(block_id)
+        if block is None or block.type not in _ASSET_BLOCK_TYPES:
+            continue
+        assets.append(
+            AssetRef(
+                block_id=block.id,
+                type=block.type,
+                path=_resolve_asset_path(workspace, section.doc_id, block),
+                caption=block.text,
+                order=block.order,
+                page_idx=block.page_idx,
+            )
+        )
+    return assets
+
+
+def _asset_notes(section: Section, assets: list[AssetRef]) -> list[str]:
+    """Warn when a section's prose is effectively just the asset captions.
+
+    In that case the meaningful labels/tabular data live inside the asset file, and a
+    reader working from ``text`` alone would miss them (issue #34, acceptance #3).
+    """
+
+    if not assets:
+        return []
+    body = section.text.strip()
+    captions = " ".join(asset.caption.strip() for asset in assets if asset.caption.strip())
+    caption_only = len(body) <= len(captions) + 40 or body == captions.strip()
+    if not caption_only:
+        return []
+    return [
+        f"This section has {len(assets)} image/table asset(s); labels or tabular data may "
+        "live inside the file(s) — inspect the asset(s), not just `text`."
+    ]
+
+
+def _section_view(
+    workspace: WorkspacePaths,
+    section: Section,
+    *,
+    include_assets: bool = True,
+    blocks_by_id: dict[str, CanonicalBlock] | None = None,
+) -> SectionView:
     markdown_path = _section_markdown_path(workspace, section.doc_id, section.id)
+    assets: list[AssetRef] = []
+    notes: list[str] = []
+    if include_assets:
+        if blocks_by_id is None:
+            blocks_by_id = _load_doc_blocks(workspace, section.doc_id)
+        assets = _section_assets(workspace, section, blocks_by_id)
+        notes = _asset_notes(section, assets)
     return SectionView(
         id=section.id,
         doc_id=section.doc_id,
@@ -243,6 +360,8 @@ def _section_view(workspace: WorkspacePaths, section: Section) -> SectionView:
         next_id=section.next_id,
         block_ids=section.block_ids,
         markdown_path=str(markdown_path),
+        assets=assets,
+        notes=notes,
     )
 
 
@@ -294,6 +413,7 @@ def get_next_section(workspace: WorkspacePaths, plan_id: str) -> NextSection:
     _, plan = _load_plan(workspace, plan_id)
     pack = next_sections(plan)
     by_id = {section.id: section for section in _load_doc_sections(workspace, plan.doc_id)}
+    blocks_by_id = _load_doc_blocks(workspace, plan.doc_id)
     views: list[SectionView] = []
     for section_id in pack.sections:
         section = by_id.get(section_id)
@@ -302,7 +422,7 @@ def get_next_section(workspace: WorkspacePaths, plan_id: str) -> NextSection:
                 f"Reading plan '{plan_id}' references unknown section '{section_id}' "
                 f"in document '{plan.doc_id}'."
             )
-        views.append(_section_view(workspace, section))
+        views.append(_section_view(workspace, section, blocks_by_id=blocks_by_id))
     return NextSection(
         plan_id=plan.plan_id,
         doc_id=plan.doc_id,
@@ -312,12 +432,22 @@ def get_next_section(workspace: WorkspacePaths, plan_id: str) -> NextSection:
     )
 
 
-def get_section(workspace: WorkspacePaths, doc_id: str, section_id: str) -> SectionView:
-    """Return one section's full reading content by id."""
+def get_section(
+    workspace: WorkspacePaths,
+    doc_id: str,
+    section_id: str,
+    include_assets: bool = True,
+) -> SectionView:
+    """Return one section's full reading content by id.
+
+    When ``include_assets`` (the default) the view carries a structured ``assets`` list
+    of the section's figures/tables (path, type, caption, order) so a reader no longer has
+    to grep the parsed ``document.json`` to find them.
+    """
 
     for section in _load_doc_sections(workspace, doc_id):
         if section.id == section_id:
-            return _section_view(workspace, section)
+            return _section_view(workspace, section, include_assets=include_assets)
     raise SectionNotFoundError(f"Section '{section_id}' not found in document '{doc_id}'.")
 
 
@@ -510,16 +640,22 @@ def get_related(workspace: WorkspacePaths, doc_id: str, section_id: str) -> Rela
     )
 
 
-def get_context(workspace: WorkspacePaths, doc_id: str, section_id: str) -> SectionContext:
+def get_context(
+    workspace: WorkspacePaths,
+    doc_id: str,
+    section_id: str,
+    include_assets: bool = True,
+) -> SectionContext:
     """Return a section's full content, graph neighbourhood, and its concepts.
 
     The concepts let a reader pivot from the current section to where each concept
     is discussed elsewhere (via ``get_concept``). They are empty for a document that
-    has not been indexed (concepts have no live-scan fallback).
+    has not been indexed (concepts have no live-scan fallback). ``include_assets``
+    controls whether the embedded section carries its figures/tables (see ``get_section``).
     """
 
     # Resolve the section first so a missing id raises before any graph work.
-    section = get_section(workspace, doc_id, section_id)
+    section = get_section(workspace, doc_id, section_id, include_assets=include_assets)
     related = get_related(workspace, doc_id, section_id)
     concepts = [
         ConceptRef(

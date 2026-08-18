@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from bookgraph.documents import write_document
 from bookgraph.index.sqlite import SqliteIndexBackend, db_path
 from bookgraph.mcp import service
 from bookgraph.mcp.service import (
@@ -14,7 +15,7 @@ from bookgraph.mcp.service import (
     SectionNotFoundError,
     SectionsNotFoundError,
 )
-from bookgraph.models import ReadingPlan, Section
+from bookgraph.models import CanonicalBlock, Document, ReadingPlan, Section
 from bookgraph.reading_plans import write_reading_plan
 from bookgraph.sections import read_sections, write_sections
 from bookgraph.workspace import WorkspacePaths
@@ -292,6 +293,110 @@ def test_client_ids_that_are_not_slugs_are_rejected(tmp_path: Path, bad_id: str)
         service.mark_read(workspace, bad_id)
     with pytest.raises(InvalidIdError):
         service.search_sections(workspace, "alpha", doc_id=bad_id)
+
+
+def _write_document_with_assets(workspace: WorkspacePaths, doc_id: str = "deep-work") -> None:
+    """Write a parsed ``document.json`` whose block ids match a section's ``block_ids``."""
+
+    document = Document(
+        doc_id=doc_id,
+        title="Deep Work",
+        blocks=[
+            CanonicalBlock(id="t0", type="title", text="Figures", order=0, page_idx=1),
+            CanonicalBlock(
+                id="img1",
+                type="image",
+                text="Figure 1. The pipeline.",
+                asset_path="fig1.jpg",
+                order=1,
+                page_idx=1,
+            ),
+            CanonicalBlock(
+                id="tbl1",
+                type="table",
+                text="Table 1. Results.",
+                asset_path="nested/tbl1.jpg",
+                order=2,
+                page_idx=2,
+            ),
+        ],
+    )
+    write_document(document, workspace.sources_parsed / doc_id)
+
+
+def test_get_section_returns_structured_assets(tmp_path: Path) -> None:
+    section = Section(
+        id="deep-work.figs",
+        doc_id="deep-work",
+        title="Figures",
+        level=1,
+        heading_path=["Figures"],
+        text="Figure 1. The pipeline. Table 1. Results.",
+        block_ids=["t0", "img1", "tbl1"],
+    )
+    workspace = _workspace(tmp_path, section)
+    _write_document_with_assets(workspace)
+
+    view = service.get_section(workspace, "deep-work", "deep-work.figs")
+
+    assert [asset.type for asset in view.assets] == ["image", "table"]
+    image, table = view.assets
+    assert image.block_id == "img1"
+    assert image.caption == "Figure 1. The pipeline."
+    assert image.order == 1
+    assert image.page_idx == 1
+    # A bare filename resolves under the staged ``images/`` dir; a relative path is kept.
+    assert image.path == str(workspace.sources_parsed / "deep-work" / "images" / "fig1.jpg")
+    assert table.path == str(workspace.sources_parsed / "deep-work" / "nested" / "tbl1.jpg")
+    # Prose is effectively just the captions, so the reader is warned to open the assets.
+    assert view.notes
+
+
+def test_get_section_include_assets_false_omits_assets(tmp_path: Path) -> None:
+    section = Section(
+        id="deep-work.figs",
+        doc_id="deep-work",
+        title="Figures",
+        level=1,
+        heading_path=["Figures"],
+        text="Figure 1. The pipeline.",
+        block_ids=["img1"],
+    )
+    workspace = _workspace(tmp_path, section)
+    _write_document_with_assets(workspace)
+
+    view = service.get_section(workspace, "deep-work", "deep-work.figs", include_assets=False)
+
+    assert view.assets == []
+    assert view.notes == []
+
+
+def test_get_section_without_parsed_document_has_no_assets(tmp_path: Path) -> None:
+    # The existing fixtures only write sections.jsonl (no document.json) — assets stay empty.
+    workspace = _workspace(tmp_path, _section("deep-work.a", "Alpha"))
+
+    view = service.get_section(workspace, "deep-work", "deep-work.a")
+
+    assert view.assets == []
+    assert view.notes == []
+
+
+def test_get_context_carries_section_assets(tmp_path: Path) -> None:
+    section = Section(
+        id="deep-work.figs",
+        doc_id="deep-work",
+        title="Figures",
+        level=1,
+        heading_path=["Figures"],
+        text="Figure 1. The pipeline.",
+        block_ids=["img1"],
+    )
+    workspace = _workspace(tmp_path, section)
+    _write_document_with_assets(workspace)
+
+    context = service.get_context(workspace, "deep-work", "deep-work.figs")
+
+    assert [asset.block_id for asset in context.section.assets] == ["img1"]
 
 
 def test_mark_read_with_traversal_plan_id_writes_nothing_outside(tmp_path: Path) -> None:

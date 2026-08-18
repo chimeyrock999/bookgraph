@@ -128,6 +128,10 @@ Current schema mirrors `bookgraph.models.Document`:
 - `level`: heading/title level if known.
 - `page_idx`: page index if known from paged parser output.
 - `bbox`: source bounding box if known from layout parser output.
+- `asset_path`: for `image`/`table`/`chart` blocks, the parser-relative filename of the
+  extracted asset (e.g. MinerU's `fig1.jpg`, staged under `sources/parsed/<doc_id>/images/`).
+  `null` for text blocks. Surfaced per section by the MCP `get_section` / `get_context`
+  `assets` list (path, type, caption, order) so readers need not grep this file.
 - `source_path`: path to source/parser artifact that proves the block.
 - `order`: zero-based reading order.
 - `metadata`: parser-specific provenance. Must be JSON scalar values only.

@@ -76,6 +76,12 @@ A self-serve agent drives an entire session with these tools alone:
    - `get_context(doc_id, section_id)` — the section's content, its graph
      neighbourhood (parent/prev/next/children), its `concepts`, and any `summary`
      already written for it.
+   - Both `get_section` and `get_context` return the section's figures/tables as a
+     structured `assets` list (each `{block_id, type, path, caption, order, page_idx}`)
+     so you never have to grep `sources/parsed/<doc_id>/document.json` for image paths.
+     `path` resolves under the workspace; open it directly to OCR/inspect labels or table
+     content. When a section's `text` is effectively just the captions, `notes` warns you
+     that the meaningful content lives inside the asset. Pass `include_assets=false` to omit.
    - Pivot as needed:
      - `get_concept(concept)` — where a concept is discussed across **all**
        books (cross-book backlinks).

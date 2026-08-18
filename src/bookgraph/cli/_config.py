@@ -24,8 +24,16 @@ class ParserConfig:
 class MinerUConfig:
     runner: str = "mineru"
     command: str = "mineru"
-    method: str = "auto"
+    profile: str = "balanced"
+    method: str | None = None
     backend: str | None = None
+    effort: str | None = None
+    formula: bool | None = None
+    table: bool | None = None
+    image_analysis: bool | None = None
+    url: str | None = None
+    start_page: int | None = None
+    end_page: int | None = None
     timeout_seconds: int | None = 3600
 
 
@@ -76,8 +84,16 @@ def load_config(workspace: WorkspacePaths) -> BookGraphConfig:
         mineru=MinerUConfig(
             runner=_string_at(payload, ["mineru", "runner"], "mineru"),
             command=_string_at(payload, ["mineru", "command"], "mineru"),
-            method=_string_at(payload, ["mineru", "method"], "auto"),
+            profile=_string_at(payload, ["mineru", "profile"], "balanced"),
+            method=_optional_string_at(payload, ["mineru", "method"]),
             backend=_optional_string_at(payload, ["mineru", "backend"]),
+            effort=_optional_string_at(payload, ["mineru", "effort"]),
+            formula=_optional_bool_at(payload, ["mineru", "formula"]),
+            table=_optional_bool_at(payload, ["mineru", "table"]),
+            image_analysis=_optional_bool_at(payload, ["mineru", "image_analysis"]),
+            url=_optional_url_at(payload, ["mineru", "url"]),
+            start_page=_optional_page_int_at(payload, ["mineru", "start_page"]),
+            end_page=_optional_page_int_at(payload, ["mineru", "end_page"]),
             timeout_seconds=_optional_non_negative_int_at(
                 payload, ["mineru", "timeout_seconds"], 3600
             ),
@@ -118,6 +134,37 @@ def _optional_string_at(payload: dict[str, Any], path: list[str]) -> str | None:
         return None
     if not isinstance(value, str) or not value:
         raise typer.BadParameter(f"Config {'.'.join(path)} must be a non-empty string")
+    return value
+
+
+def _optional_url_at(payload: dict[str, Any], path: list[str]) -> str | None:
+    """Like ``_optional_string_at`` but treats an empty string as "unset"."""
+
+    value = _get_nested(payload, path)
+    if value is None or value == "":
+        return None
+    if not isinstance(value, str):
+        raise typer.BadParameter(f"Config {'.'.join(path)} must be a string")
+    return value
+
+
+def _optional_bool_at(payload: dict[str, Any], path: list[str]) -> bool | None:
+    value = _get_nested(payload, path)
+    if value is None:
+        return None
+    if not isinstance(value, bool):
+        raise typer.BadParameter(f"Config {'.'.join(path)} must be a boolean")
+    return value
+
+
+def _optional_page_int_at(payload: dict[str, Any], path: list[str]) -> int | None:
+    """A 0-based MinerU page index: absent or a non-negative integer."""
+
+    value = _get_nested(payload, path)
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise typer.BadParameter(f"Config {'.'.join(path)} must be a non-negative integer")
     return value
 
 

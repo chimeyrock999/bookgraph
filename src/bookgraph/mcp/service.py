@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from collections import Counter, OrderedDict
 from datetime import UTC, datetime
 from pathlib import Path
@@ -256,12 +257,15 @@ def _section_markdown_path(workspace: WorkspacePaths, doc_id: str, section_id: s
 
 
 # Parsed document.json blocks cached so an agent calling get_section in a loop does not
-# re-read and re-validate the whole document on every call. Keyed by (mtime, size) so a
-# same-second rewrite that changes content length still invalidates, and bounded by an LRU
-# cap so a long-running server serving many books does not grow without limit.
+# re-read and re-validate the whole document on every call. Keyed by (mtime_ns, size): the
+# nanosecond mtime plus byte size invalidates on any realistic re-parse (a same-tick rewrite
+# to the exact same byte length is the one theoretical gap, only on coarse-mtime filesystems).
+# Bounded by an LRU cap, and guarded by a lock so concurrent MCP requests keep the bound and
+# recency order consistent.
 _DocBlocks = dict[str, CanonicalBlock]
-_DOC_BLOCKS_CACHE: OrderedDict[Path, tuple[float, int, _DocBlocks]] = OrderedDict()
+_DOC_BLOCKS_CACHE: OrderedDict[Path, tuple[int, int, _DocBlocks]] = OrderedDict()
 _DOC_BLOCKS_CACHE_MAX = 32
+_DOC_BLOCKS_LOCK = threading.Lock()
 
 
 def _load_doc_blocks(workspace: WorkspacePaths, doc_id: str) -> _DocBlocks:
@@ -270,29 +274,33 @@ def _load_doc_blocks(workspace: WorkspacePaths, doc_id: str) -> _DocBlocks:
     ``Section.block_ids`` is the only link back to the parser's richer blocks (where the
     image/table asset paths live). A document that was never parsed to ``document.json``
     (e.g. a fixture that only writes ``sections.jsonl``) simply yields no assets. Results
-    are memoised by (mtime, size) to keep per-section fetches O(1) across calls.
+    are memoised by (mtime_ns, size) to keep per-section fetches O(1) across calls.
     """
 
     document_path = workspace.sources_parsed / doc_id / "document.json"
     try:
         stat = document_path.stat()
     except OSError:
-        _DOC_BLOCKS_CACHE.pop(document_path, None)
+        with _DOC_BLOCKS_LOCK:
+            _DOC_BLOCKS_CACHE.pop(document_path, None)
         return {}
-    stamp = (stat.st_mtime, stat.st_size)
-    cached = _DOC_BLOCKS_CACHE.get(document_path)
-    if cached is not None and (cached[0], cached[1]) == stamp:
-        _DOC_BLOCKS_CACHE.move_to_end(document_path)
-        return cached[2]
+    stamp = (stat.st_mtime_ns, stat.st_size)
+    with _DOC_BLOCKS_LOCK:
+        cached = _DOC_BLOCKS_CACHE.get(document_path)
+        if cached is not None and (cached[0], cached[1]) == stamp:
+            _DOC_BLOCKS_CACHE.move_to_end(document_path)
+            return cached[2]
+    # Read/validate outside the lock (the expensive part); a concurrent miss just re-reads.
     try:
         document = read_document(document_path)
     except (OSError, ValueError):
         return {}
     blocks = {block.id: block for block in document.blocks}
-    _DOC_BLOCKS_CACHE[document_path] = (stat.st_mtime, stat.st_size, blocks)
-    _DOC_BLOCKS_CACHE.move_to_end(document_path)
-    while len(_DOC_BLOCKS_CACHE) > _DOC_BLOCKS_CACHE_MAX:
-        _DOC_BLOCKS_CACHE.popitem(last=False)
+    with _DOC_BLOCKS_LOCK:
+        _DOC_BLOCKS_CACHE[document_path] = (stamp[0], stamp[1], blocks)
+        _DOC_BLOCKS_CACHE.move_to_end(document_path)
+        while len(_DOC_BLOCKS_CACHE) > _DOC_BLOCKS_CACHE_MAX:
+            _DOC_BLOCKS_CACHE.popitem(last=False)
     return blocks
 
 
@@ -306,13 +314,16 @@ def _resolve_asset_path(
     """Resolve a parser's asset reference to a real file under the workspace.
 
     Prefers the typed ``asset_path`` (MinerU); falls back to the markdown parser's
-    ``metadata["src"]``. A bare filename is resolved under the staged ``images/`` dir that
-    ``MinerURunner`` copies alongside ``document.json``. Returns ``None`` — so the caller
-    drops the asset rather than emit a bogus reference — unless the result is an existing
-    regular file that stays inside the parsed document directory even after symlinks are
-    followed. That rules out URLs, absolute paths, ``..`` traversal, symlink escapes, and
-    references to files the parser never actually staged, so an ``AssetRef.path`` a client
-    receives always opens a real workspace file.
+    ``metadata["src"]``. The reference is tried under the staged ``images/`` dir that
+    ``MinerURunner`` copies alongside ``document.json`` and directly under the parsed
+    document directory, and the first existing regular file wins — so the location is
+    verified on disk rather than guessed from whether the string contains a slash.
+
+    Returns ``None`` — so the caller drops the asset rather than emit a bogus reference —
+    unless the result is an existing regular file that stays inside the parsed document
+    directory even after symlinks are followed. That rules out URLs, absolute paths, ``..``
+    traversal, symlink escapes, and references to files the parser never actually staged, so
+    an ``AssetRef.path`` a client receives always opens a real workspace file.
     """
 
     raw = block.asset_path
@@ -325,21 +336,27 @@ def _resolve_asset_path(
     if candidate.is_absolute():
         return None
     parsed_root = workspace.sources_parsed / doc_id
-    base = parsed_root if ("/" in raw or "\\" in raw) else parsed_root / "images"
-    lexical = Path(os.path.normpath(base / candidate))
-    # Resolve symlinks and check containment against the real root: a lexical-only check
-    # would let a symlink under images/ point outside the workspace, and would accept a
-    # ".."-style path that lands on the root directory itself rather than a file. The
-    # filesystem calls are guarded because a corrupt/adversarial document.json can carry a
-    # path with an embedded NUL (ValueError) or other bad bytes — a single malformed asset
-    # must degrade to "no asset", never crash the whole section fetch.
     try:
-        real = lexical.resolve()
-        if not real.is_relative_to(parsed_root.resolve()) or not real.is_file():
-            return None
+        root_real = parsed_root.resolve()
     except (OSError, ValueError):
         return None
-    return str(lexical)
+    # Verify the location on disk instead of guessing from the string: try the staged
+    # images/ dir first (MinerU convention) then directly under the parsed document dir.
+    for base in (parsed_root / "images", parsed_root):
+        lexical = Path(os.path.normpath(base / candidate))
+        # Resolve symlinks and check containment against the real root: a lexical-only
+        # check would let a symlink under images/ point outside the workspace, and would
+        # accept a ".."-style path that lands on the root directory itself rather than a
+        # file. Guarded because a corrupt/adversarial document.json can carry a path with
+        # an embedded NUL (ValueError) — one bad asset must degrade to "no asset", not
+        # crash the whole section fetch.
+        try:
+            real = lexical.resolve()
+            if real.is_relative_to(root_real) and real.is_file():
+                return str(lexical)
+        except (OSError, ValueError):
+            continue
+    return None
 
 
 def _section_assets(
@@ -374,9 +391,11 @@ def _asset_notes(section: Section, assets: list[AssetRef]) -> list[str]:
     """Warn when a section's prose is effectively just the asset captions.
 
     In that case the meaningful labels/tabular data live inside the asset file, and a
-    reader working from ``text`` alone would miss them (issue #34, acceptance #3). The
-    check removes each caption from the body and warns only when almost nothing is left,
-    so a section with genuine (merely short) prose beside a figure is not flagged.
+    reader working from ``text`` alone would miss them (issue #34, acceptance #3). Each
+    caption is removed from the body **once** (its text appears once, as the caption) and
+    the note fires only when almost nothing remains — removing once, rather than every
+    occurrence, keeps a short/generic caption like ``"1"`` or ``"Table"`` from being wiped
+    out of genuine prose and producing a false warning.
     """
 
     if not assets:
@@ -385,7 +404,7 @@ def _asset_notes(section: Section, assets: list[AssetRef]) -> list[str]:
     for asset in assets:
         caption = asset.caption.strip()
         if caption:
-            residual = residual.replace(caption, "")
+            residual = residual.replace(caption, "", 1)
     if len(residual.strip()) > 15:
         return []
     return [
@@ -822,8 +841,10 @@ def annotate_section(
     """
 
     resolved_doc_id = _validate_id(doc_id, "doc_id")
-    # Membership check: raises SectionNotFoundError for an unknown or traversal id.
-    get_section(workspace, resolved_doc_id, section_id)
+    # Membership check only (result discarded): raises SectionNotFoundError for an unknown
+    # or traversal id. include_assets=False skips the document.json read + asset resolution
+    # this call has no use for.
+    get_section(workspace, resolved_doc_id, section_id, include_assets=False)
 
     # None (concepts omitted) is passed through as "no concept opinion → keep the
     # section's auto concepts"; an explicit list — including [] — is the agent taking

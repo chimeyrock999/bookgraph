@@ -652,6 +652,94 @@ def test_get_next_section_include_assets_toggle(tmp_path: Path) -> None:
     assert without.sections[0].assets == []
 
 
+def test_asset_notes_not_raised_when_caption_token_recurs_in_prose(tmp_path: Path) -> None:
+    # A short caption that also recurs in the body must not be wiped everywhere: removing it
+    # once leaves genuine content, so no false "caption-only" warning (recurring-token bug).
+    section = Section(
+        id="deep-work.figs",
+        doc_id="deep-work",
+        title="Figures",
+        level=1,
+        heading_path=["Figures"],
+        text="node node node node done",  # caption "node" appears once as caption + recurs
+        block_ids=["img1"],
+    )
+    workspace = _workspace(tmp_path, section)
+    _stage_asset(workspace, "deep-work", "images/n.jpg")
+    write_document(
+        Document(
+            doc_id="deep-work",
+            title="Deep Work",
+            blocks=[CanonicalBlock(id="img1", type="image", text="node", asset_path="n.jpg")],
+        ),
+        workspace.sources_parsed / "deep-work",
+    )
+
+    view = service.get_section(workspace, "deep-work", "deep-work.figs")
+
+    assert view.assets
+    assert view.notes == []  # replace-all would falsely fire here; replace-once does not
+
+
+def test_asset_resolves_file_directly_under_parsed_root(tmp_path: Path) -> None:
+    # A bare filename staged directly under the parsed dir (not images/) must still resolve
+    # — the location is verified on disk, not guessed from whether the name contains a slash.
+    section = Section(
+        id="deep-work.figs",
+        doc_id="deep-work",
+        title="Figures",
+        level=1,
+        heading_path=["Figures"],
+        text="Body.",
+        block_ids=["img1"],
+    )
+    workspace = _workspace(tmp_path, section)
+    _stage_asset(workspace, "deep-work", "cover.png")  # directly under parsed_root, no images/
+    write_document(
+        Document(
+            doc_id="deep-work",
+            title="Deep Work",
+            blocks=[CanonicalBlock(id="img1", type="image", asset_path="cover.png")],
+        ),
+        workspace.sources_parsed / "deep-work",
+    )
+
+    view = service.get_section(workspace, "deep-work", "deep-work.figs")
+
+    assert view.assets[0].path == str(workspace.sources_parsed / "deep-work" / "cover.png")
+
+
+def test_doc_blocks_cache_is_thread_safe(tmp_path: Path) -> None:
+    import threading
+
+    service._DOC_BLOCKS_CACHE.clear()
+    workspace = WorkspacePaths(tmp_path)
+    doc_ids = [f"doc{i}" for i in range(service._DOC_BLOCKS_CACHE_MAX + 20)]
+    for doc_id in doc_ids:
+        write_document(
+            Document(doc_id=doc_id, title=doc_id, blocks=[]),
+            workspace.sources_parsed / doc_id,
+        )
+
+    errors: list[Exception] = []
+
+    def load(doc_id: str) -> None:
+        try:
+            for _ in range(5):
+                service._load_doc_blocks(workspace, doc_id)
+        except Exception as exc:  # noqa: BLE001 - surfaced via the errors list below
+            errors.append(exc)
+
+    threads = [threading.Thread(target=load, args=(d,)) for d in doc_ids]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert errors == []
+    assert len(service._DOC_BLOCKS_CACHE) <= service._DOC_BLOCKS_CACHE_MAX
+
+
 def test_mark_read_with_traversal_plan_id_writes_nothing_outside(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path, _section("deep-work.a", "Alpha"))
     _plan(workspace, "deep-work.a")

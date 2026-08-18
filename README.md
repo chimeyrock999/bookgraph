@@ -178,6 +178,24 @@ Public docs live in `docs/`:
 Update the relevant doc on `main` before implementing or changing CLI/artifact
 behavior so other agents can coordinate safely.
 
+## Installation
+
+BookGraph needs **Python ≥ 3.11**. The recommended toolchain is
+[uv](https://docs.astral.sh/uv/); heavy integrations (MinerU, MarkItDown, FastMCP)
+are optional extras you add only when needed.
+
+```bash
+git clone https://github.com/chimeyrock999/bookgraph.git
+cd bookgraph
+uv run bookgraph --help              # run the CLI (uv resolves deps on demand)
+
+uv sync --extra mcp --extra mineru   # add extras: mcp server + raw-PDF parsing
+```
+
+Extras: `parsers` (Office/HTML/simple-PDF), `mineru` (raw-PDF layout parsing),
+`mcp` (FastMCP server), `dev` (pytest/ruff/mypy). pip/pipx work too. Full guide,
+including the MinerU model download, in [`docs/installation.md`](docs/installation.md).
+
 ## Workspace layout
 
 Create a workspace/output directory:

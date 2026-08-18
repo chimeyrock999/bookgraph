@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -295,9 +296,20 @@ def test_client_ids_that_are_not_slugs_are_rejected(tmp_path: Path, bad_id: str)
         service.search_sections(workspace, "alpha", doc_id=bad_id)
 
 
-def _write_document_with_assets(workspace: WorkspacePaths, doc_id: str = "deep-work") -> None:
-    """Write a parsed ``document.json`` whose block ids match a section's ``block_ids``."""
+def _stage_asset(workspace: WorkspacePaths, doc_id: str, rel: str) -> Path:
+    """Create a real asset file under sources/parsed/<doc_id>/ (as MinerU staging would)."""
 
+    path = workspace.sources_parsed / doc_id / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"\xff\xd8\xff")  # minimal JPEG-ish bytes; content is irrelevant here
+    return path
+
+
+def _write_document_with_assets(workspace: WorkspacePaths, doc_id: str = "deep-work") -> None:
+    """Write a parsed ``document.json`` and stage the image/table files it references."""
+
+    _stage_asset(workspace, doc_id, "images/fig1.jpg")
+    _stage_asset(workspace, doc_id, "nested/tbl1.jpg")
     document = Document(
         doc_id=doc_id,
         title="Deep Work",
@@ -431,6 +443,7 @@ def test_assets_drop_unresolvable_references(tmp_path: Path) -> None:
         CanonicalBlock(id="inline_tbl", type="table", text="| a | b |"),
         CanonicalBlock(id="ok", type="image", asset_path="real.jpg", order=9),
     )
+    _stage_asset(workspace, "deep-work", "images/real.jpg")  # only the "ok" block has a file
 
     view = service.get_section(workspace, "deep-work", "deep-work.figs")
 
@@ -463,11 +476,124 @@ def test_asset_notes_not_raised_for_genuine_short_prose(tmp_path: Path) -> None:
         ),
         workspace.sources_parsed / "deep-work",
     )
+    _stage_asset(workspace, "deep-work", "images/p.jpg")
 
     view = service.get_section(workspace, "deep-work", "deep-work.figs")
 
     assert view.assets  # the image is still surfaced
     assert view.notes == []  # but the prose is genuine, so no caption-only warning
+
+
+def test_asset_dropped_when_referenced_file_is_missing(tmp_path: Path) -> None:
+    # asset_path names a file the parser never staged — no AssetRef should be emitted.
+    section = Section(
+        id="deep-work.figs",
+        doc_id="deep-work",
+        title="Figures",
+        level=1,
+        heading_path=["Figures"],
+        text="Body.",
+        block_ids=["img1"],
+    )
+    workspace = _workspace(tmp_path, section)
+    write_document(
+        Document(
+            doc_id="deep-work",
+            title="Deep Work",
+            blocks=[CanonicalBlock(id="img1", type="image", asset_path="ghost.jpg")],
+        ),
+        workspace.sources_parsed / "deep-work",
+    )
+
+    view = service.get_section(workspace, "deep-work", "deep-work.figs")
+
+    assert view.assets == []
+
+
+def test_asset_dropped_for_symlink_escaping_the_workspace(tmp_path: Path) -> None:
+    # A symlink under images/ that points outside the workspace must not resolve to a
+    # returnable path — the containment check follows symlinks, not just the lexical path.
+    outside = tmp_path / "outside_secret.jpg"
+    outside.write_bytes(b"\xff\xd8\xff")
+    section = Section(
+        id="deep-work.figs",
+        doc_id="deep-work",
+        title="Figures",
+        level=1,
+        heading_path=["Figures"],
+        text="Body.",
+        block_ids=["img1"],
+    )
+    workspace = _workspace(tmp_path, section)
+    images_dir = workspace.sources_parsed / "deep-work" / "images"
+    images_dir.mkdir(parents=True, exist_ok=True)
+    (images_dir / "evil.jpg").symlink_to(outside)
+    write_document(
+        Document(
+            doc_id="deep-work",
+            title="Deep Work",
+            blocks=[CanonicalBlock(id="img1", type="image", asset_path="evil.jpg")],
+        ),
+        workspace.sources_parsed / "deep-work",
+    )
+
+    view = service.get_section(workspace, "deep-work", "deep-work.figs")
+
+    assert view.assets == []
+
+
+def test_doc_blocks_cache_invalidates_on_same_mtime_size_change(tmp_path: Path) -> None:
+    service._DOC_BLOCKS_CACHE.clear()
+    section = Section(
+        id="deep-work.figs",
+        doc_id="deep-work",
+        title="Figures",
+        level=1,
+        heading_path=["Figures"],
+        text="Body.",
+        block_ids=["img1"],
+    )
+    workspace = _workspace(tmp_path, section)
+    _stage_asset(workspace, "deep-work", "images/a.jpg")
+    document_path = workspace.sources_parsed / "deep-work" / "document.json"
+
+    def write(caption: str) -> None:
+        write_document(
+            Document(
+                doc_id="deep-work",
+                title="Deep Work",
+                blocks=[
+                    CanonicalBlock(id="img1", type="image", text=caption, asset_path="a.jpg")
+                ],
+            ),
+            workspace.sources_parsed / "deep-work",
+        )
+
+    write("First caption.")
+    first = service.get_section(workspace, "deep-work", "deep-work.figs")
+    assert first.assets[0].caption == "First caption."
+    mtime = document_path.stat().st_mtime
+
+    # Rewrite with a different length, then force the *same* mtime: only the size differs.
+    write("A second, noticeably longer caption than the first one.")
+    os.utime(document_path, (mtime, mtime))
+
+    second = service.get_section(workspace, "deep-work", "deep-work.figs")
+    assert second.assets[0].caption == "A second, noticeably longer caption than the first one."
+
+
+def test_doc_blocks_cache_is_bounded(tmp_path: Path) -> None:
+    service._DOC_BLOCKS_CACHE.clear()
+    workspace = WorkspacePaths(tmp_path)
+    for i in range(service._DOC_BLOCKS_CACHE_MAX + 10):
+        doc_id = f"doc{i}"
+        write_document(
+            Document(doc_id=doc_id, title=doc_id, blocks=[]),
+            workspace.sources_parsed / doc_id,
+        )
+        service._load_doc_blocks(workspace, doc_id)
+
+    assert len(service._DOC_BLOCKS_CACHE) <= service._DOC_BLOCKS_CACHE_MAX
 
 
 def test_mark_read_with_traversal_plan_id_writes_nothing_outside(tmp_path: Path) -> None:

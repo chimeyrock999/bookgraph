@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import os
-from collections import Counter
+from collections import Counter, OrderedDict
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -255,36 +255,44 @@ def _section_markdown_path(workspace: WorkspacePaths, doc_id: str, section_id: s
     return workspace.sources_sections / doc_id / f"{section_id}.md"
 
 
-# document.json blocks cached per (path, mtime) so an agent calling get_section in a loop
-# does not re-read and re-validate the whole parsed document on every single call. The mtime
-# key invalidates the cache automatically whenever the document is re-parsed.
-_DOC_BLOCKS_CACHE: dict[Path, tuple[float, dict[str, CanonicalBlock]]] = {}
+# Parsed document.json blocks cached so an agent calling get_section in a loop does not
+# re-read and re-validate the whole document on every call. Keyed by (mtime, size) so a
+# same-second rewrite that changes content length still invalidates, and bounded by an LRU
+# cap so a long-running server serving many books does not grow without limit.
+_DocBlocks = dict[str, CanonicalBlock]
+_DOC_BLOCKS_CACHE: OrderedDict[Path, tuple[float, int, _DocBlocks]] = OrderedDict()
+_DOC_BLOCKS_CACHE_MAX = 32
 
 
-def _load_doc_blocks(workspace: WorkspacePaths, doc_id: str) -> dict[str, CanonicalBlock]:
+def _load_doc_blocks(workspace: WorkspacePaths, doc_id: str) -> _DocBlocks:
     """Index the parsed ``document.json`` blocks by id, or ``{}`` when unavailable.
 
     ``Section.block_ids`` is the only link back to the parser's richer blocks (where the
     image/table asset paths live). A document that was never parsed to ``document.json``
     (e.g. a fixture that only writes ``sections.jsonl``) simply yields no assets. Results
-    are memoised by file mtime to keep per-section fetches O(1) across calls.
+    are memoised by (mtime, size) to keep per-section fetches O(1) across calls.
     """
 
     document_path = workspace.sources_parsed / doc_id / "document.json"
     try:
-        mtime = document_path.stat().st_mtime
+        stat = document_path.stat()
     except OSError:
         _DOC_BLOCKS_CACHE.pop(document_path, None)
         return {}
+    stamp = (stat.st_mtime, stat.st_size)
     cached = _DOC_BLOCKS_CACHE.get(document_path)
-    if cached is not None and cached[0] == mtime:
-        return cached[1]
+    if cached is not None and (cached[0], cached[1]) == stamp:
+        _DOC_BLOCKS_CACHE.move_to_end(document_path)
+        return cached[2]
     try:
         document = read_document(document_path)
     except (OSError, ValueError):
         return {}
     blocks = {block.id: block for block in document.blocks}
-    _DOC_BLOCKS_CACHE[document_path] = (mtime, blocks)
+    _DOC_BLOCKS_CACHE[document_path] = (stat.st_mtime, stat.st_size, blocks)
+    _DOC_BLOCKS_CACHE.move_to_end(document_path)
+    while len(_DOC_BLOCKS_CACHE) > _DOC_BLOCKS_CACHE_MAX:
+        _DOC_BLOCKS_CACHE.popitem(last=False)
     return blocks
 
 
@@ -300,9 +308,11 @@ def _resolve_asset_path(
     Prefers the typed ``asset_path`` (MinerU); falls back to the markdown parser's
     ``metadata["src"]``. A bare filename is resolved under the staged ``images/`` dir that
     ``MinerURunner`` copies alongside ``document.json``. Returns ``None`` — so the caller
-    drops the asset rather than emit a bogus reference — when there is no usable path, i.e.
-    a URL, an absolute path, or a relative path that escapes the parsed document directory
-    (an ``AssetRef`` must always point at a real workspace file).
+    drops the asset rather than emit a bogus reference — unless the result is an existing
+    regular file that stays inside the parsed document directory even after symlinks are
+    followed. That rules out URLs, absolute paths, ``..`` traversal, symlink escapes, and
+    references to files the parser never actually staged, so an ``AssetRef.path`` a client
+    receives always opens a real workspace file.
     """
 
     raw = block.asset_path
@@ -316,10 +326,14 @@ def _resolve_asset_path(
         return None
     parsed_root = workspace.sources_parsed / doc_id
     base = parsed_root if ("/" in raw or "\\" in raw) else parsed_root / "images"
-    resolved = Path(os.path.normpath(base / candidate))
-    if not resolved.is_relative_to(parsed_root):
+    lexical = Path(os.path.normpath(base / candidate))
+    # Resolve symlinks and check containment against the real root: a lexical-only check
+    # would let a symlink under images/ point outside the workspace, and would accept a
+    # ".."-style path that lands on the root directory itself rather than a file.
+    real = lexical.resolve()
+    if not real.is_relative_to(parsed_root.resolve()) or not real.is_file():
         return None
-    return str(resolved)
+    return str(lexical)
 
 
 def _section_assets(

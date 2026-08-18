@@ -281,7 +281,9 @@ stage's output.
   **detail view** (`include_annotations=True`), which joins `section_annotations` so
   each mention also carries its section's Tier-2 `summary`. In detail mode a concept
   with several mentions reads as a source-grounded note (each summary stays tied to its
-  section); `annotated_mention_count` reports how many mentions carry one. Returns
+  section). `annotated_mention_count` reports how many mentions carry a summary in
+  **both** modes — the compact card omits the summary text but still counts it, a cheap
+  cue for whether a follow-up `include_annotations=True` call is worthwhile. Returns
   nothing when the slug is absent. Concepts have no live-scan fallback: an unindexed
   document's concepts are simply absent until it is built (unlike `search`/graph reads,
   which scan `sections.jsonl` on miss).

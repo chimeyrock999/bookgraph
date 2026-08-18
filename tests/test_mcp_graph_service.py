@@ -217,9 +217,10 @@ def test_get_concept_detail_view_surfaces_section_annotation_summaries(tmp_path:
     service.annotate_section(workspace, "ddia", "ddia.a", summary="how schemas evolve")
     backend.build_document(workspace, "ddia", "DDIA", sections)
 
-    # Compact card (default): backlinks stay lightweight — no summaries.
+    # Compact card (default): backlinks stay lightweight — no summary text — but the
+    # card still counts the annotated mentions so it can signal deeper context exists.
     card = service.get_concept(workspace, "schema-evolution")
-    assert card.annotated_mention_count == 0
+    assert card.annotated_mention_count == 1
     assert all(m.summary == "" for m in card.mentions)
 
     # Detail view: each mention carries its section's summary, tied to that section.

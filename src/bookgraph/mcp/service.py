@@ -230,7 +230,9 @@ class ConceptView(BaseModel):
     fills each mention's ``summary`` with the section's Tier-2 annotation, so a concept
     with several mentions renders as a readable, provenance-aware note rather than a set
     of short glosses. ``annotated_mention_count`` reports how many mentions carry such a
-    summary (always ``0`` in the compact card).
+    summary — meaningful in **both** modes (the compact card leaves the summaries empty
+    but still counts them), so a cheap card read tells an agent whether a concept has
+    deeper context worth an ``include_annotations=True`` call.
     """
 
     slug: str
@@ -613,7 +615,11 @@ def get_concept(
         title=result.node.title,
         doc_count=result.node.doc_count,
         mention_count=result.node.mention_count,
-        annotated_mention_count=sum(1 for m in mentions if m.summary),
+        # Count from the raw backend mentions, not the (possibly redacted) view list:
+        # the backend returns summaries regardless of the flag, so the compact card can
+        # still signal "this concept carries N annotated sections" — a cheap cue for an
+        # agent deciding whether an include_annotations=True call is worth it.
+        annotated_mention_count=sum(1 for m in result.mentions if m.summary),
         mentions=mentions,
     )
 

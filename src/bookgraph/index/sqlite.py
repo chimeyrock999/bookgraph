@@ -550,7 +550,10 @@ def _concept_mentions(conn: sqlite3.Connection, slug: str) -> list[sqlite3.Row]:
     # Join to section_graph for the mentioning section's title and reading order;
     # group by document, ordered within a document by reading position. The LEFT JOIN
     # to section_annotations carries each section's Tier-2 summary (empty when
-    # unannotated) — the long-form context behind a backlink.
+    # unannotated) — the long-form context behind a backlink. The join is unconditional
+    # on purpose (not only for include_annotations=True): the service counts non-empty
+    # summaries into ConceptView.annotated_mention_count even for the compact card, so
+    # the card can signal "deeper context exists". Do not make it flag-conditional.
     return conn.execute(
         "SELECT cm.doc_id AS doc_id, cm.section_id AS section_id, "
         "       COALESCE(sg.title, cm.section_id) AS title, cm.gloss AS gloss, "

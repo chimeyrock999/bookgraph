@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Any, cast
 
-from bookgraph.models import BlockType, CanonicalBlock, Document
+from bookgraph.models import ASSET_BLOCK_TYPES, BlockType, CanonicalBlock, Document
 from bookgraph.parsers.errors import UnsupportedSourceError
 from bookgraph.ports import DocumentParser
 from bookgraph.utils import doc_id_from_path
@@ -30,6 +30,9 @@ class MinerUMiddleJsonParser(DocumentParser):
             para_blocks = page.get("para_blocks") or []
             for index, raw_block in enumerate(para_blocks):
                 block_type = _map_mineru_block_type(str(raw_block.get("type", "unknown")))
+                asset_path = (
+                    _extract_asset(raw_block) if block_type in ASSET_BLOCK_TYPES else None
+                )
                 blocks.append(
                     CanonicalBlock(
                         id=f"p{page_idx}.b{index}",
@@ -38,6 +41,7 @@ class MinerUMiddleJsonParser(DocumentParser):
                         text=_extract_text(raw_block),
                         page_idx=page_idx,
                         bbox=tuple(raw_block["bbox"]) if "bbox" in raw_block else None,
+                        asset_path=asset_path,
                         source_path=str(source),
                         order=len(blocks),
                     )
@@ -83,6 +87,27 @@ def _map_mineru_block_type(value: str) -> BlockType:
     if value == "interline_equation":
         return "equation"
     return "unknown"
+
+
+def _extract_asset(raw_block: dict[str, Any]) -> str | None:
+    """Recover the image/table asset filename MinerU records on a block.
+
+    MinerU stores the extracted file on the body span (``image_body``/``table_body``)
+    under ``image_path`` rather than as ``content`` text, so ``_extract_text`` never
+    surfaces it. Walk the nested ``blocks``/``lines``/``spans`` structure and return the
+    ``image_path`` of the first *body* span — a span whose ``type`` is itself an asset
+    kind — so a caption/footnote child that happens to carry an ``image_path`` key can
+    never be mistaken for the block's real asset.
+    """
+
+    for line in raw_block.get("lines", []) or []:
+        for span in line.get("spans", []) or []:
+            if span.get("type") in ASSET_BLOCK_TYPES and (path := span.get("image_path")):
+                return str(path)
+    for child in raw_block.get("blocks", []) or []:
+        if path := _extract_asset(child):
+            return path
+    return None
 
 
 def _extract_text(raw_block: dict[str, Any]) -> str:

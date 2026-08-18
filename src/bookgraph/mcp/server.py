@@ -40,20 +40,30 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
     mcp: FastMCP = FastMCP("bookgraph")
 
     @mcp.tool
-    def get_next_section(plan_id: str) -> NextSection:
-        """Return the next unread sections for a reading plan, with full content."""
+    def get_next_section(plan_id: str, include_assets: bool = True) -> NextSection:
+        """Return the next unread sections for a reading plan, with full content.
+
+        With ``include_assets`` (default) each section carries its structured figure/table
+        ``assets``; set it false to skip asset resolution when reading for prose only.
+        """
 
         try:
-            return service.get_next_section(workspace, plan_id)
+            return service.get_next_section(workspace, plan_id, include_assets)
         except ReadingServiceError as exc:
             raise ToolError(str(exc)) from exc
 
     @mcp.tool
-    def get_section(doc_id: str, section_id: str) -> SectionView:
-        """Return one section's full reading content by document and section id."""
+    def get_section(
+        doc_id: str, section_id: str, include_assets: bool = True
+    ) -> SectionView:
+        """Return one section's full reading content by document and section id.
+
+        With ``include_assets`` (default) the result carries a structured ``assets`` list
+        of the section's figures/tables (path, type, caption, order); set it false to omit.
+        """
 
         try:
-            return service.get_section(workspace, doc_id, section_id)
+            return service.get_section(workspace, doc_id, section_id, include_assets)
         except ReadingServiceError as exc:
             raise ToolError(str(exc)) from exc
 
@@ -94,11 +104,17 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
             raise ToolError(str(exc)) from exc
 
     @mcp.tool
-    def get_context(doc_id: str, section_id: str) -> SectionContext:
-        """Return a section's full content, graph neighbourhood, and its concepts."""
+    def get_context(
+        doc_id: str, section_id: str, include_assets: bool = True
+    ) -> SectionContext:
+        """Return a section's full content, graph neighbourhood, and its concepts.
+
+        ``include_assets`` (default true) controls whether the embedded section carries its
+        structured figure/table ``assets`` (see ``get_section``).
+        """
 
         try:
-            return service.get_context(workspace, doc_id, section_id)
+            return service.get_context(workspace, doc_id, section_id, include_assets)
         except ReadingServiceError as exc:
             raise ToolError(str(exc)) from exc
 

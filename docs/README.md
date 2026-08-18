@@ -8,6 +8,8 @@ contracts.
 
 Use these when running BookGraph or wiring an agent to an existing workspace:
 
+- [`installation.md`](installation.md) — install BookGraph and its optional extras
+  (parsers, MinerU, MCP) with uv or pip.
 - [`cli/`](cli/) — CLI commands, workspace layout, artifacts, and runtime guides.
 - [`cli/parse-book-large-pdfs.md`](cli/parse-book-large-pdfs.md) — operational
   guide for long raw-PDF parses, MinerU logs, model caches, and diagnosis.

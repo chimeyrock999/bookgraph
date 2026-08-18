@@ -272,14 +272,19 @@ stage's output.
   fallback). `get_context` also returns the section's `summary`, read **directly from
   the annotation file** (`annotations/<doc_id>/<section_id>.json`) rather than from the
   index, so a summary written by `annotate_section` shows before any `index build`.
-- **`get_concept(concept)`**: looks a concept up by slug in `concept_nodes`, then
-  reads its `concept_mentions` across **every** indexed book. Returns the node
-  (`slug`, `title`, `doc_count`, `mention_count`) plus its backlink mentions
-  (`doc_id`, `section_id`, section `title`, `gloss`, `source`) grouped/ordered by
-  document — the cross-book "what mentions this concept" query. Returns nothing when
-  the slug is absent. Concepts have no live-scan fallback: an unindexed document's
-  concepts are simply absent until it is built (unlike `search`/graph reads, which
-  scan `sections.jsonl` on miss).
+- **`get_concept(concept, include_annotations=False)`**: looks a concept up by slug
+  in `concept_nodes`, then reads its `concept_mentions` across **every** indexed book.
+  Returns the node (`slug`, `title`, `doc_count`, `mention_count`) plus its backlink
+  mentions (`doc_id`, `section_id`, section `title`, `gloss`, `source`) grouped/ordered
+  by document — the cross-book "what mentions this concept" query. Two read modes share
+  this shape: the default **compact card** for lightweight graph traversal, and the
+  **detail view** (`include_annotations=True`), which joins `section_annotations` so
+  each mention also carries its section's Tier-2 `summary`. In detail mode a concept
+  with several mentions reads as a source-grounded note (each summary stays tied to its
+  section); `annotated_mention_count` reports how many mentions carry one. Returns
+  nothing when the slug is absent. Concepts have no live-scan fallback: an unindexed
+  document's concepts are simply absent until it is built (unlike `search`/graph reads,
+  which scan `sections.jsonl` on miss).
 
 ## Fallback
 

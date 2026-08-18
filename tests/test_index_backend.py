@@ -14,7 +14,7 @@ def _annotate(
     workspace: WorkspacePaths,
     doc_id: str,
     section_id: str,
-    concepts: list[AnnotatedConcept],
+    concepts: list[AnnotatedConcept] | None,
     *,
     summary: str = "",
 ) -> None:
@@ -446,6 +446,29 @@ def test_section_annotation_round_trips_through_the_index(tmp_path: Path) -> Non
     assert backend.section_annotation(workspace, "ddia", "ddia.a") == "the agent's explanation"
     # An unannotated section has no stored summary.
     assert backend.section_annotation(workspace, "ddia", "ddia.ghost") is None
+
+
+def test_concept_mentions_carry_their_section_summary(tmp_path: Path) -> None:
+    # A concept's backlinks expose each mentioning section's Tier-2 summary, so the
+    # concept-detail view can render as a source-grounded note. An unannotated mention
+    # carries an empty summary rather than being dropped.
+    workspace = WorkspacePaths(tmp_path)
+    backend = SqliteIndexBackend()
+    sections = [
+        _section("ddia.a", "Schema Evolution", "x", doc_id="ddia"),
+        _section("ddia.b", "Schema Evolution", "x", doc_id="ddia"),
+    ]
+    # concepts=None keeps the auto concept edge; only the summary is attached.
+    _annotate(workspace, "ddia", "ddia.a", None, summary="how schemas evolve over time")
+    backend.build_document(workspace, "ddia", "DDIA", sections)
+
+    concept = backend.get_concept(workspace, "schema-evolution")
+    assert concept is not None
+    summaries = {m.section_id: m.summary for m in concept.mentions}
+    assert summaries == {"ddia.a": "how schemas evolve over time", "ddia.b": ""}
+    # The single-pass bulk read agrees with the per-node read.
+    bulk = {c.node.slug: c for c in backend.concepts(workspace)}["schema-evolution"]
+    assert [m.summary for m in bulk.mentions] == [m.summary for m in concept.mentions]
 
 
 def test_old_shape_concept_mentions_reads_empty_not_crash(tmp_path: Path) -> None:

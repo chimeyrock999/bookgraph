@@ -399,6 +399,77 @@ def test_get_context_carries_section_assets(tmp_path: Path) -> None:
     assert [asset.block_id for asset in context.section.assets] == ["img1"]
 
 
+def _workspace_with_blocks(tmp_path: Path, *blocks: CanonicalBlock) -> WorkspacePaths:
+    """A workspace whose single section owns exactly ``blocks`` (via ``document.json``)."""
+
+    section = Section(
+        id="deep-work.figs",
+        doc_id="deep-work",
+        title="Figures",
+        level=1,
+        heading_path=["Figures"],
+        text="Some genuine prose about the figures that is clearly longer than a caption.",
+        block_ids=[block.id for block in blocks],
+    )
+    workspace = _workspace(tmp_path, section)
+    write_document(
+        Document(doc_id="deep-work", title="Deep Work", blocks=list(blocks)),
+        workspace.sources_parsed / "deep-work",
+    )
+    return workspace
+
+
+def test_assets_drop_unresolvable_references(tmp_path: Path) -> None:
+    # URL, absolute path, workspace-escaping relative path, and a markdown table rendered
+    # inline (no asset_path, no src) must NOT surface as AssetRefs — an AssetRef must always
+    # point at a real workspace file.
+    workspace = _workspace_with_blocks(
+        tmp_path,
+        CanonicalBlock(id="url", type="image", metadata={"src": "https://example.com/x.png"}),
+        CanonicalBlock(id="abs", type="image", asset_path="/etc/passwd"),
+        CanonicalBlock(id="escape", type="image", asset_path="../../secret.jpg"),
+        CanonicalBlock(id="inline_tbl", type="table", text="| a | b |"),
+        CanonicalBlock(id="ok", type="image", asset_path="real.jpg", order=9),
+    )
+
+    view = service.get_section(workspace, "deep-work", "deep-work.figs")
+
+    assert [asset.block_id for asset in view.assets] == ["ok"]
+    assert view.assets[0].path == str(
+        workspace.sources_parsed / "deep-work" / "images" / "real.jpg"
+    )
+
+
+def test_asset_notes_not_raised_for_genuine_short_prose(tmp_path: Path) -> None:
+    # A short but real sentence next to a one-word caption must not trip the caption-only
+    # warning (regression for the length-only heuristic).
+    section = Section(
+        id="deep-work.figs",
+        doc_id="deep-work",
+        title="Figures",
+        level=1,
+        heading_path=["Figures"],
+        text="See the diagram for how the ingest pipeline is wired end to end.",
+        block_ids=["img1"],
+    )
+    workspace = _workspace(tmp_path, section)
+    write_document(
+        Document(
+            doc_id="deep-work",
+            title="Deep Work",
+            blocks=[
+                CanonicalBlock(id="img1", type="image", text="Pipeline", asset_path="p.jpg")
+            ],
+        ),
+        workspace.sources_parsed / "deep-work",
+    )
+
+    view = service.get_section(workspace, "deep-work", "deep-work.figs")
+
+    assert view.assets  # the image is still surfaced
+    assert view.notes == []  # but the prose is genuine, so no caption-only warning
+
+
 def test_mark_read_with_traversal_plan_id_writes_nothing_outside(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path, _section("deep-work.a", "Alpha"))
     _plan(workspace, "deep-work.a")

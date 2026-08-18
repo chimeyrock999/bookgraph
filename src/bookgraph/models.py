@@ -15,6 +15,11 @@ BlockType = Literal[
     "unknown",
 ]
 
+# Block types that carry an extracted image/table asset file (``CanonicalBlock.asset_path``)
+# and are surfaced as structured ``AssetRef``s by the MCP section APIs. Shared by the parser
+# (which attaches the path) and the service (which resolves it) so the two never drift.
+ASSET_BLOCK_TYPES: frozenset[str] = frozenset({"image", "table", "chart"})
+
 
 class CanonicalBlock(BaseModel):
     """Parser-independent content block consumed by segmenters."""

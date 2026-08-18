@@ -92,3 +92,41 @@ def test_mineru_parser_leaves_text_blocks_without_asset_path(tmp_path: Path) -> 
 
     title = next(block for block in document.blocks if block.type == "title")
     assert title.asset_path is None
+
+
+def test_mineru_parser_ignores_image_path_on_non_body_spans(tmp_path: Path) -> None:
+    # Only the body span (type image/table) owns the asset; a caption span that happens to
+    # carry an image_path must not be mistaken for the block's real asset.
+    payload = {
+        "pdf_info": [
+            {
+                "page_idx": 0,
+                "para_blocks": [
+                    {
+                        "type": "image",
+                        "blocks": [
+                            {
+                                "type": "image_caption",
+                                "lines": [
+                                    {"spans": [{"type": "text", "image_path": "WRONG.jpg"}]}
+                                ],
+                            },
+                            {
+                                "type": "image_body",
+                                "lines": [
+                                    {"spans": [{"type": "image", "image_path": "right.jpg"}]}
+                                ],
+                            },
+                        ],
+                    }
+                ],
+            }
+        ]
+    }
+    source = tmp_path / "b_middle.json"
+    source.write_text(json.dumps(payload))
+
+    document = MinerUMiddleJsonParser().parse(source, tmp_path)
+
+    image = next(block for block in document.blocks if block.type == "image")
+    assert image.asset_path == "right.jpg"

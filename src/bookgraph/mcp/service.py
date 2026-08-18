@@ -9,6 +9,7 @@ so they can be unit-tested directly; the MCP server is a thin wrapper in
 from __future__ import annotations
 
 import json
+import os
 from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
@@ -24,7 +25,13 @@ from bookgraph.annotations import (
 from bookgraph.documents import read_document
 from bookgraph.graph import SectionGraph, build_section_graph
 from bookgraph.index import default_index_backend, tokenize
-from bookgraph.models import AnnotatedConcept, CanonicalBlock, ReadingPlan, Section
+from bookgraph.models import (
+    ASSET_BLOCK_TYPES,
+    AnnotatedConcept,
+    CanonicalBlock,
+    ReadingPlan,
+    Section,
+)
 from bookgraph.reading_plans import (
     create_reading_plan,
     list_plan_progress,
@@ -248,7 +255,10 @@ def _section_markdown_path(workspace: WorkspacePaths, doc_id: str, section_id: s
     return workspace.sources_sections / doc_id / f"{section_id}.md"
 
 
-_ASSET_BLOCK_TYPES = {"image", "table", "chart"}
+# document.json blocks cached per (path, mtime) so an agent calling get_section in a loop
+# does not re-read and re-validate the whole parsed document on every single call. The mtime
+# key invalidates the cache automatically whenever the document is re-parsed.
+_DOC_BLOCKS_CACHE: dict[Path, tuple[float, dict[str, CanonicalBlock]]] = {}
 
 
 def _load_doc_blocks(workspace: WorkspacePaths, doc_id: str) -> dict[str, CanonicalBlock]:
@@ -256,37 +266,60 @@ def _load_doc_blocks(workspace: WorkspacePaths, doc_id: str) -> dict[str, Canoni
 
     ``Section.block_ids`` is the only link back to the parser's richer blocks (where the
     image/table asset paths live). A document that was never parsed to ``document.json``
-    (e.g. a fixture that only writes ``sections.jsonl``) simply yields no assets.
+    (e.g. a fixture that only writes ``sections.jsonl``) simply yields no assets. Results
+    are memoised by file mtime to keep per-section fetches O(1) across calls.
     """
 
     document_path = workspace.sources_parsed / doc_id / "document.json"
-    if not document_path.is_file():
+    try:
+        mtime = document_path.stat().st_mtime
+    except OSError:
+        _DOC_BLOCKS_CACHE.pop(document_path, None)
         return {}
+    cached = _DOC_BLOCKS_CACHE.get(document_path)
+    if cached is not None and cached[0] == mtime:
+        return cached[1]
     try:
         document = read_document(document_path)
     except (OSError, ValueError):
         return {}
-    return {block.id: block for block in document.blocks}
+    blocks = {block.id: block for block in document.blocks}
+    _DOC_BLOCKS_CACHE[document_path] = (mtime, blocks)
+    return blocks
 
 
-def _resolve_asset_path(workspace: WorkspacePaths, doc_id: str, block: CanonicalBlock) -> str:
-    """Turn a parser's relative asset filename into a workspace-resolved path.
+def _is_url(value: str) -> bool:
+    return "://" in value or value.startswith("data:")
+
+
+def _resolve_asset_path(
+    workspace: WorkspacePaths, doc_id: str, block: CanonicalBlock
+) -> str | None:
+    """Resolve a parser's asset reference to a real file under the workspace.
 
     Prefers the typed ``asset_path`` (MinerU); falls back to the markdown parser's
-    ``metadata["src"]``. A bare filename is resolved under the staged ``images/`` dir
-    that ``MinerURunner`` copies alongside ``document.json``.
+    ``metadata["src"]``. A bare filename is resolved under the staged ``images/`` dir that
+    ``MinerURunner`` copies alongside ``document.json``. Returns ``None`` — so the caller
+    drops the asset rather than emit a bogus reference — when there is no usable path, i.e.
+    a URL, an absolute path, or a relative path that escapes the parsed document directory
+    (an ``AssetRef`` must always point at a real workspace file).
     """
 
     raw = block.asset_path
     if not raw:
         meta_src = block.metadata.get("src") or block.metadata.get("asset_path")
         raw = str(meta_src) if meta_src else ""
-    if not raw:
-        return ""
+    if not raw or _is_url(raw):
+        return None
+    candidate = Path(raw)
+    if candidate.is_absolute():
+        return None
     parsed_root = workspace.sources_parsed / doc_id
-    if "/" in raw or "\\" in raw:
-        return str(parsed_root / raw)
-    return str(parsed_root / "images" / raw)
+    base = parsed_root if ("/" in raw or "\\" in raw) else parsed_root / "images"
+    resolved = Path(os.path.normpath(base / candidate))
+    if not resolved.is_relative_to(parsed_root):
+        return None
+    return str(resolved)
 
 
 def _section_assets(
@@ -297,13 +330,18 @@ def _section_assets(
     assets: list[AssetRef] = []
     for block_id in section.block_ids:
         block = blocks_by_id.get(block_id)
-        if block is None or block.type not in _ASSET_BLOCK_TYPES:
+        if block is None or block.type not in ASSET_BLOCK_TYPES:
+            continue
+        path = _resolve_asset_path(workspace, section.doc_id, block)
+        if path is None:
+            # A block with no resolvable asset file (e.g. a markdown table rendered inline
+            # into ``text``) is not an asset the reader can open — skip it.
             continue
         assets.append(
             AssetRef(
                 block_id=block.id,
                 type=block.type,
-                path=_resolve_asset_path(workspace, section.doc_id, block),
+                path=path,
                 caption=block.text,
                 order=block.order,
                 page_idx=block.page_idx,
@@ -316,15 +354,19 @@ def _asset_notes(section: Section, assets: list[AssetRef]) -> list[str]:
     """Warn when a section's prose is effectively just the asset captions.
 
     In that case the meaningful labels/tabular data live inside the asset file, and a
-    reader working from ``text`` alone would miss them (issue #34, acceptance #3).
+    reader working from ``text`` alone would miss them (issue #34, acceptance #3). The
+    check removes each caption from the body and warns only when almost nothing is left,
+    so a section with genuine (merely short) prose beside a figure is not flagged.
     """
 
     if not assets:
         return []
-    body = section.text.strip()
-    captions = " ".join(asset.caption.strip() for asset in assets if asset.caption.strip())
-    caption_only = len(body) <= len(captions) + 40 or body == captions.strip()
-    if not caption_only:
+    residual = section.text.strip()
+    for asset in assets:
+        caption = asset.caption.strip()
+        if caption:
+            residual = residual.replace(caption, "")
+    if len(residual.strip()) > 15:
         return []
     return [
         f"This section has {len(assets)} image/table asset(s); labels or tabular data may "

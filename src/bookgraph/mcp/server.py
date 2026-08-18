@@ -103,11 +103,17 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
             raise ToolError(str(exc)) from exc
 
     @mcp.tool
-    def get_concept(concept: str) -> ConceptView:
-        """Return a concept and its cross-book backlink mentions across all books."""
+    def get_concept(concept: str, include_annotations: bool = False) -> ConceptView:
+        """Return a concept and its cross-book backlink mentions across all books.
+
+        Defaults to a compact card (bare backlinks with per-section glosses) for
+        lightweight graph traversal. Pass include_annotations=True for the detail
+        view, where each mention also carries its section's Tier-2 summary, so a
+        concept with several mentions reads as a source-grounded note.
+        """
 
         try:
-            return service.get_concept(workspace, concept)
+            return service.get_concept(workspace, concept, include_annotations)
         except ReadingServiceError as exc:
             raise ToolError(str(exc)) from exc
 

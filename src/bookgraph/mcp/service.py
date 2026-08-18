@@ -183,13 +183,20 @@ class SectionContext(BaseModel):
 
 
 class ConceptMentionView(BaseModel):
-    """One backlink: a section (in some book) that mentions a concept."""
+    """One backlink: a section (in some book) that mentions a concept.
+
+    ``summary`` is the mentioning section's Tier-2 annotation summary — the long-form
+    context behind the backlink. It is populated only in the concept-detail view
+    (``get_concept(..., include_annotations=True)``); the compact card leaves it empty
+    to stay lightweight for graph traversal.
+    """
 
     doc_id: str
     section_id: str
     title: str
     gloss: str = ""
     source: str = "auto"
+    summary: str = ""
 
 
 class ConceptInput(BaseModel):
@@ -215,12 +222,24 @@ class AnnotationResult(BaseModel):
 
 
 class ConceptView(BaseModel):
-    """A concept aggregated across books, with its cross-book backlinks."""
+    """A concept aggregated across books, with its cross-book backlinks.
+
+    Two read modes share this shape. The default is a **compact card** for lightweight
+    graph traversal: title, cross-book totals, and bare backlink pointers (glosses only).
+    The **detail view** (``get_concept(..., include_annotations=True)``) additionally
+    fills each mention's ``summary`` with the section's Tier-2 annotation, so a concept
+    with several mentions renders as a readable, provenance-aware note rather than a set
+    of short glosses. ``annotated_mention_count`` reports how many mentions carry such a
+    summary — meaningful in **both** modes (the compact card leaves the summaries empty
+    but still counts them), so a cheap card read tells an agent whether a concept has
+    deeper context worth an ``include_annotations=True`` call.
+    """
 
     slug: str
     title: str
     doc_count: int
     mention_count: int
+    annotated_mention_count: int = 0
     mentions: list[ConceptMentionView] = Field(default_factory=list)
 
 
@@ -557,8 +576,19 @@ def _section_summary(workspace: WorkspacePaths, doc_id: str, section_id: str) ->
         return ""
 
 
-def get_concept(workspace: WorkspacePaths, concept: str) -> ConceptView:
-    """Return a concept and its cross-book backlink mentions from the index."""
+def get_concept(
+    workspace: WorkspacePaths, concept: str, include_annotations: bool = False
+) -> ConceptView:
+    """Return a concept and its cross-book backlink mentions from the index.
+
+    ``include_annotations`` selects the read mode. Left ``False`` (the default), each
+    mention is a compact backlink pointer — doc/section/title plus its section-scoped
+    gloss and source — cheap enough for graph traversal. Set ``True`` for the
+    concept-detail view: each mention additionally carries its section's Tier-2
+    annotation ``summary``, turning a concept with several mentions into a readable,
+    source-grounded note instead of a set of short glosses. Every summary stays tied to
+    the section it came from, so the long-form context remains provenance-aware.
+    """
 
     slug = _validate_id(concept, "concept")
     result = default_index_backend().get_concept(workspace, slug)
@@ -567,21 +597,30 @@ def get_concept(workspace: WorkspacePaths, concept: str) -> ConceptView:
             f"Concept '{slug}' not found. Run 'bookgraph index build' then "
             "'bookgraph index concepts'."
         )
+    mentions = [
+        ConceptMentionView(
+            doc_id=mention.doc_id,
+            section_id=mention.section_id,
+            title=mention.title,
+            gloss=mention.gloss,
+            source=mention.source,
+            # The compact card omits the summary to stay lightweight; the detail view
+            # surfaces it so the mention reads as long-form, source-grounded context.
+            summary=mention.summary if include_annotations else "",
+        )
+        for mention in result.mentions
+    ]
     return ConceptView(
         slug=result.node.slug,
         title=result.node.title,
         doc_count=result.node.doc_count,
         mention_count=result.node.mention_count,
-        mentions=[
-            ConceptMentionView(
-                doc_id=mention.doc_id,
-                section_id=mention.section_id,
-                title=mention.title,
-                gloss=mention.gloss,
-                source=mention.source,
-            )
-            for mention in result.mentions
-        ],
+        # Count from the raw backend mentions, not the (possibly redacted) view list:
+        # the backend returns summaries regardless of the flag, so the compact card can
+        # still signal "this concept carries N annotated sections" — a cheap cue for an
+        # agent deciding whether an include_annotations=True call is worth it.
+        annotated_mention_count=sum(1 for m in result.mentions if m.summary),
+        mentions=mentions,
     )
 
 

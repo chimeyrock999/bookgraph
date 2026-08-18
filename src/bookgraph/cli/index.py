@@ -163,4 +163,12 @@ def _render_concept_page(
         if mention.source == "agent":
             suffix += " (agent-verified)"
         lines.append(f"- [{mention.title}]({link}){suffix}")
+        # The section's Tier-2 summary is the long-form context behind the backlink;
+        # render it as an indented blockquote so the page reads as a concept note, not
+        # only a list of glosses. Each summary stays under its own section link, keeping
+        # the note provenance-aware. Summaries are single-line by construction (the write
+        # path runs them through annotations._clean, which collapses newlines), so the
+        # same trust the glosses/link text already rely on lets this be one blockquote.
+        if mention.summary:
+            lines.append(f"  > {mention.summary}")
     return "\n".join(lines) + "\n"

@@ -78,7 +78,11 @@ A self-serve agent drives an entire session with these tools alone:
      already written for it.
    - Pivot as needed:
      - `get_concept(concept)` — where a concept is discussed across **all**
-       books (cross-book backlinks).
+       books (cross-book backlinks). Defaults to a compact card (bare backlinks
+       with per-section glosses) for lightweight traversal; pass
+       `include_annotations=True` for the detail view, where each mention also
+       carries its section's Tier-2 `summary`, so a concept with several mentions
+       reads as a source-grounded note.
      - `search(query, doc_id=None)` — find related sections (cross-document when
        `doc_id` is omitted).
      - `get_outline(doc_id)` / `get_related(doc_id, section_id)` — navigate structure.

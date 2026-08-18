@@ -317,7 +317,10 @@ wiki/concepts/
 Page shape — a title, a one-line summary, then backlinks grouped by book in
 reading order. A backlink shows its per-mention `gloss` after an em dash when present,
 and an `(agent-verified)` marker when the mention came from a Tier-2 agent annotation
-(`source='agent'`):
+(`source='agent'`). When the mentioning section has a Tier-2 `summary`, it is rendered
+beneath the backlink as an indented blockquote, so the page reads as a long-form,
+provenance-aware concept note (each summary stays under the section it came from) rather
+than only a list of glosses:
 
 ```markdown
 # Schema Evolution
@@ -329,6 +332,8 @@ Mentioned in 2 books · 5 sections.
 
 ## Designing Data-Intensive Applications
 - [Encoding and Evolution](../books/ddia/sections/ddia.ch-4.md) — why it matters here (agent-verified)
+  > Schemas change over time; readers and writers must tolerate both older and newer
+  > shapes, which is what backward/forward compatibility formalises.
 ```
 
 Properties:

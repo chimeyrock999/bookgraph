@@ -106,7 +106,10 @@ for each section:
 ## Non-goal: the `markdown-graph` wiki backend
 
 The enrichment surfaces are **concept pages** (`wiki/concepts/*.md`, gloss +
-`(agent-verified)` marker) and **MCP `get_context`** (immediate `summary`).
+`(agent-verified)` marker + the section's `summary` as an indented blockquote), the
+**MCP concept-detail view** (`get_concept(..., include_annotations=True)`, which folds
+each mention's `summary` into the concept), and **MCP `get_context`** (immediate
+`summary`).
 
 Rendering summaries or agent-curated concepts on the `markdown-graph` backend's per-book
 section pages (`wiki/books/<doc_id>/sections/`) is an **explicit non-goal** here: that

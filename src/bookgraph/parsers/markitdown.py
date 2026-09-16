@@ -19,11 +19,19 @@ _IMAGE_SUFFIXES = frozenset(
     {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp", ".tif", ".tiff"}
 )
 
-# A Markdown image reference: ``![alt](src)`` or ``![alt](src "title")``. The src stops at
-# whitespace or the closing paren, which matches what MarkItDown/markdownify emit.
+# A Markdown image reference: ``![alt](src)`` with an optional ``"title"`` or ``'title'``.
+# The src stops at whitespace or the closing paren, matching what MarkItDown/markdownify emit;
+# both quote styles are accepted so a single-quoted title never leaves the reference unstaged.
 _IMAGE_REFERENCE = re.compile(
-    r"!\[(?P<alt>[^\]]*)\]\(\s*(?P<src>[^)\s]+)(?:\s+\"[^\"]*\")?\s*\)"
+    r"!\[(?P<alt>[^\]]*)\]\(\s*(?P<src>[^)\s]+)(?P<title>\s+(?:\"[^\"]*\"|'[^']*'))?\s*\)"
 )
+
+# Characters that break a bare CommonMark link destination (whitespace splits it into text;
+# quotes/brackets/parens are delimiters). Collapsed to ``_`` in staged filenames so the
+# rewritten ``![alt](images/<name>)`` always tokenises back into an image whose ``src`` matches
+# the file on disk byte-for-byte (angle-bracketed destinations would percent-encode the space
+# and no longer resolve).
+_UNSAFE_ASSET_CHARS = re.compile(r"[\s()<>\"'\\]+")
 
 
 class MissingParserDependencyError(RuntimeError):
@@ -82,10 +90,12 @@ def _stage_epub_assets(source: Path, output_dir: Path, markdown: str) -> str:
     MarkItDown converts every spine XHTML into Markdown but leaves each ``<img>`` src as the
     zip-relative path it found (e.g. ``assets/ddia_0206.png``) and never extracts the bytes,
     so the reference resolves to nothing under ``sources/parsed/<doc_id>/``. Unpack each
-    referenced image into ``output_dir/assets/`` and rewrite the reference to a stable
-    ``assets/<name>`` path the downstream asset resolver can open. References that cannot be
-    matched to a file in the EPUB are left untouched and reported via a warning, so a lossy
-    conversion is surfaced rather than shipped as a silently broken image link.
+    referenced image into ``output_dir/images/`` — the same staged-asset directory MinerU uses
+    and ``_resolve_asset_path`` looks in first — and rewrite the reference to a stable
+    ``images/<name>`` path the downstream asset resolver can open. References that cannot be
+    matched to exactly one file in the EPUB are left untouched and reported via a warning, so a
+    lossy or ambiguous conversion is surfaced rather than shipped as a silently broken (or
+    silently wrong) image.
 
     A no-op for non-EPUB sources (DOCX/HTML/... carry no separable asset directory) and for
     zips that fail to open, so the base MarkItDown path is unchanged.
@@ -104,7 +114,7 @@ def _stage_epub_assets(source: Path, output_dir: Path, markdown: str) -> str:
             for name in archive.namelist()
             if not name.endswith("/") and PurePosixPath(name).suffix.lower() in _IMAGE_SUFFIXES
         ]
-        assets_dir = output_dir / "assets"
+        assets_dir = output_dir / "images"
         staged_by_member: dict[str, str] = {}
         used_names: set[str] = set()
         missing: list[str] = []
@@ -127,7 +137,8 @@ def _stage_epub_assets(source: Path, output_dir: Path, markdown: str) -> str:
             if staged is None:
                 missing.append(src)
                 return match.group(0)
-            return f"![{match.group('alt')}]({staged})"
+            # Preserve any ``"title"`` the source carried; only the destination is repointed.
+            return f"![{match.group('alt')}]({staged}{match.group('title') or ''})"
 
         rewritten = _IMAGE_REFERENCE.sub(rewrite, markdown)
 
@@ -145,12 +156,18 @@ def _stage_epub_assets(source: Path, output_dir: Path, markdown: str) -> str:
 
 
 def _match_member(source_ref: str, image_members: list[str]) -> str | None:
-    """Find the EPUB member an image reference points at.
+    """Find the single EPUB member an image reference points at, or ``None`` if ambiguous.
 
     The reference is XHTML-relative and its originating file is lost once MarkItDown flattens
-    the spine, so match on the path tail first (``.../assets/ddia_0206.png``), falling back to
+    the spine, so match on the path tail first (``.../assets/ddia_0206.png``), then fall back to
     a basename match. ``..`` segments are dropped rather than resolved because there is no
     anchor directory left to resolve them against.
+
+    A match is only returned when it is *unambiguous* — exactly one member matches. When two
+    chapters share an identical relative image path pointing at different files, guessing the
+    first would silently show the wrong figure; returning ``None`` surfaces it as an unresolved
+    reference (a visible warning) instead, which is easier to notice and debug than a wrong
+    image.
     """
 
     tail = _clean_reference(source_ref).lstrip("/")
@@ -161,30 +178,48 @@ def _match_member(source_ref: str, image_members: list[str]) -> str | None:
     if not parts:
         return None
     suffix = "/".join(parts)
-    for member in image_members:
-        if member == suffix or member.endswith("/" + suffix):
-            return member
+    # An exact whole-path match is unambiguous by construction (zip names are unique).
+    if suffix in image_members:
+        return suffix
+    tail_matches = [member for member in image_members if member.endswith("/" + suffix)]
+    if tail_matches:
+        return tail_matches[0] if len(tail_matches) == 1 else None
     basename = normalized.name.lower()
-    for member in image_members:
-        if PurePosixPath(member).name.lower() == basename:
-            return member
-    return None
+    base_matches = [
+        member for member in image_members if PurePosixPath(member).name.lower() == basename
+    ]
+    return base_matches[0] if len(base_matches) == 1 else None
 
 
 def _extract_member(
     archive: zipfile.ZipFile, member: str, assets_dir: Path, used_names: set[str]
 ) -> str:
-    """Extract one zip member into ``assets/`` under a collision-free name."""
+    """Extract one zip member into ``images/`` under a collision-free, link-safe name."""
 
-    name = _unique_name(PurePosixPath(member).name, used_names)
+    name = _unique_name(_safe_asset_name(PurePosixPath(member).name), used_names)
     assets_dir.mkdir(parents=True, exist_ok=True)
     with archive.open(member) as source_file:
         (assets_dir / name).write_bytes(source_file.read())
-    return f"assets/{name}"
+    return f"images/{name}"
+
+
+def _safe_asset_name(name: str) -> str:
+    """Collapse characters that break a bare Markdown link destination into ``_``.
+
+    A staged filename becomes part of the rewritten ``![alt](images/<name>)`` destination, so a
+    space or quote in it would either split the link into plain text or force an angle-bracketed
+    (percent-encoded) destination that no longer matches the file on disk. Keeping the name
+    link-safe lets the reference tokenise straight back into an image whose ``src`` opens the
+    real file.
+    """
+
+    stem = _UNSAFE_ASSET_CHARS.sub("_", PurePosixPath(name).stem).strip("_")
+    suffix = _UNSAFE_ASSET_CHARS.sub("_", PurePosixPath(name).suffix)
+    return f"{stem or 'image'}{suffix}"
 
 
 def _unique_name(name: str, used_names: set[str]) -> str:
-    """Reserve ``name`` under ``assets/``, suffixing ``-N`` only on a real basename clash."""
+    """Reserve ``name`` under ``images/``, suffixing ``-N`` only on a real basename clash."""
 
     candidate = name or "image"
     if candidate not in used_names:

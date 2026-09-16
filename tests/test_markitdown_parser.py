@@ -69,12 +69,12 @@ def test_markitdown_parser_extracts_epub_image_assets(tmp_path: Path) -> None:
 
     document = MarkItDownParser(converter=converter).parse(source, output_dir)
 
-    staged_asset = output_dir / "assets" / "ddia_0206.png"
+    staged_asset = output_dir / "images" / "ddia_0206.png"
     assert staged_asset.read_bytes() == figure
     staged_md = (output_dir / "book.md").read_text()
-    assert "![Figure 2-6](assets/ddia_0206.png)" in staged_md
+    assert "![Figure 2-6](images/ddia_0206.png)" in staged_md
     image_blocks = [block for block in document.blocks if block.type == "image"]
-    assert [block.metadata["src"] for block in image_blocks] == ["assets/ddia_0206.png"]
+    assert [block.metadata["src"] for block in image_blocks] == ["images/ddia_0206.png"]
     # The staged src resolves to the real file beside the parsed document.
     assert (output_dir / image_blocks[0].metadata["src"]).read_bytes() == figure
 
@@ -88,9 +88,62 @@ def test_markitdown_parser_repoints_parent_relative_image_refs(tmp_path: Path) -
 
     MarkItDownParser(converter=converter).parse(source, output_dir)
 
-    assert (output_dir / "assets" / "fig.jpg").read_bytes() == figure
+    assert (output_dir / "images" / "fig.jpg").read_bytes() == figure
     staged_md = (output_dir / "book.md").read_text()
-    assert "![Fig](assets/fig.jpg)" in staged_md
+    assert "![Fig](images/fig.jpg)" in staged_md
+
+
+def test_markitdown_parser_sanitizes_asset_names_with_spaces(tmp_path: Path) -> None:
+    figure = b"png bytes"
+    source = tmp_path / "book.epub"
+    _make_epub(source, {"OEBPS/assets/Diagram One.png": figure})
+    output_dir = tmp_path / "parsed" / "book"
+    # MarkItDown percent-encodes the space in the href; the staged name must still be link-safe.
+    converter = _FakeConverter("![Fig](assets/Diagram%20One.png)\n")
+
+    document = MarkItDownParser(converter=converter).parse(source, output_dir)
+
+    # A space in the destination would tokenise as plain text, so the staged name is link-safe
+    # and the reference still round-trips into a resolvable image block.
+    assert (output_dir / "images" / "Diagram_One.png").read_bytes() == figure
+    image_blocks = [block for block in document.blocks if block.type == "image"]
+    assert [block.metadata["src"] for block in image_blocks] == ["images/Diagram_One.png"]
+    assert (output_dir / image_blocks[0].metadata["src"]).read_bytes() == figure
+
+
+def test_markitdown_parser_stages_single_quoted_title_reference(tmp_path: Path) -> None:
+    figure = b"png bytes"
+    source = tmp_path / "book.epub"
+    _make_epub(source, {"OEBPS/assets/fig.png": figure})
+    output_dir = tmp_path / "parsed" / "book"
+    converter = _FakeConverter("![Fig](assets/fig.png 'a caption')\n")
+
+    MarkItDownParser(converter=converter).parse(source, output_dir)
+
+    assert (output_dir / "images" / "fig.png").read_bytes() == figure
+    staged_md = (output_dir / "book.md").read_text()
+    assert "![Fig](images/fig.png 'a caption')" in staged_md
+
+
+def test_markitdown_parser_warns_on_ambiguous_epub_image(tmp_path: Path) -> None:
+    source = tmp_path / "book.epub"
+    _make_epub(
+        source,
+        {
+            "OEBPS/Text/images/diagram.png": b"chapter one figure",
+            "OEBPS/Text/chapter5/images/diagram.png": b"chapter five figure",
+        },
+    )
+    output_dir = tmp_path / "parsed" / "book"
+    converter = _FakeConverter("![Fig](images/diagram.png)\n")
+
+    with pytest.warns(UserWarning, match="images/diagram.png"):
+        MarkItDownParser(converter=converter).parse(source, output_dir)
+
+    # Rather than guess and show the wrong figure, the ambiguous reference is left untouched.
+    staged_md = (output_dir / "book.md").read_text()
+    assert "![Fig](images/diagram.png)" in staged_md
+    assert not (output_dir / "images").exists()
 
 
 def test_markitdown_parser_warns_on_unresolvable_epub_image(tmp_path: Path) -> None:
@@ -105,7 +158,7 @@ def test_markitdown_parser_warns_on_unresolvable_epub_image(tmp_path: Path) -> N
     staged_md = (output_dir / "book.md").read_text()
     # The broken reference is preserved verbatim rather than silently dropped.
     assert "![Missing](assets/ghost.png)" in staged_md
-    assert not (output_dir / "assets").exists()
+    assert not (output_dir / "images").exists()
 
 
 def test_markitdown_parser_leaves_remote_image_refs_untouched(tmp_path: Path) -> None:

@@ -125,6 +125,63 @@ def test_markitdown_parser_stages_single_quoted_title_reference(tmp_path: Path) 
     assert "![Fig](images/fig.png 'a caption')" in staged_md
 
 
+def test_markitdown_parser_skips_image_refs_inside_code(tmp_path: Path) -> None:
+    figure = b"png bytes"
+    source = tmp_path / "book.epub"
+    _make_epub(source, {"OEBPS/assets/real.png": figure})
+    output_dir = tmp_path / "parsed" / "book"
+    converter = _FakeConverter(
+        "![Real](assets/real.png)\n\n"
+        "Inline example: `![figure](assets/sample.png)` stays literal.\n\n"
+        "```markdown\n![fenced](assets/fenced.png)\n```\n"
+    )
+
+    MarkItDownParser(converter=converter).parse(source, output_dir)
+
+    staged_md = (output_dir / "book.md").read_text()
+    # The real reference is repointed...
+    assert "![Real](images/real.png)" in staged_md
+    # ...but the code samples are preserved verbatim, and their assets are never staged.
+    assert "`![figure](assets/sample.png)`" in staged_md
+    assert "![fenced](assets/fenced.png)" in staged_md
+    assert not (output_dir / "images" / "sample.png").exists()
+    assert not (output_dir / "images" / "fenced.png").exists()
+
+
+def test_markitdown_parser_records_unresolved_image_count(tmp_path: Path) -> None:
+    source = tmp_path / "book.epub"
+    _make_epub(source, {"OEBPS/assets/there.png": b"png"})
+    output_dir = tmp_path / "parsed" / "book"
+    converter = _FakeConverter(
+        "![Here](assets/there.png)\n\n![Gone](assets/missing.png)\n",
+    )
+
+    with pytest.warns(UserWarning):
+        document = MarkItDownParser(converter=converter).parse(source, output_dir)
+
+    assert document.metadata["unresolved_image_count"] == 1
+
+
+def test_markitdown_parser_clears_stale_assets_on_reparse(tmp_path: Path) -> None:
+    source = tmp_path / "book.epub"
+    output_dir = tmp_path / "parsed" / "book"
+    _make_epub(source, {"OEBPS/assets/old.png": b"old"})
+    MarkItDownParser(converter=_FakeConverter("![Old](assets/old.png)\n")).parse(
+        source, output_dir
+    )
+    assert (output_dir / "images" / "old.png").exists()
+
+    # Re-ingest an edited EPUB (same doc_id) whose figure was renamed.
+    _make_epub(source, {"OEBPS/assets/new.png": b"new"})
+    MarkItDownParser(converter=_FakeConverter("![New](assets/new.png)\n")).parse(
+        source, output_dir
+    )
+
+    assert (output_dir / "images" / "new.png").read_bytes() == b"new"
+    # The orphaned asset from the previous parse is gone, not left as accumulating garbage.
+    assert not (output_dir / "images" / "old.png").exists()
+
+
 def test_markitdown_parser_warns_on_ambiguous_epub_image(tmp_path: Path) -> None:
     source = tmp_path / "book.epub"
     _make_epub(

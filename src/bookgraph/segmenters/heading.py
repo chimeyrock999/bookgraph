@@ -84,9 +84,16 @@ class _DraftSection:
         section_slug: str | None = None,
     ) -> Section:
         page_indices = [block.page_idx for block in self.blocks if block.page_idx is not None]
+        page_start = min(page_indices) if page_indices else self.start_page
         page_end = max(page_indices) if page_indices else None
         if next_start_page is not None:
+            # The next section's start page bounds this one, but it underflows when both
+            # sections begin on the same page (two headings on one page) or when the
+            # parser emits pages out of order — which produced page_start > page_end in
+            # real books (issue #38). Never report a span that runs backwards.
             page_end = next_start_page - 1
+            if page_start is not None:
+                page_end = max(page_start, page_end)
         text_parts = [
             block.text.strip()
             for block in self.blocks
@@ -98,7 +105,7 @@ class _DraftSection:
             title=self.title,
             level=self.level,
             heading_path=self.heading_path,
-            page_start=min(page_indices) if page_indices else self.start_page,
+            page_start=page_start,
             page_end=page_end,
             text="\n\n".join(text_parts),
             block_ids=[block.id for block in self.blocks],

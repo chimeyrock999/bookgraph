@@ -11,6 +11,11 @@ from bookgraph.cli._config import load_config
 from bookgraph.cli._shared import _validate_id, _validate_plugin_name
 from bookgraph.defaults import default_segmenter_registry
 from bookgraph.documents import read_document
+from bookgraph.quality import (
+    QualityReport,
+    document_quality_report,
+    write_quality_report,
+)
 from bookgraph.sections import write_sections
 from bookgraph.segmenters.bookmark import BookmarkSegmenter, PdfBookmark
 from bookgraph.segmenters.heading import HeadingSegmenter
@@ -92,6 +97,9 @@ def segment(
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
 
+    report = document_quality_report(resolved_doc_id, sections, document.blocks)
+    report_path = write_quality_report(report, output_dir)
+
     typer.echo(f"segmenter: {segmenter_name}")
     typer.echo(f"target_level: {resolved_target_level}")
     if isinstance(segmenter_plugin, TokenPageSegmenter):
@@ -99,6 +107,27 @@ def segment(
     typer.echo(f"doc_id: {resolved_doc_id}")
     typer.echo(f"sections: {len(sections)}")
     typer.echo(f"manifest: {output.manifest}")
+    typer.echo(f"warnings: {report.warning_count}")
+    typer.echo(f"quality: {report_path}")
+    _echo_warnings(report)
+
+
+def _echo_warnings(report: QualityReport, sample: int = 5) -> None:
+    """Surface the quality report inline so an ingest run never hides an anomaly.
+
+    Only a sample is printed — a book with a broken page span usually has many — with
+    the per-code totals and a pointer to the full report for the rest.
+    """
+
+    if not report.warnings:
+        return
+    counts = ", ".join(f"{code}={count}" for code, count in report.warning_counts.items())
+    typer.echo(f"warning: quality checks flagged {report.warning_count} issue(s): {counts}")
+    for warning in report.warnings[:sample]:
+        typer.echo(f"warning: {warning.section_id}: {warning.code}: {warning.message}")
+    remaining = max(0, report.warning_count - sample)
+    if remaining:
+        typer.echo(f"warning: … and {remaining} more (see the quality report above)")
 
 
 def _load_bookmarks(workspace: WorkspacePaths, doc_id: str) -> list[PdfBookmark]:

@@ -273,10 +273,19 @@ available near the budget.
 ```text
 sources/sections/<doc_id>/sections.jsonl
 sources/sections/<doc_id>/<section_id>.md
+sources/sections/<doc_id>/quality.json
 ```
 
 See `artifacts.md` for the section artifact schemas. Duplicate section ids fail
 the command rather than overwriting.
+
+`quality.json` is the ingest data-quality report for the document: the anomalies
+the deterministic checks in `bookgraph.quality` found in the sections just
+written (inverted/half-known page ranges, assets whose caption contradicts the
+parser's type, sections whose text is only asset captions). It is always written
+— `warning_count: 0` for a clean document — and the same warnings are attached to
+every section the MCP section APIs return. See `artifacts.md` for the schema and
+the code list.
 
 ### Must not do
 
@@ -294,7 +303,15 @@ max_tokens: <n>      # only printed for token-page
 doc_id: <doc_id>
 sections: <section_count>
 manifest: <workspace>/sources/sections/<doc_id>/sections.jsonl
+warnings: <warning_count>
+quality: <workspace>/sources/sections/<doc_id>/quality.json
 ```
+
+When the report is not empty, the command also echoes the per-code totals and up
+to five `warning: <section_id>: <code>: <message>` lines (with an `… and N more`
+line pointing at `quality.json`), so an anomaly is never hidden in a file the
+operator did not open. Warnings do not fail the command — the sections are still
+written.
 
 ## `bookgraph reading-plan`
 
@@ -566,10 +583,21 @@ telling the user to `uv sync --extra mcp`.
 
 ### Tools
 
-- `get_next_section(plan_id)` → the next up-to-`daily_sections` unread sections
-  for a plan, each with full text, provenance, and its `<section_id>.md` path,
-  plus `remaining` and `done`.
-- `get_section(doc_id, section_id)` → one section's full reading content.
+- `get_next_section(plan_id, include_assets=True)` → the next
+  up-to-`daily_sections` unread sections for a plan, each shaped exactly as
+  `get_section` returns it (full text, provenance, `<section_id>.md` path,
+  `assets`, `warnings`), plus `remaining` and `done`.
+- `get_section(doc_id, section_id, include_assets=True)` → one section's full
+  reading content, its `<section_id>.md` path, its figure/table `assets` (each
+  `{block_id, type, path, caption, order, page_idx, type_confidence,
+  suggested_type}`), and its `warnings`. `type_confidence` scores the parser's
+  classification against the caption's label and `suggested_type` is set only when
+  the caption contradicts it, so a figure emitted as a `table` is flagged rather
+  than passed off as correct. `warnings` are the same data-quality anomalies the
+  segment stage records in `quality.json` (each `{code, message, block_id}`, see
+  `artifacts.md`) restricted to this section: page-range warnings always, asset
+  warnings when assets are included. `include_assets=False` skips asset resolution
+  (and with it the asset warnings).
 - `mark_read(plan_id, section_id=None)` → mark a section read (defaults to the
   next unread one) and persist the plan; returns `completed`/`total`/`done`.
 - `search(query, doc_id=None, limit=10)` → sections ranked by FTS5 `bm25` over
@@ -628,8 +656,11 @@ CLI step (see `docs/mcp/reading-agent.md`).
 ### Reads / writes
 
 - Reads `indexes/bookgraph.db` (when built) and
-  `sources/sections/<doc_id>/sections.jsonl`, plus `reading_plans/<plan_id>.json` and
-  `annotations/<doc_id>/<section_id>.json` (the latter for `get_context.summary`).
+  `sources/sections/<doc_id>/sections.jsonl`, plus `reading_plans/<plan_id>.json`,
+  `annotations/<doc_id>/<section_id>.json` (the latter for `get_context.summary`),
+  and `sources/parsed/<doc_id>/document.json` (asset resolution for `assets`; the
+  section `warnings` are recomputed from the section and its assets, never read
+  back from `quality.json`).
 - `mark_read` and `create_plan` write `reading_plans/<plan_id>.json` (same
   contracts as `bookgraph reading-plan mark-read` / `create`); `annotate_section`
   writes `annotations/<doc_id>/<section_id>.json` (see `annotations.md`). No other

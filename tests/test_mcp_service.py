@@ -361,7 +361,7 @@ def test_get_section_returns_structured_assets(tmp_path: Path) -> None:
     assert image.path == str(workspace.sources_parsed / "deep-work" / "images" / "fig1.jpg")
     assert table.path == str(workspace.sources_parsed / "deep-work" / "nested" / "tbl1.jpg")
     # Prose is effectively just the captions, so the reader is warned to open the assets.
-    assert view.notes
+    assert [warning.code for warning in view.warnings] == ["asset_captions_only"]
 
 
 def test_get_section_include_assets_false_omits_assets(tmp_path: Path) -> None:
@@ -380,7 +380,7 @@ def test_get_section_include_assets_false_omits_assets(tmp_path: Path) -> None:
     view = service.get_section(workspace, "deep-work", "deep-work.figs", include_assets=False)
 
     assert view.assets == []
-    assert view.notes == []
+    assert view.warnings == []
 
 
 def test_get_section_without_parsed_document_has_no_assets(tmp_path: Path) -> None:
@@ -390,7 +390,7 @@ def test_get_section_without_parsed_document_has_no_assets(tmp_path: Path) -> No
     view = service.get_section(workspace, "deep-work", "deep-work.a")
 
     assert view.assets == []
-    assert view.notes == []
+    assert view.warnings == []
 
 
 def test_get_context_carries_section_assets(tmp_path: Path) -> None:
@@ -453,7 +453,7 @@ def test_assets_drop_unresolvable_references(tmp_path: Path) -> None:
     )
 
 
-def test_asset_notes_not_raised_for_genuine_short_prose(tmp_path: Path) -> None:
+def test_asset_warning_not_raised_for_genuine_short_prose(tmp_path: Path) -> None:
     # A short but real sentence next to a one-word caption must not trip the caption-only
     # warning (regression for the length-only heuristic).
     section = Section(
@@ -481,7 +481,7 @@ def test_asset_notes_not_raised_for_genuine_short_prose(tmp_path: Path) -> None:
     view = service.get_section(workspace, "deep-work", "deep-work.figs")
 
     assert view.assets  # the image is still surfaced
-    assert view.notes == []  # but the prose is genuine, so no caption-only warning
+    assert view.warnings == []  # but the prose is genuine, so no caption-only warning
 
 
 def test_asset_dropped_when_referenced_file_is_missing(tmp_path: Path) -> None:
@@ -652,7 +652,7 @@ def test_get_next_section_include_assets_toggle(tmp_path: Path) -> None:
     assert without.sections[0].assets == []
 
 
-def test_asset_notes_not_raised_when_caption_token_recurs_in_prose(tmp_path: Path) -> None:
+def test_asset_warning_not_raised_when_caption_token_recurs_in_prose(tmp_path: Path) -> None:
     # A short caption that also recurs in the body must not be wiped everywhere: removing it
     # once leaves genuine content, so no false "caption-only" warning (recurring-token bug).
     section = Section(
@@ -678,7 +678,7 @@ def test_asset_notes_not_raised_when_caption_token_recurs_in_prose(tmp_path: Pat
     view = service.get_section(workspace, "deep-work", "deep-work.figs")
 
     assert view.assets
-    assert view.notes == []  # replace-all would falsely fire here; replace-once does not
+    assert view.warnings == []  # replace-all would falsely fire; replace-once does not
 
 
 def test_asset_resolves_file_directly_under_parsed_root(tmp_path: Path) -> None:
@@ -752,3 +752,74 @@ def test_mark_read_with_traversal_plan_id_writes_nothing_outside(tmp_path: Path)
 
     # The traversal target is untouched — validation happened before any write.
     assert escape_target.read_text() == '{"tampered": false}'
+
+
+def test_section_view_warns_about_an_inverted_page_range(tmp_path: Path) -> None:
+    # A page-range anomaly is section-level, so it must surface even with no assets
+    # resolved at all (issue #38): a reader sees it without opening document.json.
+    section = Section(
+        id="deep-work.a",
+        doc_id="deep-work",
+        title="Alpha",
+        level=1,
+        heading_path=["Alpha"],
+        page_start=12,
+        page_end=4,
+        text="Body.",
+    )
+    workspace = _workspace(tmp_path, section)
+
+    view = service.get_section(workspace, "deep-work", "deep-work.a", include_assets=False)
+
+    assert [warning.code for warning in view.warnings] == ["page_range_inverted"]
+    assert "page_start=12 > page_end=4" in view.warnings[0].message
+
+
+def test_section_assets_carry_type_confidence_and_a_suggested_correction(tmp_path: Path) -> None:
+    # A figure the parser classified as a table: the type is preserved, but the caption
+    # disputes it, so the client gets a confidence and the type the caption implies.
+    section = Section(
+        id="deep-work.figs",
+        doc_id="deep-work",
+        title="Figures",
+        level=1,
+        heading_path=["Figures"],
+        text=(
+            "A full paragraph of real prose about snapshot isolation, long enough that "
+            "the section is clearly not just its captions and does not trip the sparse-"
+            "text check, so the only warning left is the disputed asset type itself."
+        ),
+        block_ids=["mislabelled", "plain"],
+    )
+    workspace = _workspace(tmp_path, section)
+    _stage_asset(workspace, "deep-work", "images/f6.jpg")
+    _stage_asset(workspace, "deep-work", "images/t2.jpg")
+    write_document(
+        Document(
+            doc_id="deep-work",
+            title="Deep Work",
+            blocks=[
+                CanonicalBlock(
+                    id="mislabelled",
+                    type="table",
+                    text="Figure 6. Snapshot isolation.",
+                    asset_path="f6.jpg",
+                ),
+                CanonicalBlock(
+                    id="plain", type="table", text="Table 2. Operations.", asset_path="t2.jpg"
+                ),
+            ],
+        ),
+        workspace.sources_parsed / "deep-work",
+    )
+
+    view = service.get_section(workspace, "deep-work", "deep-work.figs")
+
+    mislabelled, plain = view.assets
+    assert (mislabelled.type, mislabelled.suggested_type) == ("table", "image")
+    assert mislabelled.type_confidence == 0.4
+    assert (plain.type, plain.suggested_type) == ("table", None)
+    assert plain.type_confidence == 1.0
+    assert [(w.code, w.block_id) for w in view.warnings] == [
+        ("asset_type_ambiguous", "mislabelled")
+    ]

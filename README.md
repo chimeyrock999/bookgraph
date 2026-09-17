@@ -224,6 +224,7 @@ src/bookgraph/
   reading_plans.py          # reading plan store (create/next/mark-read core)
   graph.py                  # section graph model + builder (hierarchy + sequence)
   concepts.py               # shared deterministic concept extractor (wiki + index)
+  quality.py                # ingest/section quality checks (segment report + MCP warnings)
   index/
     base.py                 # IndexBackend port + hits/concept models + tokenizer
     sqlite.py               # default backend: SQLite/FTS5 (indexes/bookgraph.db)

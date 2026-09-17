@@ -33,6 +33,12 @@ from bookgraph.models import (
     ReadingPlan,
     Section,
 )
+from bookgraph.quality import (
+    AssetSummary,
+    SectionWarning,
+    classify_asset,
+    section_warnings,
+)
 from bookgraph.reading_plans import (
     create_reading_plan,
     list_plan_progress,
@@ -77,6 +83,12 @@ class AssetRef(BaseModel):
     caption as text — the labels/data live inside ``path``). ``order`` is the block's
     position in the parsed document, so a client can place the asset relative to the
     section's prose.
+
+    ``type`` is the parser's classification, kept verbatim. Layout parsers do confuse
+    figures with tables, so it travels with ``type_confidence`` (how well the caption's
+    label corroborates it) and, when the caption contradicts the parser,
+    ``suggested_type`` — the type the caption implies. A client can then trust, correct,
+    or open the file instead of taking a silently wrong ``type`` at face value.
     """
 
     block_id: str
@@ -85,10 +97,19 @@ class AssetRef(BaseModel):
     caption: str = ""
     order: int | None = None
     page_idx: int | None = None
+    type_confidence: float = 1.0
+    suggested_type: str | None = None
 
 
 class SectionView(BaseModel):
-    """A section's full reading content plus provenance and its Markdown path."""
+    """A section's full reading content plus provenance and its Markdown path.
+
+    ``warnings`` carries the section's data-quality anomalies (see
+    :mod:`bookgraph.quality`) — a broken page span, a disputed asset type, prose that
+    is only asset captions — so a reader sees them inline instead of having to inspect
+    ``sources/parsed/<doc_id>/document.json``. Page-range warnings are always present;
+    asset warnings need ``include_assets`` (the default).
+    """
 
     id: str
     doc_id: str
@@ -103,7 +124,7 @@ class SectionView(BaseModel):
     block_ids: list[str] = Field(default_factory=list)
     markdown_path: str
     assets: list[AssetRef] = Field(default_factory=list)
-    notes: list[str] = Field(default_factory=list)
+    warnings: list[SectionWarning] = Field(default_factory=list)
 
 
 class NextSection(BaseModel):
@@ -389,6 +410,7 @@ def _section_assets(
             # A block with no resolvable asset file (e.g. a markdown table rendered inline
             # into ``text``) is not an asset the reader can open — skip it.
             continue
+        classification = classify_asset(block.type, block.text)
         assets.append(
             AssetRef(
                 block_id=block.id,
@@ -397,35 +419,27 @@ def _section_assets(
                 caption=block.text,
                 order=block.order,
                 page_idx=block.page_idx,
+                type_confidence=classification.confidence,
+                suggested_type=classification.suggested_type,
             )
         )
     return assets
 
 
-def _asset_notes(section: Section, assets: list[AssetRef]) -> list[str]:
-    """Warn when a section's prose is effectively just the asset captions.
+def _section_warnings(section: Section, assets: list[AssetRef]) -> list[SectionWarning]:
+    """Run the shared quality checks over a section and its resolved assets.
 
-    In that case the meaningful labels/tabular data live inside the asset file, and a
-    reader working from ``text`` alone would miss them (issue #34, acceptance #3). Each
-    caption is removed from the body **once** (its text appears once, as the caption) and
-    the note fires only when almost nothing remains — removing once, rather than every
-    occurrence, keeps a short/generic caption like ``"1"`` or ``"Table"`` from being wiped
-    out of genuine prose and producing a false warning.
+    The same checks back the segment stage's ``quality.json`` report, so a reader and
+    an ingest run never disagree about what is wrong with a section.
     """
 
-    if not assets:
-        return []
-    residual = section.text.strip()
-    for asset in assets:
-        caption = asset.caption.strip()
-        if caption:
-            residual = residual.replace(caption, "", 1)
-    if len(residual.strip()) > 15:
-        return []
-    return [
-        f"This section has {len(assets)} image/table asset(s); labels or tabular data may "
-        "live inside the file(s) — inspect the asset(s), not just `text`."
-    ]
+    return section_warnings(
+        section,
+        [
+            AssetSummary(block_id=asset.block_id, type=asset.type, caption=asset.caption)
+            for asset in assets
+        ],
+    )
 
 
 def _section_view(
@@ -437,12 +451,10 @@ def _section_view(
 ) -> SectionView:
     markdown_path = _section_markdown_path(workspace, section.doc_id, section.id)
     assets: list[AssetRef] = []
-    notes: list[str] = []
     if include_assets:
         if blocks_by_id is None:
             blocks_by_id = _load_doc_blocks(workspace, section.doc_id)
         assets = _section_assets(workspace, section, blocks_by_id)
-        notes = _asset_notes(section, assets)
     return SectionView(
         id=section.id,
         doc_id=section.doc_id,
@@ -457,7 +469,7 @@ def _section_view(
         block_ids=section.block_ids,
         markdown_path=str(markdown_path),
         assets=assets,
-        notes=notes,
+        warnings=_section_warnings(section, assets),
     )
 
 

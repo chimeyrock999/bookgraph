@@ -12,7 +12,11 @@ Two stages consume these checks and must agree on their codes and thresholds:
 
 Everything here is pure and deterministic: same sections plus same blocks, same
 warnings. Keeping it in one module is what stops the ingest report and the
-reading APIs from drifting into two different definitions of "suspicious".
+reading APIs from drifting into two different definitions of "suspicious" — and
+both sides decide whether an asset exists through the one resolver in
+:mod:`bookgraph.assets`, so a reference the reader cannot open is reported as
+``asset_file_missing`` by ingest and by ``get_section`` alike, instead of counting
+as an asset on one side and vanishing on the other.
 """
 
 from __future__ import annotations
@@ -25,6 +29,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
+from bookgraph.assets import asset_reference, resolve_asset_path
 from bookgraph.models import ASSET_BLOCK_TYPES, CanonicalBlock, Section
 
 # Report filename, written by the segment stage next to ``sections.jsonl``.
@@ -37,6 +42,7 @@ PAGE_RANGE_INCOMPLETE = "page_range_incomplete"
 ASSET_TYPE_AMBIGUOUS = "asset_type_ambiguous"
 ASSET_CAPTIONS_ONLY = "asset_captions_only"
 ASSET_TEXT_SPARSE = "asset_text_sparse"
+ASSET_FILE_MISSING = "asset_file_missing"
 
 # Confidence in a parser's image/table/chart classification for one asset block.
 # The caption is the only independent signal available without opening the file,
@@ -78,11 +84,18 @@ class AssetSummary:
 
     Built from parsed ``CanonicalBlock``s at ingest time and from resolved
     ``AssetRef``s in the MCP service, so both sides run the same checks.
+
+    ``resolved`` is whether the referenced file actually exists under the parsed
+    document directory (see :func:`bookgraph.assets.resolve_asset_path`). An
+    unresolved asset still counts as an asset — its caption is in the section text and
+    its content is not — but it is reported as missing rather than as something the
+    reader can open.
     """
 
     block_id: str
     type: str
     caption: str = ""
+    resolved: bool = True
 
 
 @dataclass(frozen=True)
@@ -183,19 +196,31 @@ def section_warnings(
     return _page_range_warnings(section) + _asset_warnings(section, assets)
 
 
-def asset_summaries(blocks: Iterable[CanonicalBlock]) -> dict[str, AssetSummary]:
+def asset_summaries(
+    blocks: Iterable[CanonicalBlock], parsed_dir: Path | None = None
+) -> dict[str, AssetSummary]:
     """Index the parsed blocks that carry a real image/table asset, by block id.
 
     Only blocks with an asset *reference* count: a markdown table is an asset-typed
     block whose content is rendered inline into the section text, and treating it as
     a figure would report the section as "captions only" when its text is in fact
     the whole table.
+
+    Pass ``parsed_dir`` (the document's ``sources/parsed/<doc_id>/``) to resolve each
+    reference against the files the parser actually staged, exactly as the MCP section
+    APIs do. Without it every reference is assumed resolvable, which is right only when
+    the caller has no parsed directory to check against.
     """
 
     return {
-        block.id: AssetSummary(block_id=block.id, type=block.type, caption=block.text)
+        block.id: AssetSummary(
+            block_id=block.id,
+            type=block.type,
+            caption=block.text,
+            resolved=parsed_dir is None or resolve_asset_path(parsed_dir, block) is not None,
+        )
         for block in blocks
-        if block.type in ASSET_BLOCK_TYPES and _has_asset_reference(block)
+        if block.type in ASSET_BLOCK_TYPES and asset_reference(block)
     }
 
 
@@ -203,10 +228,15 @@ def document_quality_report(
     doc_id: str,
     sections: Sequence[Section],
     blocks: Iterable[CanonicalBlock] = (),
+    parsed_dir: Path | None = None,
 ) -> QualityReport:
-    """Check every section of a document and aggregate the warnings into a report."""
+    """Check every section of a document and aggregate the warnings into a report.
 
-    summaries = asset_summaries(blocks)
+    ``parsed_dir`` is the document's ``sources/parsed/<doc_id>/``; pass it so asset
+    references are resolved against the staged files the reader will actually get.
+    """
+
+    summaries = asset_summaries(blocks, parsed_dir)
     warnings: list[DocumentWarning] = []
     for section in sections:
         section_assets = [
@@ -282,6 +312,22 @@ def _asset_warnings(
 
     warnings: list[SectionWarning] = []
     for asset in assets:
+        if not asset.resolved:
+            # The file the section points at was never staged, so neither the prose nor
+            # the asset carries its content. Report that instead of a type dispute the
+            # reader could not settle by opening the file anyway.
+            warnings.append(
+                SectionWarning(
+                    code=ASSET_FILE_MISSING,
+                    message=(
+                        f"asset {asset.block_id} references a file that is not available "
+                        "under the parsed document directory (never staged, remote, or "
+                        "outside the workspace); its content is lost to the reader"
+                    ),
+                    block_id=asset.block_id,
+                )
+            )
+            continue
         classification = classify_asset(asset.type, asset.caption)
         if classification.suggested_type is None:
             continue
@@ -325,15 +371,20 @@ def _asset_warnings(
 
 
 def _text_beyond_captions(text: str, assets: Sequence[AssetSummary]) -> str:
-    """Strip each asset caption from the section body **once**.
+    """Strip each asset caption from the section body **once**, longest caption first.
 
     Removing once, rather than every occurrence, keeps a short or generic caption
     like ``"1"`` or ``"Table"`` from being wiped out of genuine prose and turning a
     well-written section into a false warning.
+
+    Longest first, because captions overlap: with ``"Table"`` and ``"Table 2 data"``,
+    stripping the short one first eats the head of the long one, whose own strip then
+    finds nothing and leaves fragments behind — inflating the residual until a
+    genuinely caption-only section slips past the check on both surfaces at once.
     """
 
     residual = text.strip()
-    for asset in assets:
+    for asset in sorted(assets, key=lambda asset: len(asset.caption.strip()), reverse=True):
         caption = asset.caption.strip()
         if caption:
             residual = residual.replace(caption, "", 1)
@@ -349,15 +400,3 @@ def _caption_label(caption: str) -> str | None:
         return "table"
     return None
 
-
-def _has_asset_reference(block: CanonicalBlock) -> bool:
-    """Whether a block points at an extracted asset file (typed or via metadata).
-
-    Mirrors the reference lookup in ``bookgraph.mcp.service._resolve_asset_path``
-    (``asset_path`` first, then the markdown parser's ``metadata["src"]``), minus
-    the on-disk resolution the ingest stage cannot do for a not-yet-staged file.
-    """
-
-    return bool(
-        block.asset_path or block.metadata.get("src") or block.metadata.get("asset_path")
-    )

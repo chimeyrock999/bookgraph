@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 from bookgraph.models import CanonicalBlock, Document, Section
 from bookgraph.ports import DocumentSegmenter
+from bookgraph.segmenters.pages import clamp_page_end
 from bookgraph.utils import unique_slug
 
 
@@ -88,12 +89,11 @@ class _DraftSection:
         page_end = max(page_indices) if page_indices else None
         if next_start_page is not None:
             # The next section's start page bounds this one, but it underflows when both
-            # sections begin on the same page (two headings on one page) or when the
-            # parser emits pages out of order — which produced page_start > page_end in
-            # real books (issue #38). Never report a span that runs backwards.
-            page_end = next_start_page - 1
-            if page_start is not None:
-                page_end = max(page_start, page_end)
+            # sections begin on the same page, when the parser emits pages out of order,
+            # or when the next section starts on page 0 — which produced spans running
+            # backwards in real books (issue #38). ``clamp_page_end`` is shared with the
+            # bookmark segmenter so the guard cannot rot in one of them.
+            page_end = clamp_page_end(page_start, next_start_page - 1)
         text_parts = [
             block.text.strip()
             for block in self.blocks

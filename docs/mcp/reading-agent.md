@@ -86,9 +86,10 @@ A self-serve agent drives an entire session with these tools alone:
      `include_assets=false` to omit.
    - Every section also carries `warnings` — the data-quality anomalies found in it
      (each `{code, message, block_id}`): a broken page span (`page_range_inverted`,
-     `page_range_incomplete`), a disputed asset type (`asset_type_ambiguous`), or a
-     section whose text is only captions / almost no prose around its figures
-     (`asset_captions_only`, `asset_text_sparse`). Read them before trusting `text` or
+     `page_range_incomplete`), a disputed asset type (`asset_type_ambiguous`), an asset
+     file the parser never staged (`asset_file_missing` — the figure is gone, not just
+     unlisted), or a section whose text is only captions / almost no prose around its
+     figures (`asset_captions_only`, `asset_text_sparse`). Read them before trusting `text` or
      the page provenance; they are the same warnings ingest recorded in
      `sources/sections/<doc_id>/quality.json`.
    - Pivot as needed:

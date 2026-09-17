@@ -5,6 +5,7 @@ from pathlib import Path
 from bookgraph.models import CanonicalBlock, Section
 from bookgraph.quality import (
     AssetSummary,
+    asset_summaries,
     classify_asset,
     document_quality_report,
     read_quality_report,
@@ -180,3 +181,63 @@ def test_document_report_is_empty_for_a_clean_document() -> None:
     report = document_quality_report("iceberg", [_section()])
 
     assert (report.warning_count, report.warnings, report.warning_counts) == (0, [], {})
+
+
+def test_classify_asset_flags_a_table_parsed_as_a_chart() -> None:
+    # A chart block is a figure as far as caption labels go, so a table caption on one
+    # is a genuine conflict — the branch that keeps `chart` out of the table label set.
+    conflicting = classify_asset("chart", "Table 5: latency percentiles")
+    agreeing = classify_asset("chart", "Figure 5. Latency over time.")
+
+    assert (conflicting.confidence, conflicting.suggested_type) == (0.4, "table")
+    assert (agreeing.confidence, agreeing.suggested_type) == (1.0, None)
+
+
+def test_captions_are_stripped_longest_first() -> None:
+    # "Table" is a substring of "Table 2 data": stripping the short caption first would
+    # eat the head of the long one, leave "2 data" behind, and hide a caption-only section.
+    warnings = section_warnings(
+        _section(text="Table Table 2 data"),
+        [
+            AssetSummary(block_id="short", type="table", caption="Table"),
+            AssetSummary(block_id="long", type="table", caption="Table 2 data"),
+        ],
+    )
+
+    assert [warning.code for warning in warnings] == ["asset_captions_only"]
+
+
+def test_unstaged_asset_file_is_reported_instead_of_a_type_dispute() -> None:
+    warnings = section_warnings(
+        _section(text="Figure 6. Snapshot isolation."),
+        [
+            AssetSummary(
+                block_id="img1",
+                type="table",  # the caption disputes this, but the file cannot settle it
+                caption="Figure 6. Snapshot isolation.",
+                resolved=False,
+            )
+        ],
+    )
+
+    assert [warning.code for warning in warnings] == [
+        "asset_file_missing",
+        "asset_captions_only",
+    ]
+    assert warnings[0].block_id == "img1"
+
+
+def test_asset_summaries_resolve_against_the_parsed_directory(tmp_path: Path) -> None:
+    staged = CanonicalBlock(id="ok", type="image", text="Figure 1.", asset_path="f1.jpg")
+    unstaged = CanonicalBlock(id="gone", type="image", text="Figure 2.", asset_path="f2.jpg")
+    inline = CanonicalBlock(id="inline", type="table", text="| a | b |")
+    (tmp_path / "images").mkdir()
+    (tmp_path / "images" / "f1.jpg").write_bytes(b"\xff\xd8\xff")
+
+    summaries = asset_summaries([staged, unstaged, inline], tmp_path)
+
+    assert set(summaries) == {"ok", "gone"}  # the inline table is content, not an asset
+    assert summaries["ok"].resolved is True
+    assert summaries["gone"].resolved is False
+    # Without a parsed dir there is nothing to check against, so references are taken as is.
+    assert asset_summaries([unstaged])["gone"].resolved is True

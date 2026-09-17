@@ -97,7 +97,9 @@ def segment(
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
 
-    report = document_quality_report(resolved_doc_id, sections, document.blocks)
+    report = document_quality_report(
+        resolved_doc_id, sections, document.blocks, document_path.parent
+    )
     report_path = write_quality_report(report, output_dir)
 
     typer.echo(f"segmenter: {segmenter_name}")

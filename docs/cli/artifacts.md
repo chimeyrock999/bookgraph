@@ -297,6 +297,7 @@ parse is visible at ingest time instead of during reading.
 | `asset_type_ambiguous` | The asset's caption label contradicts the parser's block type (a figure emitted as a `table`, say). Carries `block_id`. |
 | `asset_captions_only` | The section's `text` is effectively just its asset captions; the labels/tabular data live inside the asset files. |
 | `asset_text_sparse` | A figure/table-heavy section (2+ assets) with almost no prose beyond the captions. |
+| `asset_file_missing` | The section references an asset file that is not available under `sources/parsed/<doc_id>/` (never staged, remote, or outside the workspace). Carries `block_id`. |
 
 Codes are stable identifiers; `message` is display text and may be reworded.
 A document with no anomalies still gets a report, with `warning_count: 0` and an
@@ -306,7 +307,10 @@ unchanged input rewrites it byte-identically.
 The same checks back the MCP section APIs, which attach the per-section warnings
 to every section they return (`SectionView.warnings`, see `commands.md`), so a
 reading agent never has to open `sources/parsed/<doc_id>/document.json` to learn
-that a section's provenance is broken.
+that a section's provenance is broken. Both sides also decide whether an asset
+exists through the one resolver in `bookgraph.assets`, so a reference the reader
+cannot open is reported as `asset_file_missing` by ingest and by `get_section`
+alike — never counted as an asset on one side and dropped on the other.
 
 ## `wiki/books/<doc_id>/`
 

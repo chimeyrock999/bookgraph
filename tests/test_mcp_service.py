@@ -823,3 +823,44 @@ def test_section_assets_carry_type_confidence_and_a_suggested_correction(tmp_pat
     assert [(w.code, w.block_id) for w in view.warnings] == [
         ("asset_type_ambiguous", "mislabelled")
     ]
+
+
+def test_section_warns_about_an_asset_file_the_parser_never_staged(tmp_path: Path) -> None:
+    # Ingest and the section APIs resolve assets through the same bookgraph.assets helper,
+    # so a reference with no file on disk is reported here too instead of vanishing from
+    # the response while quality.json counts it (review follow-up on #47).
+    section = Section(
+        id="deep-work.figs",
+        doc_id="deep-work",
+        title="Figures",
+        level=1,
+        heading_path=["Figures"],
+        text="Figure 6. Snapshot isolation.",
+        block_ids=["gone", "inline_tbl"],
+    )
+    workspace = _workspace(tmp_path, section)
+    write_document(
+        Document(
+            doc_id="deep-work",
+            title="Deep Work",
+            blocks=[
+                CanonicalBlock(
+                    id="gone",
+                    type="image",
+                    text="Figure 6. Snapshot isolation.",
+                    asset_path="never-staged.jpg",
+                ),
+                # No file reference at all: content, not a missing asset.
+                CanonicalBlock(id="inline_tbl", type="table", text="| a | b |"),
+            ],
+        ),
+        workspace.sources_parsed / "deep-work",
+    )
+
+    view = service.get_section(workspace, "deep-work", "deep-work.figs")
+
+    assert view.assets == []  # an AssetRef.path must always open, so it is dropped
+    assert [(w.code, w.block_id) for w in view.warnings] == [
+        ("asset_file_missing", "gone"),
+        ("asset_captions_only", None),
+    ]

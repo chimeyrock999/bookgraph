@@ -282,7 +282,8 @@ the command rather than overwriting.
 `quality.json` is the ingest data-quality report for the document: the anomalies
 the deterministic checks in `bookgraph.quality` found in the sections just
 written (inverted/half-known page ranges, assets whose caption contradicts the
-parser's type, sections whose text is only asset captions). It is always written
+parser's type, asset files the parser never staged, sections whose text is only
+asset captions). It is always written
 — `warning_count: 0` for a clean document — and the same warnings are attached to
 every section the MCP section APIs return. See `artifacts.md` for the schema and
 the code list.

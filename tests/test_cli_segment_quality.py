@@ -31,6 +31,14 @@ def _write_parsed_document(workspace: Path, doc_id: str, blocks: list[dict[str, 
     )
 
 
+def _stage_asset(workspace: Path, doc_id: str, rel: str) -> None:
+    """Stage an asset file under sources/parsed/<doc_id>/ as the parse stage would."""
+
+    path = workspace / "sources" / "parsed" / doc_id / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"\xff\xd8\xff")
+
+
 def test_segment_writes_a_quality_report_and_echoes_warnings(tmp_path: Path) -> None:
     runner = _init_workspace(tmp_path)
     _write_parsed_document(
@@ -47,6 +55,7 @@ def test_segment_writes_a_quality_report_and_echoes_warnings(tmp_path: Path) -> 
             },
         ],
     )
+    _stage_asset(tmp_path, "iceberg", "images/f6.jpg")
 
     result = runner.invoke(app, ["segment", str(tmp_path), "iceberg", "--target-level", "1"])
 
@@ -89,3 +98,32 @@ def test_segment_writes_a_clean_report_for_a_healthy_document(tmp_path: Path) ->
     assert "warning:" not in result.output
     report = read_quality_report(tmp_path / "sources" / "sections" / "iceberg" / "quality.json")
     assert (report.warning_count, report.warnings) == (0, [])
+
+
+def test_segment_reports_an_asset_file_the_parser_never_staged(tmp_path: Path) -> None:
+    # The reference resolves to nothing on disk, so the reader gets neither prose nor
+    # asset. Ingest must say so — the MCP section APIs report the same block (they share
+    # bookgraph.assets), instead of one side counting an asset the other drops.
+    runner = _init_workspace(tmp_path)
+    _write_parsed_document(
+        tmp_path,
+        "iceberg",
+        [
+            {"id": "b0", "type": "title", "text": "Snapshots", "level": 1, "page_idx": 3},
+            {
+                "id": "b1",
+                "type": "image",
+                "text": "Figure 6. Snapshot isolation.",
+                "asset_path": "images/never-staged.jpg",
+                "page_idx": 3,
+            },
+        ],
+    )
+
+    result = runner.invoke(app, ["segment", str(tmp_path), "iceberg", "--target-level", "1"])
+
+    assert result.exit_code == 0, result.output
+    report = read_quality_report(tmp_path / "sources" / "sections" / "iceberg" / "quality.json")
+    assert report.warning_counts["asset_file_missing"] == 1
+    missing = next(w for w in report.warnings if w.code == "asset_file_missing")
+    assert missing.block_id == "b1"

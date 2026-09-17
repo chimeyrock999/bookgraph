@@ -164,3 +164,22 @@ def test_heading_segmenter_never_emits_a_backwards_page_range() -> None:
         (9, 9),
         (7, 7),
     ]
+
+
+def test_heading_segmenter_never_emits_a_negative_page_end() -> None:
+    # The first section's blocks carry no page_idx, so page_start is unknown; the next
+    # section starting on page 0 would otherwise bound it at -1.
+    document = Document(
+        doc_id="paper",
+        title="A Paper",
+        blocks=[
+            CanonicalBlock(id="b1", type="title", text="Alpha", level=1),
+            CanonicalBlock(id="b2", type="text", text="First."),
+            CanonicalBlock(id="b3", type="title", text="Beta", level=1, page_idx=0),
+            CanonicalBlock(id="b4", type="text", text="Second.", page_idx=0),
+        ],
+    )
+
+    sections = HeadingSegmenter(target_level=1).segment(document)
+
+    assert (sections[0].page_start, sections[0].page_end) == (None, 0)

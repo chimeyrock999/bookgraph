@@ -9,7 +9,6 @@ so they can be unit-tested directly; the MCP server is a thin wrapper in
 from __future__ import annotations
 
 import json
-import os
 import threading
 from collections import Counter, OrderedDict
 from datetime import UTC, datetime
@@ -23,6 +22,7 @@ from bookgraph.annotations import (
     read_annotation,
     write_annotation,
 )
+from bookgraph.assets import asset_reference, resolve_asset_path
 from bookgraph.documents import read_document
 from bookgraph.graph import SectionGraph, build_section_graph
 from bookgraph.index import default_index_backend, tokenize
@@ -48,7 +48,7 @@ from bookgraph.reading_plans import (
     write_reading_plan,
 )
 from bookgraph.sections import count_sections, read_sections
-from bookgraph.utils import ID_PATTERN, is_url, validate_slug_id
+from bookgraph.utils import ID_PATTERN, validate_slug_id
 from bookgraph.workspace import WorkspacePaths
 
 
@@ -344,71 +344,40 @@ def _load_doc_blocks(workspace: WorkspacePaths, doc_id: str) -> _DocBlocks:
     return blocks
 
 
-def _resolve_asset_path(
-    workspace: WorkspacePaths, doc_id: str, block: CanonicalBlock
-) -> str | None:
-    """Resolve a parser's asset reference to a real file under the workspace.
-
-    Prefers the typed ``asset_path`` (MinerU); falls back to the markdown parser's
-    ``metadata["src"]``. The reference is tried under the staged ``images/`` dir that
-    ``MinerURunner`` copies alongside ``document.json`` and directly under the parsed
-    document directory, and the first existing regular file wins — so the location is
-    verified on disk rather than guessed from whether the string contains a slash.
-
-    Returns ``None`` — so the caller drops the asset rather than emit a bogus reference —
-    unless the result is an existing regular file that stays inside the parsed document
-    directory even after symlinks are followed. That rules out URLs, absolute paths, ``..``
-    traversal, symlink escapes, and references to files the parser never actually staged, so
-    an ``AssetRef.path`` a client receives always opens a real workspace file.
-    """
-
-    raw = block.asset_path
-    if not raw:
-        meta_src = block.metadata.get("src") or block.metadata.get("asset_path")
-        raw = str(meta_src) if meta_src else ""
-    if not raw or is_url(raw):
-        return None
-    candidate = Path(raw)
-    if candidate.is_absolute():
-        return None
-    parsed_root = workspace.sources_parsed / doc_id
-    try:
-        root_real = parsed_root.resolve()
-    except (OSError, ValueError):
-        return None
-    # Verify the location on disk instead of guessing from the string: try the staged
-    # images/ dir first (MinerU convention) then directly under the parsed document dir.
-    for base in (parsed_root / "images", parsed_root):
-        lexical = Path(os.path.normpath(base / candidate))
-        # Resolve symlinks and check containment against the real root: a lexical-only
-        # check would let a symlink under images/ point outside the workspace, and would
-        # accept a ".."-style path that lands on the root directory itself rather than a
-        # file. Guarded because a corrupt/adversarial document.json can carry a path with
-        # an embedded NUL (ValueError) — one bad asset must degrade to "no asset", not
-        # crash the whole section fetch.
-        try:
-            real = lexical.resolve()
-            if real.is_relative_to(root_real) and real.is_file():
-                return str(lexical)
-        except (OSError, ValueError):
-            continue
-    return None
-
-
 def _section_assets(
     workspace: WorkspacePaths,
     section: Section,
     blocks_by_id: dict[str, CanonicalBlock],
-) -> list[AssetRef]:
+) -> tuple[list[AssetRef], list[AssetSummary]]:
+    """Resolve a section's asset blocks into openable ``AssetRef``s.
+
+    Returns the assets a client can open plus a summary of **every** asset block of the
+    section, including the ones whose file is missing — those are dropped from ``assets``
+    (an ``AssetRef.path`` must always open) but still feed the quality checks, so a
+    reference the parser never staged is reported rather than silently disappearing.
+    """
+
     assets: list[AssetRef] = []
+    summaries: list[AssetSummary] = []
+    parsed_dir = workspace.sources_parsed / section.doc_id
     for block_id in section.block_ids:
         block = blocks_by_id.get(block_id)
         if block is None or block.type not in ASSET_BLOCK_TYPES:
             continue
-        path = _resolve_asset_path(workspace, section.doc_id, block)
+        if not asset_reference(block):
+            # An asset-typed block with no file reference at all (e.g. a markdown table
+            # rendered inline into ``text``) is content, not a missing asset — skip it.
+            continue
+        path = resolve_asset_path(parsed_dir, block)
+        summaries.append(
+            AssetSummary(
+                block_id=block.id,
+                type=block.type,
+                caption=block.text,
+                resolved=path is not None,
+            )
+        )
         if path is None:
-            # A block with no resolvable asset file (e.g. a markdown table rendered inline
-            # into ``text``) is not an asset the reader can open — skip it.
             continue
         classification = classify_asset(block.type, block.text)
         assets.append(
@@ -423,23 +392,9 @@ def _section_assets(
                 suggested_type=classification.suggested_type,
             )
         )
-    return assets
+    return assets, summaries
 
 
-def _section_warnings(section: Section, assets: list[AssetRef]) -> list[SectionWarning]:
-    """Run the shared quality checks over a section and its resolved assets.
-
-    The same checks back the segment stage's ``quality.json`` report, so a reader and
-    an ingest run never disagree about what is wrong with a section.
-    """
-
-    return section_warnings(
-        section,
-        [
-            AssetSummary(block_id=asset.block_id, type=asset.type, caption=asset.caption)
-            for asset in assets
-        ],
-    )
 
 
 def _section_view(
@@ -451,10 +406,11 @@ def _section_view(
 ) -> SectionView:
     markdown_path = _section_markdown_path(workspace, section.doc_id, section.id)
     assets: list[AssetRef] = []
+    asset_summaries: list[AssetSummary] = []
     if include_assets:
         if blocks_by_id is None:
             blocks_by_id = _load_doc_blocks(workspace, section.doc_id)
-        assets = _section_assets(workspace, section, blocks_by_id)
+        assets, asset_summaries = _section_assets(workspace, section, blocks_by_id)
     return SectionView(
         id=section.id,
         doc_id=section.doc_id,
@@ -469,7 +425,9 @@ def _section_view(
         block_ids=section.block_ids,
         markdown_path=str(markdown_path),
         assets=assets,
-        warnings=_section_warnings(section, assets),
+        # The same checks back the segment stage's quality.json report, so a reader and
+        # an ingest run never disagree about what is wrong with a section.
+        warnings=section_warnings(section, asset_summaries),
     )
 
 

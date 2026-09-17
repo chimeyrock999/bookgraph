@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from bookgraph.models import CanonicalBlock, Document, Section
 from bookgraph.ports import DocumentSegmenter
 from bookgraph.segmenters.heading import HeadingSegmenter
+from bookgraph.segmenters.pages import clamp_page_end
 from bookgraph.utils import unique_slug
 
 
@@ -88,7 +89,9 @@ def _to_section(
     page_start = bookmark.page_index
     page_end = max(page_indices) if page_indices else None
     if next_page is not None:
-        page_end = max(page_start, next_page - 1) if page_start is not None else next_page - 1
+        # Same shared guard as the heading segmenter: a bookmark page that repeats, runs
+        # out of order, or sits on page 0 must not yield a backwards/negative span.
+        page_end = clamp_page_end(page_start, next_page - 1)
     return Section(
         id=f"{doc_id}.{section_slug}",
         doc_id=doc_id,

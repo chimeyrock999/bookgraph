@@ -68,6 +68,9 @@ class ConceptMention(BaseModel):
 
     ``gloss`` is a per-mention note (non-empty only for agent-annotated mentions) and
     ``source`` is ``"auto"`` (deterministic Tier-1) or ``"agent"`` (Tier-2 annotation).
+    ``summary`` is the mentioning section's Tier-2 annotation summary (empty when the
+    section has none) — the long-form context that turns a bare backlink into a
+    readable, source-grounded concept note.
     """
 
     doc_id: str
@@ -75,6 +78,7 @@ class ConceptMention(BaseModel):
     title: str
     gloss: str = ""
     source: str = "auto"
+    summary: str = ""
 
 
 class ConceptNode(BaseModel):

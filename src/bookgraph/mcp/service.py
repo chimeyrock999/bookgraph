@@ -9,7 +9,8 @@ so they can be unit-tested directly; the MCP server is a thin wrapper in
 from __future__ import annotations
 
 import json
-from collections import Counter
+import threading
+from collections import Counter, OrderedDict
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -21,9 +22,23 @@ from bookgraph.annotations import (
     read_annotation,
     write_annotation,
 )
+from bookgraph.assets import asset_reference, resolve_asset_path
+from bookgraph.documents import read_document
 from bookgraph.graph import SectionGraph, build_section_graph
 from bookgraph.index import default_index_backend, tokenize
-from bookgraph.models import AnnotatedConcept, ReadingPlan, Section
+from bookgraph.models import (
+    ASSET_BLOCK_TYPES,
+    AnnotatedConcept,
+    CanonicalBlock,
+    ReadingPlan,
+    Section,
+)
+from bookgraph.quality import (
+    AssetSummary,
+    SectionWarning,
+    classify_asset,
+    section_warnings,
+)
 from bookgraph.reading_plans import (
     create_reading_plan,
     list_plan_progress,
@@ -61,8 +76,40 @@ class ConceptNotFoundError(ReadingServiceError):
     """A requested concept slug is not present in the index."""
 
 
+class AssetRef(BaseModel):
+    """A figure/table asset that belongs to a section, resolved to a real file.
+
+    ``caption`` is the block's text (a MinerU image/table block surfaces only its
+    caption as text — the labels/data live inside ``path``). ``order`` is the block's
+    position in the parsed document, so a client can place the asset relative to the
+    section's prose.
+
+    ``type`` is the parser's classification, kept verbatim. Layout parsers do confuse
+    figures with tables, so it travels with ``type_confidence`` (how well the caption's
+    label corroborates it) and, when the caption contradicts the parser,
+    ``suggested_type`` — the type the caption implies. A client can then trust, correct,
+    or open the file instead of taking a silently wrong ``type`` at face value.
+    """
+
+    block_id: str
+    type: str
+    path: str
+    caption: str = ""
+    order: int | None = None
+    page_idx: int | None = None
+    type_confidence: float = 1.0
+    suggested_type: str | None = None
+
+
 class SectionView(BaseModel):
-    """A section's full reading content plus provenance and its Markdown path."""
+    """A section's full reading content plus provenance and its Markdown path.
+
+    ``warnings`` carries the section's data-quality anomalies (see
+    :mod:`bookgraph.quality`) — a broken page span, a disputed asset type, prose that
+    is only asset captions — so a reader sees them inline instead of having to inspect
+    ``sources/parsed/<doc_id>/document.json``. Page-range warnings are always present;
+    asset warnings need ``include_assets`` (the default).
+    """
 
     id: str
     doc_id: str
@@ -76,6 +123,8 @@ class SectionView(BaseModel):
     next_id: str | None = None
     block_ids: list[str] = Field(default_factory=list)
     markdown_path: str
+    assets: list[AssetRef] = Field(default_factory=list)
+    warnings: list[SectionWarning] = Field(default_factory=list)
 
 
 class NextSection(BaseModel):
@@ -183,13 +232,20 @@ class SectionContext(BaseModel):
 
 
 class ConceptMentionView(BaseModel):
-    """One backlink: a section (in some book) that mentions a concept."""
+    """One backlink: a section (in some book) that mentions a concept.
+
+    ``summary`` is the mentioning section's Tier-2 annotation summary — the long-form
+    context behind the backlink. It is populated only in the concept-detail view
+    (``get_concept(..., include_annotations=True)``); the compact card leaves it empty
+    to stay lightweight for graph traversal.
+    """
 
     doc_id: str
     section_id: str
     title: str
     gloss: str = ""
     source: str = "auto"
+    summary: str = ""
 
 
 class ConceptInput(BaseModel):
@@ -215,12 +271,24 @@ class AnnotationResult(BaseModel):
 
 
 class ConceptView(BaseModel):
-    """A concept aggregated across books, with its cross-book backlinks."""
+    """A concept aggregated across books, with its cross-book backlinks.
+
+    Two read modes share this shape. The default is a **compact card** for lightweight
+    graph traversal: title, cross-book totals, and bare backlink pointers (glosses only).
+    The **detail view** (``get_concept(..., include_annotations=True)``) additionally
+    fills each mention's ``summary`` with the section's Tier-2 annotation, so a concept
+    with several mentions renders as a readable, provenance-aware note rather than a set
+    of short glosses. ``annotated_mention_count`` reports how many mentions carry such a
+    summary — meaningful in **both** modes (the compact card leaves the summaries empty
+    but still counts them), so a cheap card read tells an agent whether a concept has
+    deeper context worth an ``include_annotations=True`` call.
+    """
 
     slug: str
     title: str
     doc_count: int
     mention_count: int
+    annotated_mention_count: int = 0
     mentions: list[ConceptMentionView] = Field(default_factory=list)
 
 
@@ -228,8 +296,119 @@ def _section_markdown_path(workspace: WorkspacePaths, doc_id: str, section_id: s
     return workspace.sources_sections / doc_id / f"{section_id}.md"
 
 
-def _section_view(workspace: WorkspacePaths, section: Section) -> SectionView:
+# Parsed document.json blocks cached so an agent calling get_section in a loop does not
+# re-read and re-validate the whole document on every call. Keyed by (mtime_ns, size): the
+# nanosecond mtime plus byte size invalidates on any realistic re-parse (a same-tick rewrite
+# to the exact same byte length is the one theoretical gap, only on coarse-mtime filesystems).
+# Bounded by an LRU cap, and guarded by a lock so concurrent MCP requests keep the bound and
+# recency order consistent.
+_DocBlocks = dict[str, CanonicalBlock]
+_DOC_BLOCKS_CACHE: OrderedDict[Path, tuple[int, int, _DocBlocks]] = OrderedDict()
+_DOC_BLOCKS_CACHE_MAX = 32
+_DOC_BLOCKS_LOCK = threading.Lock()
+
+
+def _load_doc_blocks(workspace: WorkspacePaths, doc_id: str) -> _DocBlocks:
+    """Index the parsed ``document.json`` blocks by id, or ``{}`` when unavailable.
+
+    ``Section.block_ids`` is the only link back to the parser's richer blocks (where the
+    image/table asset paths live). A document that was never parsed to ``document.json``
+    (e.g. a fixture that only writes ``sections.jsonl``) simply yields no assets. Results
+    are memoised by (mtime_ns, size) to keep per-section fetches O(1) across calls.
+    """
+
+    document_path = workspace.sources_parsed / doc_id / "document.json"
+    try:
+        stat = document_path.stat()
+    except OSError:
+        with _DOC_BLOCKS_LOCK:
+            _DOC_BLOCKS_CACHE.pop(document_path, None)
+        return {}
+    stamp = (stat.st_mtime_ns, stat.st_size)
+    with _DOC_BLOCKS_LOCK:
+        cached = _DOC_BLOCKS_CACHE.get(document_path)
+        if cached is not None and (cached[0], cached[1]) == stamp:
+            _DOC_BLOCKS_CACHE.move_to_end(document_path)
+            return cached[2]
+    # Read/validate outside the lock (the expensive part); a concurrent miss just re-reads.
+    try:
+        document = read_document(document_path)
+    except (OSError, ValueError):
+        return {}
+    blocks = {block.id: block for block in document.blocks}
+    with _DOC_BLOCKS_LOCK:
+        _DOC_BLOCKS_CACHE[document_path] = (stamp[0], stamp[1], blocks)
+        _DOC_BLOCKS_CACHE.move_to_end(document_path)
+        while len(_DOC_BLOCKS_CACHE) > _DOC_BLOCKS_CACHE_MAX:
+            _DOC_BLOCKS_CACHE.popitem(last=False)
+    return blocks
+
+
+def _section_assets(
+    workspace: WorkspacePaths,
+    section: Section,
+    blocks_by_id: dict[str, CanonicalBlock],
+) -> tuple[list[AssetRef], list[AssetSummary]]:
+    """Resolve a section's asset blocks into openable ``AssetRef``s.
+
+    Returns the assets a client can open plus a summary of **every** asset block of the
+    section, including the ones whose file is missing — those are dropped from ``assets``
+    (an ``AssetRef.path`` must always open) but still feed the quality checks, so a
+    reference the parser never staged is reported rather than silently disappearing.
+    """
+
+    assets: list[AssetRef] = []
+    summaries: list[AssetSummary] = []
+    parsed_dir = workspace.sources_parsed / section.doc_id
+    for block_id in section.block_ids:
+        block = blocks_by_id.get(block_id)
+        if block is None or block.type not in ASSET_BLOCK_TYPES:
+            continue
+        if not asset_reference(block):
+            # An asset-typed block with no file reference at all (e.g. a markdown table
+            # rendered inline into ``text``) is content, not a missing asset — skip it.
+            continue
+        path = resolve_asset_path(parsed_dir, block)
+        summaries.append(
+            AssetSummary(
+                block_id=block.id,
+                type=block.type,
+                caption=block.text,
+                resolved=path is not None,
+            )
+        )
+        if path is None:
+            continue
+        classification = classify_asset(block.type, block.text)
+        assets.append(
+            AssetRef(
+                block_id=block.id,
+                type=block.type,
+                path=path,
+                caption=block.text,
+                order=block.order,
+                page_idx=block.page_idx,
+                type_confidence=classification.confidence,
+                suggested_type=classification.suggested_type,
+            )
+        )
+    return assets, summaries
+
+
+def _section_view(
+    workspace: WorkspacePaths,
+    section: Section,
+    *,
+    include_assets: bool = True,
+    blocks_by_id: dict[str, CanonicalBlock] | None = None,
+) -> SectionView:
     markdown_path = _section_markdown_path(workspace, section.doc_id, section.id)
+    assets: list[AssetRef] = []
+    asset_summaries: list[AssetSummary] = []
+    if include_assets:
+        if blocks_by_id is None:
+            blocks_by_id = _load_doc_blocks(workspace, section.doc_id)
+        assets, asset_summaries = _section_assets(workspace, section, blocks_by_id)
     return SectionView(
         id=section.id,
         doc_id=section.doc_id,
@@ -243,6 +422,10 @@ def _section_view(workspace: WorkspacePaths, section: Section) -> SectionView:
         next_id=section.next_id,
         block_ids=section.block_ids,
         markdown_path=str(markdown_path),
+        assets=assets,
+        # The same checks back the segment stage's quality.json report, so a reader and
+        # an ingest run never disagree about what is wrong with a section.
+        warnings=section_warnings(section, asset_summaries),
     )
 
 
@@ -288,12 +471,19 @@ def _load_plan(workspace: WorkspacePaths, plan_id: str) -> tuple[Path, ReadingPl
         raise PlanNotFoundError(f"Invalid reading plan: {path}: {exc}") from exc
 
 
-def get_next_section(workspace: WorkspacePaths, plan_id: str) -> NextSection:
-    """Return the next unread sections for a plan, with full content."""
+def get_next_section(
+    workspace: WorkspacePaths, plan_id: str, include_assets: bool = True
+) -> NextSection:
+    """Return the next unread sections for a plan, with full content.
+
+    ``include_assets`` (default true) mirrors ``get_section`` — set it false to skip the
+    figure/table resolution (and its ``document.json`` read) on plans read for prose only.
+    """
 
     _, plan = _load_plan(workspace, plan_id)
     pack = next_sections(plan)
     by_id = {section.id: section for section in _load_doc_sections(workspace, plan.doc_id)}
+    blocks_by_id = _load_doc_blocks(workspace, plan.doc_id) if include_assets else None
     views: list[SectionView] = []
     for section_id in pack.sections:
         section = by_id.get(section_id)
@@ -302,7 +492,11 @@ def get_next_section(workspace: WorkspacePaths, plan_id: str) -> NextSection:
                 f"Reading plan '{plan_id}' references unknown section '{section_id}' "
                 f"in document '{plan.doc_id}'."
             )
-        views.append(_section_view(workspace, section))
+        views.append(
+            _section_view(
+                workspace, section, include_assets=include_assets, blocks_by_id=blocks_by_id
+            )
+        )
     return NextSection(
         plan_id=plan.plan_id,
         doc_id=plan.doc_id,
@@ -312,12 +506,22 @@ def get_next_section(workspace: WorkspacePaths, plan_id: str) -> NextSection:
     )
 
 
-def get_section(workspace: WorkspacePaths, doc_id: str, section_id: str) -> SectionView:
-    """Return one section's full reading content by id."""
+def get_section(
+    workspace: WorkspacePaths,
+    doc_id: str,
+    section_id: str,
+    include_assets: bool = True,
+) -> SectionView:
+    """Return one section's full reading content by id.
+
+    When ``include_assets`` (the default) the view carries a structured ``assets`` list
+    of the section's figures/tables (path, type, caption, order) so a reader no longer has
+    to grep the parsed ``document.json`` to find them.
+    """
 
     for section in _load_doc_sections(workspace, doc_id):
         if section.id == section_id:
-            return _section_view(workspace, section)
+            return _section_view(workspace, section, include_assets=include_assets)
     raise SectionNotFoundError(f"Section '{section_id}' not found in document '{doc_id}'.")
 
 
@@ -510,16 +714,22 @@ def get_related(workspace: WorkspacePaths, doc_id: str, section_id: str) -> Rela
     )
 
 
-def get_context(workspace: WorkspacePaths, doc_id: str, section_id: str) -> SectionContext:
+def get_context(
+    workspace: WorkspacePaths,
+    doc_id: str,
+    section_id: str,
+    include_assets: bool = True,
+) -> SectionContext:
     """Return a section's full content, graph neighbourhood, and its concepts.
 
     The concepts let a reader pivot from the current section to where each concept
     is discussed elsewhere (via ``get_concept``). They are empty for a document that
-    has not been indexed (concepts have no live-scan fallback).
+    has not been indexed (concepts have no live-scan fallback). ``include_assets``
+    controls whether the embedded section carries its figures/tables (see ``get_section``).
     """
 
     # Resolve the section first so a missing id raises before any graph work.
-    section = get_section(workspace, doc_id, section_id)
+    section = get_section(workspace, doc_id, section_id, include_assets=include_assets)
     related = get_related(workspace, doc_id, section_id)
     concepts = [
         ConceptRef(
@@ -557,8 +767,19 @@ def _section_summary(workspace: WorkspacePaths, doc_id: str, section_id: str) ->
         return ""
 
 
-def get_concept(workspace: WorkspacePaths, concept: str) -> ConceptView:
-    """Return a concept and its cross-book backlink mentions from the index."""
+def get_concept(
+    workspace: WorkspacePaths, concept: str, include_annotations: bool = False
+) -> ConceptView:
+    """Return a concept and its cross-book backlink mentions from the index.
+
+    ``include_annotations`` selects the read mode. Left ``False`` (the default), each
+    mention is a compact backlink pointer — doc/section/title plus its section-scoped
+    gloss and source — cheap enough for graph traversal. Set ``True`` for the
+    concept-detail view: each mention additionally carries its section's Tier-2
+    annotation ``summary``, turning a concept with several mentions into a readable,
+    source-grounded note instead of a set of short glosses. Every summary stays tied to
+    the section it came from, so the long-form context remains provenance-aware.
+    """
 
     slug = _validate_id(concept, "concept")
     result = default_index_backend().get_concept(workspace, slug)
@@ -567,21 +788,30 @@ def get_concept(workspace: WorkspacePaths, concept: str) -> ConceptView:
             f"Concept '{slug}' not found. Run 'bookgraph index build' then "
             "'bookgraph index concepts'."
         )
+    mentions = [
+        ConceptMentionView(
+            doc_id=mention.doc_id,
+            section_id=mention.section_id,
+            title=mention.title,
+            gloss=mention.gloss,
+            source=mention.source,
+            # The compact card omits the summary to stay lightweight; the detail view
+            # surfaces it so the mention reads as long-form, source-grounded context.
+            summary=mention.summary if include_annotations else "",
+        )
+        for mention in result.mentions
+    ]
     return ConceptView(
         slug=result.node.slug,
         title=result.node.title,
         doc_count=result.node.doc_count,
         mention_count=result.node.mention_count,
-        mentions=[
-            ConceptMentionView(
-                doc_id=mention.doc_id,
-                section_id=mention.section_id,
-                title=mention.title,
-                gloss=mention.gloss,
-                source=mention.source,
-            )
-            for mention in result.mentions
-        ],
+        # Count from the raw backend mentions, not the (possibly redacted) view list:
+        # the backend returns summaries regardless of the flag, so the compact card can
+        # still signal "this concept carries N annotated sections" — a cheap cue for an
+        # agent deciding whether an include_annotations=True call is worth it.
+        annotated_mention_count=sum(1 for m in result.mentions if m.summary),
+        mentions=mentions,
     )
 
 
@@ -614,8 +844,10 @@ def annotate_section(
     """
 
     resolved_doc_id = _validate_id(doc_id, "doc_id")
-    # Membership check: raises SectionNotFoundError for an unknown or traversal id.
-    get_section(workspace, resolved_doc_id, section_id)
+    # Membership check only (result discarded): raises SectionNotFoundError for an unknown
+    # or traversal id. include_assets=False skips the document.json read + asset resolution
+    # this call has no use for.
+    get_section(workspace, resolved_doc_id, section_id, include_assets=False)
 
     # None (concepts omitted) is passed through as "no concept opinion → keep the
     # section's auto concepts"; an explicit list — including [] — is the agent taking

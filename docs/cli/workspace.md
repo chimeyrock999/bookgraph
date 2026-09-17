@@ -50,7 +50,7 @@ workspace/
 | `bookgraph.toml` | CLI config | Workspace defaults; must not contain secrets. |
 | `sources/inbox/<book_id>/` | registration / ingestion | Raw source files and `book.json` registration manifest. |
 | `sources/parsed/<doc_id>/` | parser stage | Canonical parser outputs, especially `document.json`; optional parser side artifacts. |
-| `sources/sections/<doc_id>/` | segmenter stage | Human reading sections and section manifests. |
+| `sources/sections/<doc_id>/` | segmenter stage | Human reading sections, section manifests, and the ingest `quality.json` report. |
 | `wiki/books/<doc_id>/` | wiki backend | Per-book compiled linked Markdown/wiki artifacts. |
 | `wiki/concepts/` | wiki backend | Cross-book concept pages. |
 | `wiki/comparisons/` | wiki backend | Cross-book comparison pages. |

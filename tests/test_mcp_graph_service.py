@@ -204,6 +204,33 @@ def test_get_concept_returns_cross_book_backlinks(tmp_path: Path) -> None:
     assert sorted(m.doc_id for m in concept.mentions) == ["ddia", "deep-work"]
 
 
+def test_get_concept_detail_view_surfaces_section_annotation_summaries(tmp_path: Path) -> None:
+    workspace = WorkspacePaths(tmp_path)
+    sections = [
+        Section(id="ddia.a", doc_id="ddia", title="Schema Evolution", level=1,
+                heading_path=["Schema Evolution"], text="x"),
+    ]
+    write_sections(sections, workspace.sources_sections / "ddia")
+    backend = SqliteIndexBackend()
+    backend.build_document(workspace, "ddia", "DDIA", sections)
+    # Annotate, then rebuild so the summary lands in the index the concept reads.
+    service.annotate_section(workspace, "ddia", "ddia.a", summary="how schemas evolve")
+    backend.build_document(workspace, "ddia", "DDIA", sections)
+
+    # Compact card (default): backlinks stay lightweight — no summary text — but the
+    # card still counts the annotated mentions so it can signal deeper context exists.
+    card = service.get_concept(workspace, "schema-evolution")
+    assert card.annotated_mention_count == 1
+    assert all(m.summary == "" for m in card.mentions)
+
+    # Detail view: each mention carries its section's summary, tied to that section.
+    detail = service.get_concept(workspace, "schema-evolution", include_annotations=True)
+    assert detail.annotated_mention_count == 1
+    assert {(m.section_id, m.summary) for m in detail.mentions} == {
+        ("ddia.a", "how schemas evolve")
+    }
+
+
 def test_get_concept_raises_for_unknown_slug(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path, build_index=True)
 

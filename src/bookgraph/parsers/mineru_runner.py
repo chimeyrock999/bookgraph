@@ -79,6 +79,13 @@ class MinerURunner:
     command: str = "mineru"
     method: str = "auto"
     backend: str | None = None
+    effort: str | None = None
+    formula: bool | None = None
+    table: bool | None = None
+    image_analysis: bool | None = None
+    url: str | None = None
+    start_page: int | None = None
+    end_page: int | None = None
     timeout_seconds: int | None = _DEFAULT_TIMEOUT_SECONDS
     run_process: CommandRunner | None = field(default=None)
     log_path: Path | None = None
@@ -138,7 +145,27 @@ class MinerURunner:
         argv = [self.command, "-p", str(pdf), "-o", str(work_dir), "-m", self.method]
         if self.backend:
             argv += ["-b", self.backend]
+        if self.effort:
+            argv += ["--effort", self.effort]
+        if self.formula is not None:
+            argv += ["-f", _bool_arg(self.formula)]
+        if self.table is not None:
+            argv += ["-t", _bool_arg(self.table)]
+        if self.image_analysis is not None:
+            argv += ["--image-analysis", _bool_arg(self.image_analysis)]
+        if self.url:
+            argv += ["-u", self.url]
+        if self.start_page is not None:
+            argv += ["-s", str(self.start_page)]
+        if self.end_page is not None:
+            argv += ["-e", str(self.end_page)]
         return argv
+
+
+def _bool_arg(value: bool) -> str:
+    """MinerU's click BOOLEAN flags accept the literal ``true``/``false``."""
+
+    return "true" if value else "false"
 
 
 def _default_run_process(

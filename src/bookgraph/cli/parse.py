@@ -76,3 +76,13 @@ def parse(
     typer.echo(f"title: {document.title}")
     typer.echo(f"blocks: {len(document.blocks)}")
     typer.echo(f"document: {document_path}")
+
+    unresolved = document.metadata.get("unresolved_image_count")
+    if unresolved:
+        # Surface on stderr in addition to the parser's warning, so a swallowed warning filter
+        # cannot let missing figures pass as a clean parse.
+        typer.secho(
+            f"warning: {unresolved} image reference(s) had no matching asset and remain broken",
+            fg=typer.colors.YELLOW,
+            err=True,
+        )

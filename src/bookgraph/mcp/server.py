@@ -40,20 +40,38 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
     mcp: FastMCP = FastMCP("bookgraph")
 
     @mcp.tool
-    def get_next_section(plan_id: str) -> NextSection:
-        """Return the next unread sections for a reading plan, with full content."""
+    def get_next_section(plan_id: str, include_assets: bool = True) -> NextSection:
+        """Return the next unread sections for a reading plan, with full content.
+
+        With ``include_assets`` (default) each section carries its structured figure/table
+        ``assets``; set it false to skip asset resolution when reading for prose only.
+        Each section also carries its data-quality ``warnings`` (see ``get_section``).
+        """
 
         try:
-            return service.get_next_section(workspace, plan_id)
+            return service.get_next_section(workspace, plan_id, include_assets)
         except ReadingServiceError as exc:
             raise ToolError(str(exc)) from exc
 
     @mcp.tool
-    def get_section(doc_id: str, section_id: str) -> SectionView:
-        """Return one section's full reading content by document and section id."""
+    def get_section(
+        doc_id: str, section_id: str, include_assets: bool = True
+    ) -> SectionView:
+        """Return one section's full reading content by document and section id.
+
+        With ``include_assets`` (default) the result carries a structured ``assets`` list
+        of the section's figures/tables (path, type, caption, order) — each scored with a
+        ``type_confidence`` and, when the caption disputes the parser's type, a
+        ``suggested_type``; set it false to omit.
+
+        ``warnings`` reports the section's data-quality anomalies (a broken page span, a
+        disputed asset type, text that is only asset captions), so a reader does not have
+        to inspect the parsed ``document.json`` to notice them. Page-range warnings are
+        always present; asset warnings need ``include_assets``.
+        """
 
         try:
-            return service.get_section(workspace, doc_id, section_id)
+            return service.get_section(workspace, doc_id, section_id, include_assets)
         except ReadingServiceError as exc:
             raise ToolError(str(exc)) from exc
 
@@ -94,20 +112,33 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
             raise ToolError(str(exc)) from exc
 
     @mcp.tool
-    def get_context(doc_id: str, section_id: str) -> SectionContext:
-        """Return a section's full content, graph neighbourhood, and its concepts."""
+    def get_context(
+        doc_id: str, section_id: str, include_assets: bool = True
+    ) -> SectionContext:
+        """Return a section's full content, graph neighbourhood, and its concepts.
+
+        ``include_assets`` (default true) controls whether the embedded section carries its
+        structured figure/table ``assets`` and their quality ``warnings`` (see
+        ``get_section``).
+        """
 
         try:
-            return service.get_context(workspace, doc_id, section_id)
+            return service.get_context(workspace, doc_id, section_id, include_assets)
         except ReadingServiceError as exc:
             raise ToolError(str(exc)) from exc
 
     @mcp.tool
-    def get_concept(concept: str) -> ConceptView:
-        """Return a concept and its cross-book backlink mentions across all books."""
+    def get_concept(concept: str, include_annotations: bool = False) -> ConceptView:
+        """Return a concept and its cross-book backlink mentions across all books.
+
+        Defaults to a compact card (bare backlinks with per-section glosses) for
+        lightweight graph traversal. Pass include_annotations=True for the detail
+        view, where each mention also carries its section's Tier-2 summary, so a
+        concept with several mentions reads as a source-grounded note.
+        """
 
         try:
-            return service.get_concept(workspace, concept)
+            return service.get_concept(workspace, concept, include_annotations)
         except ReadingServiceError as exc:
             raise ToolError(str(exc)) from exc
 

@@ -273,10 +273,20 @@ available near the budget.
 ```text
 sources/sections/<doc_id>/sections.jsonl
 sources/sections/<doc_id>/<section_id>.md
+sources/sections/<doc_id>/quality.json
 ```
 
 See `artifacts.md` for the section artifact schemas. Duplicate section ids fail
 the command rather than overwriting.
+
+`quality.json` is the ingest data-quality report for the document: the anomalies
+the deterministic checks in `bookgraph.quality` found in the sections just
+written (inverted/half-known page ranges, assets whose caption contradicts the
+parser's type, asset files the parser never staged, sections whose text is only
+asset captions). It is always written
+— `warning_count: 0` for a clean document — and the same warnings are attached to
+every section the MCP section APIs return. See `artifacts.md` for the schema and
+the code list.
 
 ### Must not do
 
@@ -294,7 +304,15 @@ max_tokens: <n>      # only printed for token-page
 doc_id: <doc_id>
 sections: <section_count>
 manifest: <workspace>/sources/sections/<doc_id>/sections.jsonl
+warnings: <warning_count>
+quality: <workspace>/sources/sections/<doc_id>/quality.json
 ```
+
+When the report is not empty, the command also echoes the per-code totals and up
+to five `warning: <section_id>: <code>: <message>` lines (with an `… and N more`
+line pointing at `quality.json`), so an anomaly is never hidden in a file the
+operator did not open. Warnings do not fail the command — the sections are still
+written.
 
 ## `bookgraph reading-plan`
 
@@ -566,10 +584,21 @@ telling the user to `uv sync --extra mcp`.
 
 ### Tools
 
-- `get_next_section(plan_id)` → the next up-to-`daily_sections` unread sections
-  for a plan, each with full text, provenance, and its `<section_id>.md` path,
-  plus `remaining` and `done`.
-- `get_section(doc_id, section_id)` → one section's full reading content.
+- `get_next_section(plan_id, include_assets=True)` → the next
+  up-to-`daily_sections` unread sections for a plan, each shaped exactly as
+  `get_section` returns it (full text, provenance, `<section_id>.md` path,
+  `assets`, `warnings`), plus `remaining` and `done`.
+- `get_section(doc_id, section_id, include_assets=True)` → one section's full
+  reading content, its `<section_id>.md` path, its figure/table `assets` (each
+  `{block_id, type, path, caption, order, page_idx, type_confidence,
+  suggested_type}`), and its `warnings`. `type_confidence` scores the parser's
+  classification against the caption's label and `suggested_type` is set only when
+  the caption contradicts it, so a figure emitted as a `table` is flagged rather
+  than passed off as correct. `warnings` are the same data-quality anomalies the
+  segment stage records in `quality.json` (each `{code, message, block_id}`, see
+  `artifacts.md`) restricted to this section: page-range warnings always, asset
+  warnings when assets are included. `include_assets=False` skips asset resolution
+  (and with it the asset warnings).
 - `mark_read(plan_id, section_id=None)` → mark a section read (defaults to the
   next unread one) and persist the plan; returns `completed`/`total`/`done`.
 - `search(query, doc_id=None, limit=10)` → sections ranked by FTS5 `bm25` over
@@ -628,8 +657,11 @@ CLI step (see `docs/mcp/reading-agent.md`).
 ### Reads / writes
 
 - Reads `indexes/bookgraph.db` (when built) and
-  `sources/sections/<doc_id>/sections.jsonl`, plus `reading_plans/<plan_id>.json` and
-  `annotations/<doc_id>/<section_id>.json` (the latter for `get_context.summary`).
+  `sources/sections/<doc_id>/sections.jsonl`, plus `reading_plans/<plan_id>.json`,
+  `annotations/<doc_id>/<section_id>.json` (the latter for `get_context.summary`),
+  and `sources/parsed/<doc_id>/document.json` (asset resolution for `assets`; the
+  section `warnings` are recomputed from the section and its assets, never read
+  back from `quality.json`).
 - `mark_read` and `create_plan` write `reading_plans/<plan_id>.json` (same
   contracts as `bookgraph reading-plan mark-read` / `create`); `annotate_section`
   writes `annotations/<doc_id>/<section_id>.json` (see `annotations.md`). No other
@@ -759,23 +791,73 @@ middle JSON into the canonical `document.json`.
 
 ```bash
 bookgraph parse-book /path/to/workspace <book_id>
-bookgraph parse-book /path/to/workspace <book_id> --runner mineru --method auto
-bookgraph parse-book /path/to/workspace <book_id> --runner-command mineru --backend pipeline
+# Fast local text extraction for digital PDFs / weak GPU / Apple Silicon / CPU
+bookgraph parse-book /path/to/workspace <book_id> --profile fast-text
+# Explicit knobs (each overrides the profile)
+bookgraph parse-book /path/to/workspace <book_id> \
+  --backend pipeline --method txt --no-formula --no-table --no-image-analysis
+# Accurate local GPU/VLM profile for machines with enough VRAM
+bookgraph parse-book /path/to/workspace <book_id> --profile local-gpu --effort high
+# Remote GPU / service-backed backend
+bookgraph parse-book /path/to/workspace <book_id> \
+  --backend hybrid-http-client --url http://gpu-box:30000
+# Page range (0-based) and timeout
+bookgraph parse-book /path/to/workspace <book_id> --start-page 0 --end-page 63
 bookgraph parse-book /path/to/workspace <book_id> --timeout-seconds 3600
-bookgraph parse-book /path/to/workspace <book_id> --parser mineru-middle-json
-bookgraph parse-book /path/to/workspace <book_id> --dry-run
+bookgraph parse-book /path/to/workspace <book_id> --parser mineru-middle-json --dry-run
 ```
 
 Options:
 
 - `--runner`: raw-source runner. Default: `[mineru].runner` (`mineru`).
 - `--runner-command`: executable name. Default: `[mineru].command` (`mineru`).
-- `--method/-m`: MinerU method. Default: `[mineru].method` (`auto`).
-- `--backend/-b`: optional MinerU backend. Default: `[mineru].backend`.
+- `--profile` / `--mineru-profile`: named MinerU profile picking hardware/quality
+  defaults. One of `fast-text | balanced | accurate | local-gpu | remote-gpu`.
+  Default: `[mineru].profile` (`balanced`). Explicit knobs below override it.
+- `--method/-m` / `--mineru-method`: MinerU method `auto | txt | ocr`. Default: profile / `[mineru].method`.
+- `--backend/-b` / `--mineru-backend`: MinerU backend
+  `pipeline | vlm-engine | hybrid-engine | vlm-http-client | hybrid-http-client`. Default: profile / `[mineru].backend`.
+- `--effort` / `--mineru-effort`: `medium | high`. Default: profile / `[mineru].effort`.
+- `--formula/--no-formula`, `--table/--no-table`, `--image-analysis/--no-image-analysis`:
+  toggle MinerU feature passes. Default: profile / `[mineru].*`.
+- `--url/-u` / `--mineru-url`: remote GPU server URL, required by the `*-http-client` backends. Default: `[mineru].url`.
+- `--start-page/-s`, `--end-page/-e`: 0-based page range. Default: `[mineru].start_page` / `end_page`.
 - `--timeout-seconds`: subprocess timeout. Default: config; pass `0` for no timeout.
 - `--parser/-p`: parser after runner output is staged. Default: `[parsers].default_pdf` (`mineru-middle-json`).
 
+Precedence is CLI flag > workspace config (`[mineru]`) > profile default. The resolved
+profile and the exact MinerU argv are recorded in the run log (the `$ mineru …` line).
+
 `--parser` is validated against the parser plugin registry; typoed plugin names fail before the runner is invoked.
+A `*-http-client` backend without a `--url` is rejected before MinerU is invoked.
+
+**Choosing a profile:**
+
+| Situation | Profile | Why |
+| --- | --- | --- |
+| Text-heavy digital book; reading sections / search matter more than layout | `fast-text` | `pipeline` + `txt`, table/formula/image off — skips the slow layout/VLM/OCR passes. |
+| Default, mixed content | `balanced` | MinerU's stock medium-effort path (unchanged behavior). |
+| Scanned / image-heavy PDF needing good tables & layout | `accurate` | Hybrid/VLM at `--effort high`. |
+| Local machine with enough CUDA/VRAM | `local-gpu` | Pure local `vlm-engine` backend, high effort. |
+| External GPU server | `remote-gpu` (+ `--url`) | `hybrid-http-client` offloads to the server. |
+| Apple Silicon / CPU | `fast-text` | No CUDA-like speed is promised; prefer the fast text path unless accuracy needs VLM. |
+
+Workspace defaults live under `[mineru]` in `bookgraph.toml`:
+
+```toml
+[mineru]
+profile = "balanced"
+# method = "auto"
+# backend = "pipeline"
+# effort = "high"
+# formula = true
+# table = true
+# image_analysis = true
+# url = ""
+# start_page = 0
+# end_page = 0
+# timeout_seconds = 3600
+```
 
 Writes:
 
@@ -797,6 +879,7 @@ Prints at run start:
 ```text
 runner: <runner>
 book_id: <book_id>
+profile: <resolved_profile>
 pages: <page_count_if_known>
 log: <workspace>/runs/parse-book/<timestamp>-<book_id>.log
 stage: running MinerU

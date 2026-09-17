@@ -118,3 +118,21 @@ def test_bookmark_segmenter_falls_back_to_heading_when_no_usable_bookmarks() -> 
 
     assert [section.id for section in sections] == ["iceberg.intro"]
     assert sections[0].text == "Intro text"
+
+
+def test_bookmark_segmenter_never_emits_a_negative_page_end() -> None:
+    # Shared clamp with the heading segmenter: a bookmark with no page index followed by
+    # one on page 0 must not bound the first section at -1.
+    document = Document(
+        doc_id="iceberg",
+        title="Iceberg",
+        blocks=[CanonicalBlock(id="b1", type="text", text="Cover.", page_idx=0)],
+    )
+    bookmarks = [
+        PdfBookmark(title="Cover", page_index=0, level=1),
+        PdfBookmark(title="Chapter 1", page_index=0, level=1),
+    ]
+
+    sections = BookmarkSegmenter(bookmarks=bookmarks).segment(document)
+
+    assert [(s.page_start, s.page_end) for s in sections] == [(0, 0), (0, 0)]

@@ -76,9 +76,29 @@ A self-serve agent drives an entire session with these tools alone:
    - `get_context(doc_id, section_id)` — the section's content, its graph
      neighbourhood (parent/prev/next/children), its `concepts`, and any `summary`
      already written for it.
+   - Both `get_section` and `get_context` return the section's figures/tables as a
+     structured `assets` list (each `{block_id, type, path, caption, order, page_idx,
+     type_confidence, suggested_type}`) so you never have to grep
+     `sources/parsed/<doc_id>/document.json` for image paths. `path` resolves under the
+     workspace; open it directly to OCR/inspect labels or table content. `type` is the
+     parser's guess: when `suggested_type` is set the caption contradicts it (a figure
+     emitted as a `table`), so trust the file over the label. Pass
+     `include_assets=false` to omit.
+   - Every section also carries `warnings` — the data-quality anomalies found in it
+     (each `{code, message, block_id}`): a broken page span (`page_range_inverted`,
+     `page_range_incomplete`), a disputed asset type (`asset_type_ambiguous`), an asset
+     file the parser never staged (`asset_file_missing` — the figure is gone, not just
+     unlisted), or a section whose text is only captions / almost no prose around its
+     figures (`asset_captions_only`, `asset_text_sparse`). Read them before trusting `text` or
+     the page provenance; they are the same warnings ingest recorded in
+     `sources/sections/<doc_id>/quality.json`.
    - Pivot as needed:
      - `get_concept(concept)` — where a concept is discussed across **all**
-       books (cross-book backlinks).
+       books (cross-book backlinks). Defaults to a compact card (bare backlinks
+       with per-section glosses) for lightweight traversal; pass
+       `include_annotations=True` for the detail view, where each mention also
+       carries its section's Tier-2 `summary`, so a concept with several mentions
+       reads as a source-grounded note.
      - `search(query, doc_id=None)` — find related sections (cross-document when
        `doc_id` is omitted).
      - `get_outline(doc_id)` / `get_related(doc_id, section_id)` — navigate structure.

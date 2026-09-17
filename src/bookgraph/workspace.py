@@ -131,6 +131,21 @@ default_pdf = "mineru-middle-json"
 default_office = "markitdown"
 default_markdown = "markdown"
 
+[mineru]
+# Profile picks hardware/quality defaults; explicit knobs below override it.
+# Profiles: fast-text | balanced | accurate | local-gpu | remote-gpu
+profile = "balanced"
+# method = "auto"        # auto | txt | ocr
+# backend = "pipeline"   # pipeline | vlm-engine | hybrid-engine | *-http-client
+# effort = "high"        # medium | high
+# formula = true
+# table = true
+# image_analysis = true
+# url = ""               # remote GPU server URL for the *-http-client backends
+# start_page = 0         # 0-based first page
+# end_page = 0           # 0-based last page
+# timeout_seconds = 3600 # 0 disables the timeout
+
 [segmenter]
 default = "heading"
 target_level = 2

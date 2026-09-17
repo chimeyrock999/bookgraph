@@ -209,6 +209,26 @@ def test_index_concepts_renders_agent_gloss_and_marker(tmp_path: Path) -> None:
     assert "— the core idea (agent-verified)" in page
 
 
+def test_index_concepts_renders_section_summary_as_blockquote(tmp_path: Path) -> None:
+    # The durable concept note carries each mentioning section's Tier-2 summary as an
+    # indented blockquote, so the page reads as long-form context, not only glosses.
+    workspace = _init_workspace(tmp_path)
+    write_sections(
+        [_section("ddia.a", "ddia", "Schema Evolution", "text")],
+        workspace.sources_sections / "ddia",
+    )
+    summary = "Schemas change; readers/writers must cope."
+    write_annotation(
+        build_annotation("ddia", "ddia.a", None, summary=summary),
+        annotation_path(workspace.annotations_root, "ddia", "ddia.a"),
+    )
+    assert runner.invoke(app, ["index", "build", str(tmp_path)]).exit_code == 0
+    assert runner.invoke(app, ["index", "concepts", str(tmp_path)]).exit_code == 0
+
+    page = (workspace.wiki_concepts / "schema-evolution.md").read_text()
+    assert "  > Schemas change; readers/writers must cope." in page
+
+
 def test_index_concepts_omits_marker_for_auto_backlinks(tmp_path: Path) -> None:
     workspace = _init_workspace(tmp_path)
     write_sections(

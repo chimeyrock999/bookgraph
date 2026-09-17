@@ -47,8 +47,16 @@ def test_parse_book_dry_run_writes_placeholder_contract(tmp_path: Path) -> None:
     assert payload["runner"] == {
         "name": "mineru",
         "command": "mineru",
+        "profile": "balanced",
         "method": "ocr",
         "backend": "pipeline",
+        "effort": None,
+        "formula": None,
+        "table": None,
+        "image_analysis": None,
+        "url": None,
+        "start_page": None,
+        "end_page": None,
         "timeout_seconds": 7200,
     }
     assert payload["parser"] == "mineru-middle-json"

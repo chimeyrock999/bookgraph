@@ -212,6 +212,36 @@ def test_markitdown_parser_keeps_old_images_when_extraction_fails(
     assert not (output_dir / ".images.staging").exists()
 
 
+def test_markitdown_parser_stages_ref_with_balanced_parens(tmp_path: Path) -> None:
+    figure = b"png bytes"
+    source = tmp_path / "book.epub"
+    _make_epub(source, {"OEBPS/assets/plot(1).png": figure})
+    output_dir = tmp_path / "parsed" / "book"
+    # An unencoded paren is a valid URL char; the src must not be truncated at it.
+    converter = _FakeConverter("![Fig](assets/plot(1).png)\n")
+
+    document = MarkItDownParser(converter=converter).parse(source, output_dir)
+
+    assert (output_dir / "images" / "plot_1.png").read_bytes() == figure
+    image_blocks = [block for block in document.blocks if block.type == "image"]
+    assert [block.metadata["src"] for block in image_blocks] == ["images/plot_1.png"]
+    assert "unresolved_image_count" not in document.metadata
+
+
+def test_markitdown_parser_stages_angle_bracketed_ref_with_space(tmp_path: Path) -> None:
+    figure = b"png bytes"
+    source = tmp_path / "book.epub"
+    _make_epub(source, {"OEBPS/assets/my image.png": figure})
+    output_dir = tmp_path / "parsed" / "book"
+    converter = _FakeConverter("![Fig](<assets/my image.png>)\n")
+
+    document = MarkItDownParser(converter=converter).parse(source, output_dir)
+
+    assert (output_dir / "images" / "my_image.png").read_bytes() == figure
+    image_blocks = [block for block in document.blocks if block.type == "image"]
+    assert [block.metadata["src"] for block in image_blocks] == ["images/my_image.png"]
+
+
 def test_markitdown_parser_warns_when_exact_and_tail_member_collide(tmp_path: Path) -> None:
     source = tmp_path / "book.epub"
     _make_epub(

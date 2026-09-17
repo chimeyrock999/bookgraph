@@ -22,14 +22,17 @@ _IMAGE_SUFFIXES = frozenset(
 )
 
 # A Markdown image reference: ``![alt](src)`` with an optional ``"title"`` or ``'title'``.
-# The src stops at whitespace or the closing paren, matching what MarkItDown/markdownify emit;
-# both quote styles are accepted so a single-quoted title never leaves the reference unstaged.
-# The alt group tolerates escaped brackets and one level of nesting (``![Fig [2-6]](...)``) so a
-# caption with a bracketed figure number does not make the whole reference fail to match — which
-# would drop the image silently, with no staging and no unresolved-count warning.
+# - alt tolerates escaped brackets and one level of nesting (``![Fig [2-6]](...)``), so a
+#   bracketed figure number does not make the whole reference silently fail to match.
+# - src is either an angle-bracketed destination (``<my image.png>``, which may contain spaces)
+#   or a bare destination that allows one level of balanced parens (``assets/plot(1).png``) — an
+#   unencoded ``(`` is a valid URL char tools do not percent-encode, and truncating it would
+#   report an existing asset as unresolved.
+# - both title quote styles are accepted so a single-quoted title never leaves a ref unstaged.
 _IMAGE_REFERENCE = re.compile(
     r"!\[(?P<alt>(?:\\.|\[[^\]]*\]|[^\[\]\\])*)\]"
-    r"\(\s*(?P<src>[^)\s]+)(?P<title>\s+(?:\"[^\"]*\"|'[^']*'))?\s*\)"
+    r"\(\s*(?:<(?P<src_angle>[^>\n]*)>|(?P<src_bare>(?:[^()\s]|\([^()\s]*\))+))"
+    r"(?P<title>\s+(?:\"[^\"]*\"|'[^']*'))?\s*\)"
 )
 
 # Characters that break a bare CommonMark link destination (whitespace splits it into text;
@@ -172,7 +175,8 @@ def _stage_epub_assets(source: Path, output_dir: Path, markdown: str) -> tuple[s
                 return staged
 
             def rewrite(match: re.Match[str]) -> str:
-                src = match.group("src")
+                angle = match.group("src_angle")
+                src = angle if angle is not None else match.group("src_bare")
                 if is_url(src):
                     return match.group(0)
                 staged = stage(src)
@@ -180,7 +184,8 @@ def _stage_epub_assets(source: Path, output_dir: Path, markdown: str) -> tuple[s
                     # Normalise before recording so ``x.png`` and ``x.png#note`` count once.
                     missing.append(_clean_reference(src))
                     return match.group(0)
-                # Preserve any ``"title"`` the source carried; only the destination is repointed.
+                # Preserve any ``"title"`` the source carried; the destination is repointed to the
+                # link-safe staged path, so it is always emitted bare (never angle-bracketed).
                 return f"![{match.group('alt')}]({staged}{match.group('title') or ''})"
 
             rewritten = _rewrite_image_references(markdown, rewrite)
@@ -238,9 +243,10 @@ def _rewrite_image_references(markdown: str, rewrite: Callable[[re.Match[str]], 
     touch image syntax printed *as an example* inside code — corrupting the sample. Skip fenced
     blocks line-by-line and inline-code spans within a line so only real references are staged.
 
-    Inline code is matched per line, so a rare inline span that straddles a line break is not
-    recognised; markdownify never emits that shape, and the fuller fix (reusing the token stream
-    ``document_from_markdown`` builds) is not worth the coupling here.
+    Two rare shapes are not recognised — a fuller fix would reuse the token stream
+    ``document_from_markdown`` builds, but the coupling is not worth it while markdownify emits
+    neither: an inline-code span that straddles a line break (matched per line here), and a
+    4-space-indented code block (only ``` ```/~~~ fences are skipped).
     """
 
     out: list[str] = []

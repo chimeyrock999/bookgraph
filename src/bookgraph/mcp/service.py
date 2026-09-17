@@ -42,7 +42,7 @@ from bookgraph.reading_plans import (
     write_reading_plan,
 )
 from bookgraph.sections import count_sections, read_sections
-from bookgraph.utils import ID_PATTERN, validate_slug_id
+from bookgraph.utils import ID_PATTERN, is_url, validate_slug_id
 from bookgraph.workspace import WorkspacePaths
 
 
@@ -323,10 +323,6 @@ def _load_doc_blocks(workspace: WorkspacePaths, doc_id: str) -> _DocBlocks:
     return blocks
 
 
-def _is_url(value: str) -> bool:
-    return "://" in value or value.startswith("data:")
-
-
 def _resolve_asset_path(
     workspace: WorkspacePaths, doc_id: str, block: CanonicalBlock
 ) -> str | None:
@@ -349,7 +345,7 @@ def _resolve_asset_path(
     if not raw:
         meta_src = block.metadata.get("src") or block.metadata.get("asset_path")
         raw = str(meta_src) if meta_src else ""
-    if not raw or _is_url(raw):
+    if not raw or is_url(raw):
         return None
     candidate = Path(raw)
     if candidate.is_absolute():

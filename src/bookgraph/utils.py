@@ -7,6 +7,16 @@ MINERU_MIDDLE_JSON_SUFFIX = "_middle.json"
 ID_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
 
+def is_url(value: str) -> bool:
+    """Whether a reference points outside the workspace (a scheme-qualified or data URL).
+
+    Shared by the parsers (which skip staging remote image refs) and the MCP asset resolver
+    (which refuses to resolve them to a local file), so the two never drift apart.
+    """
+
+    return "://" in value or value.startswith("data:")
+
+
 def slugify(value: str) -> str:
     slug = re.sub(r"[^a-zA-Z0-9]+", "-", value.lower()).strip("-")
     return slug or "untitled"

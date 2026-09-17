@@ -212,6 +212,60 @@ def test_markitdown_parser_keeps_old_images_when_extraction_fails(
     assert not (output_dir / ".images.staging").exists()
 
 
+def test_markitdown_parser_warns_when_exact_and_tail_member_collide(tmp_path: Path) -> None:
+    source = tmp_path / "book.epub"
+    _make_epub(
+        source,
+        {
+            "images/fig.jpg": b"root figure",
+            "OEBPS/chapter2/images/fig.jpg": b"chapter figure",
+        },
+    )
+    output_dir = tmp_path / "parsed" / "book"
+    # A root member exactly equals the ref while a chapter-relative member also matches the tail:
+    # the reference is genuinely ambiguous, so it is surfaced rather than guessed.
+    converter = _FakeConverter("![Fig](images/fig.jpg)\n")
+
+    with pytest.warns(UserWarning, match="images/fig.jpg"):
+        MarkItDownParser(converter=converter).parse(source, output_dir)
+
+    assert not (output_dir / "images").exists()
+
+
+def test_markitdown_parser_merges_and_preserves_good_asset_on_partial_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "book.epub"
+    output_dir = tmp_path / "parsed" / "book"
+    _make_epub(source, {"OEBPS/assets/a.png": b"AAA", "OEBPS/assets/b.png": b"BBB"})
+    two_refs = "![A](assets/a.png)\n\n![B](assets/b.png)\n"
+    MarkItDownParser(converter=_FakeConverter(two_refs)).parse(source, output_dir)
+    assert (output_dir / "images" / "a.png").read_bytes() == b"AAA"
+    assert (output_dir / "images" / "b.png").read_bytes() == b"BBB"
+
+    # Re-parse with new bytes for both, but b.png's extraction fails transiently.
+    import bookgraph.parsers.markitdown as markitdown_module
+
+    real_extract = markitdown_module._extract_member
+
+    def _flaky(archive: object, member: str, *args: object, **kwargs: object) -> str:
+        if member.endswith("b.png"):
+            raise OSError("transient")
+        return real_extract(archive, member, *args, **kwargs)
+
+    monkeypatch.setattr(markitdown_module, "_extract_member", _flaky)
+    _make_epub(source, {"OEBPS/assets/a.png": b"AAA2", "OEBPS/assets/b.png": b"BBB2"})
+
+    with pytest.warns(UserWarning):
+        document = MarkItDownParser(converter=_FakeConverter(two_refs)).parse(source, output_dir)
+
+    # a.png is refreshed; the previously-good b.png survives instead of being wiped by the swap.
+    assert (output_dir / "images" / "a.png").read_bytes() == b"AAA2"
+    assert (output_dir / "images" / "b.png").read_bytes() == b"BBB"
+    assert document.metadata["unresolved_image_count"] == 1
+    assert not (output_dir / ".images.staging").exists()
+
+
 def test_markitdown_parser_records_unresolved_image_count(tmp_path: Path) -> None:
     source = tmp_path / "book.epub"
     _make_epub(source, {"OEBPS/assets/there.png": b"png"})

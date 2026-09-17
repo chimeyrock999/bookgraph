@@ -142,6 +142,7 @@ def _stage_epub_assets(source: Path, output_dir: Path, markdown: str) -> tuple[s
     staged_by_member: dict[str, str] = {}
     used_names: set[str] = set()
     missing: list[str] = []
+    extraction_failed = False
 
     try:
         with archive:
@@ -153,6 +154,7 @@ def _stage_epub_assets(source: Path, output_dir: Path, markdown: str) -> tuple[s
             ]
 
             def stage(source_ref: str) -> str | None:
+                nonlocal extraction_failed
                 member = _match_member(source_ref, image_members)
                 if member is None:
                     return None
@@ -162,7 +164,9 @@ def _stage_epub_assets(source: Path, output_dir: Path, markdown: str) -> tuple[s
                         staged = _extract_member(archive, member, staging_dir, used_names)
                     except (OSError, zipfile.BadZipFile):
                         # A corrupt/unreadable member is treated as unresolved (warned), never a
-                        # crash that would abort the whole parse with a raw traceback.
+                        # crash that would abort the whole parse with a raw traceback. Flag it so
+                        # the swap below knows this staged set is incomplete.
+                        extraction_failed = True
                         return None
                     staged_by_member[member] = staged
                 return staged
@@ -181,12 +185,7 @@ def _stage_epub_assets(source: Path, output_dir: Path, markdown: str) -> tuple[s
 
             rewritten = _rewrite_image_references(markdown, rewrite)
 
-        # Swap the freshly staged set in only when it is non-empty: replacing the live images
-        # with an empty directory would turn a run where nothing could be extracted (a failed
-        # or reference-less re-parse) into a destructive wipe of the previous good assets.
-        if staged_by_member:
-            shutil.rmtree(assets_dir, ignore_errors=True)
-            staging_dir.rename(assets_dir)
+        _publish_staged_assets(staging_dir, assets_dir, staged_by_member, extraction_failed)
     finally:
         shutil.rmtree(staging_dir, ignore_errors=True)
 
@@ -203,12 +202,45 @@ def _stage_epub_assets(source: Path, output_dir: Path, markdown: str) -> tuple[s
     return rewritten, unique_missing
 
 
+def _publish_staged_assets(
+    staging_dir: Path,
+    assets_dir: Path,
+    staged_by_member: dict[str, str],
+    extraction_failed: bool,
+) -> None:
+    """Move the freshly staged images into the live ``images/`` directory.
+
+    - Nothing staged: leave ``images/`` as-is. A reference-less or wholly-failed run must not
+      wipe the previous good assets down to an empty directory.
+    - A complete set (every referenced member extracted): replace ``images/`` atomically, so
+      assets renamed or removed since the last parse do not linger as orphans.
+    - An incomplete set (a member failed mid-run and was swallowed as unresolved): merge the
+      files that did stage in *without* deleting anything, so a transient failure never loses a
+      previously-good asset. Any resulting staleness is reclaimed on the next clean re-parse.
+    """
+
+    if not staged_by_member:
+        return
+    if not extraction_failed:
+        shutil.rmtree(assets_dir, ignore_errors=True)
+        staging_dir.rename(assets_dir)
+        return
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    for staged_rel in staged_by_member.values():
+        name = PurePosixPath(staged_rel).name
+        (staging_dir / name).replace(assets_dir / name)
+
+
 def _rewrite_image_references(markdown: str, rewrite: Callable[[re.Match[str]], str]) -> str:
     """Apply ``rewrite`` to every Markdown image reference outside code fences and inline code.
 
     Rewriting the raw string is simplest, but a naive ``sub`` over the whole document would also
     touch image syntax printed *as an example* inside code — corrupting the sample. Skip fenced
     blocks line-by-line and inline-code spans within a line so only real references are staged.
+
+    Inline code is matched per line, so a rare inline span that straddles a line break is not
+    recognised; markdownify never emits that shape, and the fuller fix (reusing the token stream
+    ``document_from_markdown`` builds) is not worth the coupling here.
     """
 
     out: list[str] = []
@@ -267,10 +299,13 @@ def _match_member(source_ref: str, image_members: list[str]) -> str | None:
     if not parts:
         return None
     suffix = "/".join(parts)
-    # An exact whole-path match is unambiguous by construction (zip names are unique).
-    if suffix in image_members:
-        return suffix
-    tail_matches = [member for member in image_members if member.endswith("/" + suffix)]
+    # Treat an exact whole-path member and a deeper ``.../<suffix>`` member as competing
+    # candidates: the reference is XHTML-relative, so ``images/fig.jpg`` could mean the root
+    # member or a chapter-relative one. Only resolve when exactly one candidate exists; a
+    # collision is surfaced as unresolved rather than guessed.
+    tail_matches = [
+        member for member in image_members if member == suffix or member.endswith("/" + suffix)
+    ]
     if tail_matches:
         return tail_matches[0] if len(tail_matches) == 1 else None
     basename = normalized.name.lower()
@@ -287,8 +322,10 @@ def _extract_member(
 
     name = _unique_name(_safe_asset_name(PurePosixPath(member).name), used_names)
     assets_dir.mkdir(parents=True, exist_ok=True)
-    with archive.open(member) as source_file:
-        (assets_dir / name).write_bytes(source_file.read())
+    # Stream rather than read the whole member into memory: a scanned technical book can carry
+    # tens-of-MB raster figures, and copyfileobj keeps the peak flat on image-heavy EPUBs.
+    with archive.open(member) as source_file, (assets_dir / name).open("wb") as dest:
+        shutil.copyfileobj(source_file, dest)
     return f"images/{name}"
 
 

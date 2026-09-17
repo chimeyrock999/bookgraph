@@ -395,8 +395,6 @@ def _section_assets(
     return assets, summaries
 
 
-
-
 def _section_view(
     workspace: WorkspacePaths,
     section: Section,

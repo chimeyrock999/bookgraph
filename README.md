@@ -224,6 +224,8 @@ src/bookgraph/
   reading_plans.py          # reading plan store (create/next/mark-read core)
   graph.py                  # section graph model + builder (hierarchy + sequence)
   concepts.py               # shared deterministic concept extractor (wiki + index)
+  quality.py                # ingest/section quality checks (segment report + MCP warnings)
+  assets.py                 # one asset-reference resolver (shared by MCP + quality)
   index/
     base.py                 # IndexBackend port + hits/concept models + tokenizer
     sqlite.py               # default backend: SQLite/FTS5 (indexes/bookgraph.db)
@@ -236,6 +238,7 @@ src/bookgraph/
     heading.py              # Heading/title-block segmenter
     bookmark.py             # PDF bookmark/outline segmenter (heading fallback)
     token_page.py           # Token-budget/page-boundary fallback segmenter
+    pages.py                # shared page-span clamp (no backwards/negative spans)
   wiki_backends/
     llmwiki.py              # Stage section markdown for llm-wiki-compiler
     markdown_graph.py       # Linked markdown wiki: book pages + wikilinks (uses concepts.py)

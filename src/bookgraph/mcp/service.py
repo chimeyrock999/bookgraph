@@ -9,7 +9,6 @@ so they can be unit-tested directly; the MCP server is a thin wrapper in
 from __future__ import annotations
 
 import json
-import os
 import threading
 from collections import Counter, OrderedDict
 from datetime import UTC, datetime
@@ -23,6 +22,7 @@ from bookgraph.annotations import (
     read_annotation,
     write_annotation,
 )
+from bookgraph.assets import asset_reference, resolve_asset_path
 from bookgraph.documents import read_document
 from bookgraph.graph import SectionGraph, build_section_graph
 from bookgraph.index import default_index_backend, tokenize
@@ -33,6 +33,12 @@ from bookgraph.models import (
     ReadingPlan,
     Section,
 )
+from bookgraph.quality import (
+    AssetSummary,
+    SectionWarning,
+    classify_asset,
+    section_warnings,
+)
 from bookgraph.reading_plans import (
     create_reading_plan,
     list_plan_progress,
@@ -42,7 +48,7 @@ from bookgraph.reading_plans import (
     write_reading_plan,
 )
 from bookgraph.sections import count_sections, read_sections
-from bookgraph.utils import ID_PATTERN, is_url, validate_slug_id
+from bookgraph.utils import ID_PATTERN, validate_slug_id
 from bookgraph.workspace import WorkspacePaths
 
 
@@ -77,6 +83,12 @@ class AssetRef(BaseModel):
     caption as text — the labels/data live inside ``path``). ``order`` is the block's
     position in the parsed document, so a client can place the asset relative to the
     section's prose.
+
+    ``type`` is the parser's classification, kept verbatim. Layout parsers do confuse
+    figures with tables, so it travels with ``type_confidence`` (how well the caption's
+    label corroborates it) and, when the caption contradicts the parser,
+    ``suggested_type`` — the type the caption implies. A client can then trust, correct,
+    or open the file instead of taking a silently wrong ``type`` at face value.
     """
 
     block_id: str
@@ -85,10 +97,19 @@ class AssetRef(BaseModel):
     caption: str = ""
     order: int | None = None
     page_idx: int | None = None
+    type_confidence: float = 1.0
+    suggested_type: str | None = None
 
 
 class SectionView(BaseModel):
-    """A section's full reading content plus provenance and its Markdown path."""
+    """A section's full reading content plus provenance and its Markdown path.
+
+    ``warnings`` carries the section's data-quality anomalies (see
+    :mod:`bookgraph.quality`) — a broken page span, a disputed asset type, prose that
+    is only asset captions — so a reader sees them inline instead of having to inspect
+    ``sources/parsed/<doc_id>/document.json``. Page-range warnings are always present;
+    asset warnings need ``include_assets`` (the default).
+    """
 
     id: str
     doc_id: str
@@ -103,7 +124,7 @@ class SectionView(BaseModel):
     block_ids: list[str] = Field(default_factory=list)
     markdown_path: str
     assets: list[AssetRef] = Field(default_factory=list)
-    notes: list[str] = Field(default_factory=list)
+    warnings: list[SectionWarning] = Field(default_factory=list)
 
 
 class NextSection(BaseModel):
@@ -323,72 +344,42 @@ def _load_doc_blocks(workspace: WorkspacePaths, doc_id: str) -> _DocBlocks:
     return blocks
 
 
-def _resolve_asset_path(
-    workspace: WorkspacePaths, doc_id: str, block: CanonicalBlock
-) -> str | None:
-    """Resolve a parser's asset reference to a real file under the workspace.
-
-    Prefers the typed ``asset_path`` (MinerU); falls back to the markdown parser's
-    ``metadata["src"]``. The reference is tried under the staged ``images/`` dir that
-    ``MinerURunner`` copies alongside ``document.json`` and directly under the parsed
-    document directory, and the first existing regular file wins — so the location is
-    verified on disk rather than guessed from whether the string contains a slash.
-
-    Returns ``None`` — so the caller drops the asset rather than emit a bogus reference —
-    unless the result is an existing regular file that stays inside the parsed document
-    directory even after symlinks are followed. That rules out URLs, absolute paths, ``..``
-    traversal, symlink escapes, and references to files the parser never actually staged, so
-    an ``AssetRef.path`` a client receives always opens a real workspace file.
-    """
-
-    raw = block.asset_path
-    if not raw:
-        meta_src = block.metadata.get("src") or block.metadata.get("asset_path")
-        raw = str(meta_src) if meta_src else ""
-    if not raw or is_url(raw):
-        return None
-    candidate = Path(raw)
-    if candidate.is_absolute():
-        return None
-    parsed_root = workspace.sources_parsed / doc_id
-    try:
-        root_real = parsed_root.resolve()
-    except (OSError, ValueError):
-        return None
-    # Verify the location on disk instead of guessing from the string: try the staged
-    # images/ dir first (MinerU convention) then directly under the parsed document dir.
-    for base in (parsed_root / "images", parsed_root):
-        lexical = Path(os.path.normpath(base / candidate))
-        # Resolve symlinks and check containment against the real root: a lexical-only
-        # check would let a symlink under images/ point outside the workspace, and would
-        # accept a ".."-style path that lands on the root directory itself rather than a
-        # file. Guarded because a corrupt/adversarial document.json can carry a path with
-        # an embedded NUL (ValueError) — one bad asset must degrade to "no asset", not
-        # crash the whole section fetch.
-        try:
-            real = lexical.resolve()
-            if real.is_relative_to(root_real) and real.is_file():
-                return str(lexical)
-        except (OSError, ValueError):
-            continue
-    return None
-
-
 def _section_assets(
     workspace: WorkspacePaths,
     section: Section,
     blocks_by_id: dict[str, CanonicalBlock],
-) -> list[AssetRef]:
+) -> tuple[list[AssetRef], list[AssetSummary]]:
+    """Resolve a section's asset blocks into openable ``AssetRef``s.
+
+    Returns the assets a client can open plus a summary of **every** asset block of the
+    section, including the ones whose file is missing — those are dropped from ``assets``
+    (an ``AssetRef.path`` must always open) but still feed the quality checks, so a
+    reference the parser never staged is reported rather than silently disappearing.
+    """
+
     assets: list[AssetRef] = []
+    summaries: list[AssetSummary] = []
+    parsed_dir = workspace.sources_parsed / section.doc_id
     for block_id in section.block_ids:
         block = blocks_by_id.get(block_id)
         if block is None or block.type not in ASSET_BLOCK_TYPES:
             continue
-        path = _resolve_asset_path(workspace, section.doc_id, block)
-        if path is None:
-            # A block with no resolvable asset file (e.g. a markdown table rendered inline
-            # into ``text``) is not an asset the reader can open — skip it.
+        if not asset_reference(block):
+            # An asset-typed block with no file reference at all (e.g. a markdown table
+            # rendered inline into ``text``) is content, not a missing asset — skip it.
             continue
+        path = resolve_asset_path(parsed_dir, block)
+        summaries.append(
+            AssetSummary(
+                block_id=block.id,
+                type=block.type,
+                caption=block.text,
+                resolved=path is not None,
+            )
+        )
+        if path is None:
+            continue
+        classification = classify_asset(block.type, block.text)
         assets.append(
             AssetRef(
                 block_id=block.id,
@@ -397,35 +388,11 @@ def _section_assets(
                 caption=block.text,
                 order=block.order,
                 page_idx=block.page_idx,
+                type_confidence=classification.confidence,
+                suggested_type=classification.suggested_type,
             )
         )
-    return assets
-
-
-def _asset_notes(section: Section, assets: list[AssetRef]) -> list[str]:
-    """Warn when a section's prose is effectively just the asset captions.
-
-    In that case the meaningful labels/tabular data live inside the asset file, and a
-    reader working from ``text`` alone would miss them (issue #34, acceptance #3). Each
-    caption is removed from the body **once** (its text appears once, as the caption) and
-    the note fires only when almost nothing remains — removing once, rather than every
-    occurrence, keeps a short/generic caption like ``"1"`` or ``"Table"`` from being wiped
-    out of genuine prose and producing a false warning.
-    """
-
-    if not assets:
-        return []
-    residual = section.text.strip()
-    for asset in assets:
-        caption = asset.caption.strip()
-        if caption:
-            residual = residual.replace(caption, "", 1)
-    if len(residual.strip()) > 15:
-        return []
-    return [
-        f"This section has {len(assets)} image/table asset(s); labels or tabular data may "
-        "live inside the file(s) — inspect the asset(s), not just `text`."
-    ]
+    return assets, summaries
 
 
 def _section_view(
@@ -437,12 +404,11 @@ def _section_view(
 ) -> SectionView:
     markdown_path = _section_markdown_path(workspace, section.doc_id, section.id)
     assets: list[AssetRef] = []
-    notes: list[str] = []
+    asset_summaries: list[AssetSummary] = []
     if include_assets:
         if blocks_by_id is None:
             blocks_by_id = _load_doc_blocks(workspace, section.doc_id)
-        assets = _section_assets(workspace, section, blocks_by_id)
-        notes = _asset_notes(section, assets)
+        assets, asset_summaries = _section_assets(workspace, section, blocks_by_id)
     return SectionView(
         id=section.id,
         doc_id=section.doc_id,
@@ -457,7 +423,9 @@ def _section_view(
         block_ids=section.block_ids,
         markdown_path=str(markdown_path),
         assets=assets,
-        notes=notes,
+        # The same checks back the segment stage's quality.json report, so a reader and
+        # an ingest run never disagree about what is wrong with a section.
+        warnings=section_warnings(section, asset_summaries),
     )
 
 

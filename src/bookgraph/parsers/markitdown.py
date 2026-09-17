@@ -21,6 +21,11 @@ _IMAGE_SUFFIXES = frozenset(
     {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp", ".tif", ".tiff"}
 )
 
+# The parsed-document subdirectory staged images live in (MinerU uses the same one, and
+# ``bookgraph.mcp.service._resolve_asset_path`` looks there). Single source of truth for both the
+# on-disk directory and the ``<subdir>/<name>`` reference written into the Markdown.
+_ASSETS_SUBDIR = "images"
+
 # A Markdown image reference: ``![alt](src)`` with an optional ``"title"`` or ``'title'``.
 # - alt tolerates escaped brackets and one level of nesting (``![Fig [2-6]](...)``), so a
 #   bracketed figure number does not make the whole reference silently fail to match.
@@ -136,7 +141,7 @@ def _stage_epub_assets(source: Path, output_dir: Path, markdown: str) -> tuple[s
     except (OSError, zipfile.BadZipFile):
         return markdown, []
 
-    assets_dir = output_dir / "images"
+    assets_dir = output_dir / _ASSETS_SUBDIR
     # Stage into a sibling temp dir and swap it in only once the whole set is extracted, so a
     # corrupt member or mid-run disk error never deletes the previous good images or leaves the
     # live ``images/`` half-populated (the repo supports incremental re-ingestion).
@@ -228,8 +233,14 @@ def _publish_staged_assets(
         return
     if not extraction_failed:
         shutil.rmtree(assets_dir, ignore_errors=True)
-        staging_dir.rename(assets_dir)
-        return
+        try:
+            staging_dir.rename(assets_dir)
+            return
+        except OSError:
+            # rmtree above swallows errors, so a target left non-empty (permission-denied or an
+            # in-use file) makes the rename raise "Directory not empty". Fall back to the
+            # per-file merge rather than crash the parse with a raw traceback.
+            pass
     assets_dir.mkdir(parents=True, exist_ok=True)
     for staged_rel in staged_by_member.values():
         name = PurePosixPath(staged_rel).name
@@ -322,17 +333,21 @@ def _match_member(source_ref: str, image_members: list[str]) -> str | None:
 
 
 def _extract_member(
-    archive: zipfile.ZipFile, member: str, assets_dir: Path, used_names: set[str]
+    archive: zipfile.ZipFile, member: str, dest_dir: Path, used_names: set[str]
 ) -> str:
-    """Extract one zip member into ``images/`` under a collision-free, link-safe name."""
+    """Extract one zip member into ``dest_dir`` under a collision-free, link-safe name.
+
+    Returns the ``images/<name>`` reference the Markdown should carry — the logical published
+    location, which ``dest_dir`` (a staging directory) is renamed or merged into afterwards.
+    """
 
     name = _unique_name(_safe_asset_name(PurePosixPath(member).name), used_names)
-    assets_dir.mkdir(parents=True, exist_ok=True)
+    dest_dir.mkdir(parents=True, exist_ok=True)
     # Stream rather than read the whole member into memory: a scanned technical book can carry
     # tens-of-MB raster figures, and copyfileobj keeps the peak flat on image-heavy EPUBs.
-    with archive.open(member) as source_file, (assets_dir / name).open("wb") as dest:
+    with archive.open(member) as source_file, (dest_dir / name).open("wb") as dest:
         shutil.copyfileobj(source_file, dest)
-    return f"images/{name}"
+    return f"{_ASSETS_SUBDIR}/{name}"
 
 
 def _safe_asset_name(name: str) -> str:
@@ -351,17 +366,23 @@ def _safe_asset_name(name: str) -> str:
 
 
 def _unique_name(name: str, used_names: set[str]) -> str:
-    """Reserve ``name`` under ``images/``, suffixing ``-N`` only on a real basename clash."""
+    """Reserve ``name`` under ``images/``, suffixing ``-N`` only on a real basename clash.
+
+    Uniqueness is checked on a casefolded key while the original case is kept for the on-disk
+    name: the staging filesystem is often case-insensitive (macOS APFS, Windows NTFS), so
+    ``Fig.png`` and ``fig.png`` would otherwise both pass and the second would overwrite the
+    first, leaving two references pointing at one physical file (a silently wrong figure).
+    """
 
     candidate = name or "image"
-    if candidate not in used_names:
-        used_names.add(candidate)
+    if candidate.lower() not in used_names:
+        used_names.add(candidate.lower())
         return candidate
     stem, suffix = PurePosixPath(candidate).stem, PurePosixPath(candidate).suffix
     counter = 1
-    while (candidate := f"{stem}-{counter}{suffix}") in used_names:
+    while (candidate := f"{stem}-{counter}{suffix}").lower() in used_names:
         counter += 1
-    used_names.add(candidate)
+    used_names.add(candidate.lower())
     return candidate
 
 

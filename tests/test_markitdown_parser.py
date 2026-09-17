@@ -242,6 +242,45 @@ def test_markitdown_parser_stages_angle_bracketed_ref_with_space(tmp_path: Path)
     assert [block.metadata["src"] for block in image_blocks] == ["images/my_image.png"]
 
 
+def test_markitdown_parser_disambiguates_case_only_name_clash(tmp_path: Path) -> None:
+    source = tmp_path / "book.epub"
+    _make_epub(source, {"OEBPS/a/Fig.png": b"UPPER", "OEBPS/b/fig.png": b"lower"})
+    output_dir = tmp_path / "parsed" / "book"
+    converter = _FakeConverter("![One](a/Fig.png)\n\n![Two](b/fig.png)\n")
+
+    document = MarkItDownParser(converter=converter).parse(source, output_dir)
+
+    image_blocks = [block for block in document.blocks if block.type == "image"]
+    srcs = [block.metadata["src"] for block in image_blocks]
+    # Names that differ only by case must not collapse to one file on a case-insensitive FS.
+    assert len(set(srcs)) == 2
+    contents = {(output_dir / src).read_bytes() for src in srcs}
+    assert contents == {b"UPPER", b"lower"}
+
+
+def test_markitdown_parser_falls_back_to_merge_when_rename_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "book.epub"
+    _make_epub(source, {"OEBPS/assets/fig.png": b"png"})
+    output_dir = tmp_path / "parsed" / "book"
+    converter = _FakeConverter("![Fig](assets/fig.png)\n")
+
+    original_rename = Path.rename
+
+    def _no_rename(self: Path, target: object) -> Path:
+        raise OSError("Directory not empty")
+
+    monkeypatch.setattr(Path, "rename", _no_rename)
+
+    # The rename-based fast path fails, but the per-file merge fallback still publishes the asset.
+    MarkItDownParser(converter=converter).parse(source, output_dir)
+
+    monkeypatch.setattr(Path, "rename", original_rename)
+    assert (output_dir / "images" / "fig.png").read_bytes() == b"png"
+    assert not (output_dir / ".images.staging").exists()
+
+
 def test_markitdown_parser_warns_when_exact_and_tail_member_collide(tmp_path: Path) -> None:
     source = tmp_path / "book.epub"
     _make_epub(

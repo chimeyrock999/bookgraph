@@ -148,6 +148,70 @@ def test_markitdown_parser_skips_image_refs_inside_code(tmp_path: Path) -> None:
     assert not (output_dir / "images" / "fenced.png").exists()
 
 
+def test_markitdown_parser_stages_bracketed_caption_reference(tmp_path: Path) -> None:
+    figure = b"png bytes"
+    source = tmp_path / "book.epub"
+    _make_epub(source, {"OEBPS/assets/x.png": figure})
+    output_dir = tmp_path / "parsed" / "book"
+    # A figure number in brackets inside the alt text must not defeat the match.
+    converter = _FakeConverter("![Fig [2-6]](assets/x.png)\n")
+
+    document = MarkItDownParser(converter=converter).parse(source, output_dir)
+
+    assert (output_dir / "images" / "x.png").read_bytes() == figure
+    image_blocks = [block for block in document.blocks if block.type == "image"]
+    assert [block.metadata["src"] for block in image_blocks] == ["images/x.png"]
+    assert "unresolved_image_count" not in document.metadata
+
+
+def test_markitdown_parser_dedups_unresolved_refs_by_normalized_path(tmp_path: Path) -> None:
+    source = tmp_path / "book.epub"
+    _make_epub(source, {"OEBPS/text/ch01.xhtml": b"<html/>"})
+    output_dir = tmp_path / "parsed" / "book"
+    # Same missing file, once bare and once with a fragment — one unresolved image, not two.
+    converter = _FakeConverter(
+        "![A](assets/missing.png)\n\n![B](assets/missing.png#note)\n",
+    )
+
+    with pytest.warns(UserWarning):
+        document = MarkItDownParser(converter=converter).parse(source, output_dir)
+
+    assert document.metadata["unresolved_image_count"] == 1
+
+
+def test_markitdown_parser_keeps_old_images_when_extraction_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "book.epub"
+    output_dir = tmp_path / "parsed" / "book"
+    _make_epub(source, {"OEBPS/assets/old.png": b"good"})
+    MarkItDownParser(converter=_FakeConverter("![Old](assets/old.png)\n")).parse(
+        source, output_dir
+    )
+    assert (output_dir / "images" / "old.png").read_bytes() == b"good"
+
+    # Re-parse an EPUB whose referenced member cannot be extracted (simulate a corrupt member
+    # / disk error). The parse must not crash, the reference is surfaced as unresolved, and the
+    # previous good asset is preserved rather than deleted before the new set is complete.
+    import bookgraph.parsers.markitdown as markitdown_module
+
+    def _boom(*_args: object, **_kwargs: object) -> str:
+        raise OSError("bad member")
+
+    monkeypatch.setattr(markitdown_module, "_extract_member", _boom)
+    _make_epub(source, {"OEBPS/assets/new.png": b"payload"})
+
+    with pytest.warns(UserWarning):
+        document = MarkItDownParser(converter=_FakeConverter("![New](assets/new.png)\n")).parse(
+            source, output_dir
+        )
+
+    assert document.metadata["unresolved_image_count"] == 1
+    assert (output_dir / "images" / "old.png").read_bytes() == b"good"
+    assert not (output_dir / "images" / "new.png").exists()
+    assert not (output_dir / ".images.staging").exists()
+
+
 def test_markitdown_parser_records_unresolved_image_count(tmp_path: Path) -> None:
     source = tmp_path / "book.epub"
     _make_epub(source, {"OEBPS/assets/there.png": b"png"})

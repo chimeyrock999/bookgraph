@@ -13,7 +13,7 @@ from urllib.parse import unquote
 from bookgraph.models import Document
 from bookgraph.parsers.markdown import document_from_markdown
 from bookgraph.ports import DocumentParser
-from bookgraph.utils import doc_id_from_path
+from bookgraph.utils import doc_id_from_path, is_url
 
 # Image extensions worth unpacking from an EPUB. Kept broad so an unusual figure format
 # (e.g. an SVG diagram) is staged rather than silently dropped as a broken link.
@@ -24,8 +24,12 @@ _IMAGE_SUFFIXES = frozenset(
 # A Markdown image reference: ``![alt](src)`` with an optional ``"title"`` or ``'title'``.
 # The src stops at whitespace or the closing paren, matching what MarkItDown/markdownify emit;
 # both quote styles are accepted so a single-quoted title never leaves the reference unstaged.
+# The alt group tolerates escaped brackets and one level of nesting (``![Fig [2-6]](...)``) so a
+# caption with a bracketed figure number does not make the whole reference fail to match — which
+# would drop the image silently, with no staging and no unresolved-count warning.
 _IMAGE_REFERENCE = re.compile(
-    r"!\[(?P<alt>[^\]]*)\]\(\s*(?P<src>[^)\s]+)(?P<title>\s+(?:\"[^\"]*\"|'[^']*'))?\s*\)"
+    r"!\[(?P<alt>(?:\\.|\[[^\]]*\]|[^\[\]\\])*)\]"
+    r"\(\s*(?P<src>[^)\s]+)(?P<title>\s+(?:\"[^\"]*\"|'[^']*'))?\s*\)"
 )
 
 # Characters that break a bare CommonMark link destination (whitespace splits it into text;
@@ -130,47 +134,61 @@ def _stage_epub_assets(source: Path, output_dir: Path, markdown: str) -> tuple[s
         return markdown, []
 
     assets_dir = output_dir / "images"
-    # Re-parsing an edited EPUB under the same doc_id must not leave orphaned images behind
-    # (the repo supports incremental re-ingestion), so start from a clean staging directory.
-    shutil.rmtree(assets_dir, ignore_errors=True)
+    # Stage into a sibling temp dir and swap it in only once the whole set is extracted, so a
+    # corrupt member or mid-run disk error never deletes the previous good images or leaves the
+    # live ``images/`` half-populated (the repo supports incremental re-ingestion).
+    staging_dir = output_dir / ".images.staging"
+    shutil.rmtree(staging_dir, ignore_errors=True)
+    staged_by_member: dict[str, str] = {}
+    used_names: set[str] = set()
+    missing: list[str] = []
 
-    with archive:
-        image_members = [
-            name
-            for name in archive.namelist()
-            if not name.endswith("/") and PurePosixPath(name).suffix.lower() in _IMAGE_SUFFIXES
-        ]
-        staged_by_member: dict[str, str] = {}
-        used_names: set[str] = set()
-        missing: list[str] = []
-        dir_ready = False
+    try:
+        with archive:
+            image_members = [
+                name
+                for name in archive.namelist()
+                if not name.endswith("/")
+                and PurePosixPath(name).suffix.lower() in _IMAGE_SUFFIXES
+            ]
 
-        def stage(source_ref: str) -> str | None:
-            nonlocal dir_ready
-            member = _match_member(source_ref, image_members)
-            if member is None:
-                return None
-            staged = staged_by_member.get(member)
-            if staged is None:
-                if not dir_ready:
-                    assets_dir.mkdir(parents=True, exist_ok=True)
-                    dir_ready = True
-                staged = _extract_member(archive, member, assets_dir, used_names)
-                staged_by_member[member] = staged
-            return staged
+            def stage(source_ref: str) -> str | None:
+                member = _match_member(source_ref, image_members)
+                if member is None:
+                    return None
+                staged = staged_by_member.get(member)
+                if staged is None:
+                    try:
+                        staged = _extract_member(archive, member, staging_dir, used_names)
+                    except (OSError, zipfile.BadZipFile):
+                        # A corrupt/unreadable member is treated as unresolved (warned), never a
+                        # crash that would abort the whole parse with a raw traceback.
+                        return None
+                    staged_by_member[member] = staged
+                return staged
 
-        def rewrite(match: re.Match[str]) -> str:
-            src = match.group("src")
-            if _looks_remote(src):
-                return match.group(0)
-            staged = stage(src)
-            if staged is None:
-                missing.append(src)
-                return match.group(0)
-            # Preserve any ``"title"`` the source carried; only the destination is repointed.
-            return f"![{match.group('alt')}]({staged}{match.group('title') or ''})"
+            def rewrite(match: re.Match[str]) -> str:
+                src = match.group("src")
+                if is_url(src):
+                    return match.group(0)
+                staged = stage(src)
+                if staged is None:
+                    # Normalise before recording so ``x.png`` and ``x.png#note`` count once.
+                    missing.append(_clean_reference(src))
+                    return match.group(0)
+                # Preserve any ``"title"`` the source carried; only the destination is repointed.
+                return f"![{match.group('alt')}]({staged}{match.group('title') or ''})"
 
-        rewritten = _rewrite_image_references(markdown, rewrite)
+            rewritten = _rewrite_image_references(markdown, rewrite)
+
+        # Swap the freshly staged set in only when it is non-empty: replacing the live images
+        # with an empty directory would turn a run where nothing could be extracted (a failed
+        # or reference-less re-parse) into a destructive wipe of the previous good assets.
+        if staged_by_member:
+            shutil.rmtree(assets_dir, ignore_errors=True)
+            staging_dir.rename(assets_dir)
+    finally:
+        shutil.rmtree(staging_dir, ignore_errors=True)
 
     unique_missing = sorted(set(missing))
     if unique_missing:
@@ -309,10 +327,6 @@ def _clean_reference(source_ref: str) -> str:
 
     path = source_ref.split("#", 1)[0].split("?", 1)[0]
     return unquote(path).strip()
-
-
-def _looks_remote(source_ref: str) -> bool:
-    return "://" in source_ref or source_ref.startswith("data:")
 
 
 def _load_markitdown() -> MarkdownConverter:

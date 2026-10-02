@@ -11,7 +11,9 @@ from bookgraph.concept_hygiene import (
 )
 from bookgraph.mcp.asset_views import AssetRef
 from bookgraph.models import (
+    AlignmentStatus,
     MissingTranslationAsset,
+    TranslationAlignmentIssue,
     TranslationStructureIssue,
 )
 from bookgraph.quality import (
@@ -22,6 +24,19 @@ from bookgraph.translations import (
 )
 
 
+class SourceBlockView(BaseModel):
+    """One parsed source block of a section, for writing a block-aligned translation.
+
+    ``id`` is what a translation unit's ``source_block_ids`` reference.
+    """
+
+    id: str
+    type: str
+    text: str
+    level: int | None = None
+    code: bool = False
+
+
 class SectionView(BaseModel):
     """A section's full reading content plus provenance and its Markdown path.
 
@@ -29,7 +44,8 @@ class SectionView(BaseModel):
     :mod:`bookgraph.quality`) — a broken page span, a disputed asset type, prose that
     is only asset captions — so a reader sees them inline instead of having to inspect
     ``sources/parsed/<doc_id>/document.json``. Page-range warnings are always present;
-    asset warnings need ``include_assets`` (the default).
+    asset warnings need ``include_assets`` (the default). ``blocks`` lists the section's
+    parsed source blocks in reading order, only when requested (``include_blocks``).
     """
 
     id: str
@@ -46,6 +62,7 @@ class SectionView(BaseModel):
     markdown_path: str
     assets: list[AssetRef] = Field(default_factory=list)
     warnings: list[SectionWarning] = Field(default_factory=list)
+    blocks: list[SourceBlockView] | None = None
 
 
 class NextSection(BaseModel):
@@ -347,6 +364,12 @@ class SectionArtifactView(BaseModel):
     ``link`` to write) is non-empty, and stays ``None`` for an untracked body.
     ``content`` is the translation body when requested and present.
     ``structure_issues``: see :mod:`bookgraph.mcp.translation_structure`.
+    ``alignment_status`` says whether the body is mapped back to the section's source
+    blocks: ``aligned`` (``aligned_units`` units; ``alignment_issues`` lists source text
+    blocks no unit translates), ``unaligned`` (written as plain ``content`` — valid, the
+    bilingual export pairs it at section level), or ``invalid`` (the stored alignment no
+    longer fits the section; ``alignment_issues`` says why — rewrite it with ``units``).
+    ``None`` when there is no body.
     """
 
     type: str = "translation"
@@ -366,6 +389,9 @@ class SectionArtifactView(BaseModel):
     content: str | None = None
     structure_issues: list[TranslationStructureIssue] = Field(default_factory=list)
     missing_assets: list[MissingTranslationAsset] = Field(default_factory=list)
+    alignment_status: AlignmentStatus | None = None
+    aligned_units: int = 0
+    alignment_issues: list[TranslationAlignmentIssue] = Field(default_factory=list)
 
 
 class SectionArtifactList(BaseModel):

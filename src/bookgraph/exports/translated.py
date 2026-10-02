@@ -41,11 +41,11 @@ from html import escape
 from pathlib import Path
 
 from markdown_it import MarkdownIt
-from markdown_it.token import Token
 
 from bookgraph.assets import asset_reference, resolve_asset_path
 from bookgraph.books import read_book_bookmarks
 from bookgraph.documents import read_document
+from bookgraph.exports.bilingual import block_marker, mark_units
 from bookgraph.exports.images import AssetCounter, AssetOrigin, ImageEmbedder
 from bookgraph.exports.links import resolve_section_links
 from bookgraph.exports.models import (
@@ -72,6 +72,7 @@ from bookgraph.exports.render import (
     heading,
 )
 from bookgraph.exports.renderers import ExportRenderer
+from bookgraph.exports.tokens import first_heading_text, shift_headings
 from bookgraph.models import ASSET_BLOCK_TYPES, CanonicalBlock, Section
 from bookgraph.quality import (
     ASSET_CAPTIONS_ONLY,
@@ -80,6 +81,7 @@ from bookgraph.quality import (
     section_warnings,
 )
 from bookgraph.sections import read_sections
+from bookgraph.translation_alignment import AlignmentCheck, translation_alignment
 from bookgraph.translation_assets import check_translation_assets, translation_link_bases
 from bookgraph.translation_structure import (
     check_section_translation,
@@ -197,6 +199,7 @@ def build_translated_export(
         blocks=blocks,
         manifest=manifest,
         show_status=show_status,
+        align_rows=mode == "bilingual",
     )
 
     outline = build_outline(sections, read_book_bookmarks(workspace, doc_id))
@@ -220,7 +223,7 @@ def build_translated_export(
         else {}
     )
     rendered, link_warnings = resolve_section_links(
-        outline, rendered, originals, assembler.original_source, lang
+        outline, rendered, originals, assembler.original_source, lang, assembler.alignments
     )
     assembler.warnings.extend(link_warnings)
     report = ExportReport.from_sections(
@@ -272,6 +275,10 @@ def _relative(workspace: WorkspacePaths, path: Path | None) -> str | None:
 class _Assembler(ImageEmbedder):
     blocks: dict[str, CanonicalBlock]
     manifest: Path
+    # Bilingual mode: mark units and source blocks so rows can follow the alignment,
+    # recorded by section id (:mod:`.bilingual`).
+    align_rows: bool = False
+    alignments: dict[str, AlignmentCheck] = field(default_factory=dict)
     # Rendered originals by section id: a bilingual fallback row renders (and warns) once.
     _originals: dict[str, tuple[str, AssetCounter]] = field(default_factory=dict)
     _md: MarkdownIt = field(
@@ -416,8 +423,8 @@ class _Assembler(ImageEmbedder):
         self._asset_warnings(section, body, state)
 
         tokens = self._md.parse(body)
-        heading_title = _first_heading_text(tokens)
-        _shift_headings(tokens, depth)
+        heading_title = first_heading_text(tokens)
+        shift_headings(tokens, depth)
         self._rewrite_images(
             tokens,
             section.id,
@@ -435,6 +442,10 @@ class _Assembler(ImageEmbedder):
             heading_end = next(i for i, t in enumerate(tokens) if t.type == "heading_close") + 1
             heading_html = self._md.renderer.render(tokens[:heading_end], self._md.options, {})
             tokens = tokens[heading_end:]
+        if self.align_rows:
+            check = translation_alignment(state, section, self.blocks)
+            self.alignments[section.id] = check
+            tokens = mark_units(tokens, body, check.units)
         html = self._md.renderer.render(tokens, self._md.options, {})
         return title or section.title, heading_html, html
 
@@ -545,6 +556,8 @@ class _Assembler(ImageEmbedder):
             return self._markdown(section.text, section.id, counter, source)
         parts: list[str] = []
         for index, block in enumerate(blocks):
+            if self.align_rows:
+                parts.append(block_marker(block.id))
             if block.type == "title":
                 if index == 0 and block.text.strip() == section.title.strip():
                     continue  # the section heading is already rendered
@@ -617,36 +630,6 @@ class _Assembler(ImageEmbedder):
         tokens = self._md.parse(text)
         self._rewrite_images(tokens, section_id, self._parsed_bases(), counter, source, block_id)
         return str(self._md.renderer.render(tokens, self._md.options, {}))
-
-
-def _first_heading_text(tokens: list[Token]) -> str | None:
-    """The plain text of a leading heading (``# *Giới thiệu*`` → ``Giới thiệu``).
-
-    Used as a TOC/report title, so Markdown syntax is dropped: only text and code
-    spans are kept, and line breaks become spaces.
-    """
-
-    if len(tokens) < 2 or tokens[0].type != "heading_open" or tokens[1].type != "inline":
-        return None
-    parts = []
-    for child in tokens[1].children or []:
-        if child.type in {"text", "code_inline"}:
-            parts.append(child.content)
-        elif child.type in {"softbreak", "hardbreak"}:
-            parts.append(" ")
-    return " ".join("".join(parts).split()) or None
-
-
-def _shift_headings(tokens: list[Token], level: int) -> None:
-    """Re-level headings so the artifact's top heading sits at the section's level."""
-
-    levels = [int(t.tag[1]) for t in tokens if t.type in {"heading_open", "heading_close"}]
-    if not levels:
-        return
-    offset = max(1, min(level, 6)) - min(levels)
-    for token in tokens:
-        if token.type in {"heading_open", "heading_close"}:
-            token.tag = f"h{max(1, min(int(token.tag[1]) + offset, 6))}"
 
 
 def report_path_for(output: Path) -> Path:

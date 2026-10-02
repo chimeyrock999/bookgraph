@@ -41,7 +41,7 @@ URLs (``https:``, ``mailto:``, …), absolute paths and links to non-HTML files
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from html import escape, unescape
 from pathlib import PurePosixPath
 from urllib.parse import unquote
@@ -57,6 +57,7 @@ from bookgraph.exports.models import (
 )
 from bookgraph.exports.outline import OutlineNode, flatten
 from bookgraph.models import Section
+from bookgraph.translation_alignment import AlignmentCheck
 
 # File types of a source book's own documents (EPUB/HTML book chapters).
 _BOOK_DOCUMENT_SUFFIXES = frozenset({".html", ".htm", ".xhtml"})
@@ -109,22 +110,25 @@ def resolve_section_links(
     originals: dict[str, tuple[str, int, int]],
     original_source: Callable[[Section], str | None],
     lang: str,
+    alignments: Mapping[str, AlignmentCheck] | None = None,
 ) -> tuple[dict[str, tuple[ExportSection, str]], list[ExportWarning]]:
     """Resolve every section's links, and pair it with its original in ``bilingual`` mode.
 
     ``rendered`` is each section's report entry and mixed rendering; ``originals`` its
     bilingual left column as ``(html, assets_embedded, assets_missing)`` (empty in
-    ``translated`` mode). Links resolve against the anchors the page keeps — the mixed
-    renderings' (the left column's ids are stripped). Each column is resolved on its
-    own, so an unresolved link names the file it was read from (``original_source``
-    for an original section) and the column it is in, once per section: a link in both
-    columns is reported for the mixed one. Returns the sections' final entries and
-    bodies, and the warnings in reading order.
+    ``translated`` mode), and ``alignments`` the translations' block alignments, which
+    split an aligned section into one row per unit. Links resolve against the anchors
+    the page keeps — the mixed renderings' (the left column's ids are stripped). Each
+    column is resolved on its own, so an unresolved link names the file it was read
+    from (``original_source`` for an original section) and the column it is in, once
+    per section: a link in both columns is reported for the mixed one. Returns the
+    sections' final entries and bodies, and the warnings in reading order.
     """
 
     links = InternalLinks(outline, [body for _, body in rendered.values()])
     resolved: dict[str, tuple[ExportSection, str]] = {}
     warnings: list[ExportWarning] = []
+    alignments = alignments or {}
     for node in flatten(outline):
         section, (entry, body) = node.section, rendered[node.section.id]
         body, missing = links.rewrite(body, section.id)
@@ -139,7 +143,15 @@ def resolve_section_links(
                 for href in original_missing
                 if href not in missing
             )
-            entry, body = bilingual_section(entry, body, (html, embedded, assets_missing), lang)
+            entry, body = bilingual_section(
+                entry,
+                body,
+                (html, embedded, assets_missing),
+                lang,
+                # Only a rendered translation is aligned; a fallback row has none.
+                alignment=alignments.get(section.id) if entry.artifact is not None else None,
+                block_ids=section.block_ids,
+            )
         resolved[section.id] = (entry, body)
     return resolved, warnings
 

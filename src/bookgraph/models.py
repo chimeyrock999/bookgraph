@@ -110,6 +110,30 @@ class SectionAnnotation(BaseModel):
 SectionArtifactType = Literal["translation"]
 
 
+class TranslationUnit(BaseModel):
+    """One translated unit as a writer submits it: Markdown plus the blocks it translates.
+
+    ``source_block_ids`` are ids of the section's ``CanonicalBlock``s, in reading order.
+    Several ids merge paragraphs into one unit (n:1); consecutive units that repeat a
+    block split it (1:n).
+    """
+
+    source_block_ids: list[str]
+    content: str
+
+
+class AlignedUnit(BaseModel):
+    """One unit of a block-aligned translation as the registry stores it.
+
+    ``start``/``end`` are the unit's character offsets in the decoded body
+    (``body[start:end]``); the units appear in body order and source order.
+    """
+
+    source_block_ids: list[str]
+    start: int
+    end: int
+
+
 class SectionArtifact(BaseModel):
     """Registry metadata for one generated per-section artifact (e.g. a translation).
 
@@ -124,6 +148,9 @@ class SectionArtifact(BaseModel):
     ``notes`` is the writer's free-text side channel — QA/checker results, terminology
     decisions, job remarks. It lives only here, never in the body, so a translator has
     a place for everything that is not book content.
+    ``alignment`` (optional) maps the body back to the source blocks it translates, unit
+    by unit (see :class:`AlignedUnit`); ``None`` is an unaligned translation, which is
+    still valid. It is provenance, not content: neither hash covers it.
     """
 
     type: SectionArtifactType = "translation"
@@ -137,6 +164,7 @@ class SectionArtifact(BaseModel):
     model: str | None = None
     created_at: str | None = None
     notes: str | None = None
+    alignment: list[AlignedUnit] | None = None
 
 
 # What a translation must carry over unchanged from its source section (see
@@ -172,3 +200,28 @@ class MissingTranslationAsset(BaseModel):
     link: str
     reference: str
     caption: str = ""
+
+
+# Whether a translation's body is mapped back to its source blocks: ``aligned`` (a valid
+# alignment), ``unaligned`` (none recorded), ``invalid`` (recorded, but it no longer fits
+# the section's blocks or the body — read as unaligned).
+AlignmentStatus = Literal["aligned", "unaligned", "invalid"]
+
+# ``unaligned_block`` is a warning (a source text block no unit translates); the others
+# make an alignment invalid, and are refused on write.
+AlignmentIssueCode = Literal[
+    "unaligned_block", "empty_unit", "foreign_block", "out_of_order", "bad_range"
+]
+
+
+class TranslationAlignmentIssue(BaseModel):
+    """One problem with a translation's block alignment.
+
+    ``unit`` is the unit's index (``None`` for a gap); ``block_id`` the source block
+    concerned, when there is one.
+    """
+
+    code: AlignmentIssueCode
+    message: str
+    unit: int | None = None
+    block_id: str | None = None

@@ -243,5 +243,36 @@ def test_server_instructions_tell_agents_where_diagnostics_go(tmp_path: Path) ->
         "inspected_assets",
         "{#id} heading ids byte-for-byte",
         "structure_issues",
+        "units=",
+        "include_blocks=True",
     ):
         assert rule in instructions
+
+
+def test_translation_tools_take_block_aligned_units(workspace: WorkspacePaths) -> None:
+    server = build_server(workspace)
+    key = {"doc_id": "tiny", "section_id": "tiny.chapter-one", "lang": "vi"}
+
+    section = asyncio.run(
+        server.call_tool(
+            "get_section",
+            {"doc_id": "tiny", "section_id": "tiny.chapter-one", "include_blocks": True},
+        )
+    ).structured_content
+    asyncio.run(
+        server.call_tool(
+            "write_section_translation",
+            {
+                **key,
+                "units": [
+                    {"source_block_ids": ["b0", "b1"], "content": "# Chương Một\n\nMở đầu."},
+                    {"source_block_ids": ["b3"], "content": "Văn bản sau hình."},
+                ],
+            },
+        )
+    )
+    cached = asyncio.run(server.call_tool("get_section_translation", key)).structured_content
+
+    assert [block["id"] for block in section["blocks"]] == ["b0", "b1", "b2", "b3"]
+    assert (cached["alignment_status"], cached["aligned_units"]) == ("aligned", 2)
+    assert cached["content"] == "# Chương Một\n\nMở đầu.\n\nVăn bản sau hình.\n"

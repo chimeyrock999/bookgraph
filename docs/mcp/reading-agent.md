@@ -128,7 +128,13 @@ A self-serve agent drives an entire session with these tools alone:
      links, and a claim the body does not back is refused. Translate prose and link labels,
      not structure: link destinations, fragment ids, image/file paths, reference
      identifiers, HTML anchors, and `{#id}` heading ids stay byte-for-byte; the write
-     result's `structure_issues` lists any that changed.
+     result's `structure_issues` lists any that changed. Prefer a block-aligned write:
+     `get_section(doc_id, section_id, include_blocks=True)` lists the source blocks,
+     and `write_section_translation(..., units=[{source_block_ids, content}, ...])`
+     takes one unit per paragraph instead of `content` (several ids merge paragraphs,
+     a repeated id splits one), so `export translated-pdf --mode bilingual`
+     interleaves paragraph by paragraph; `alignment_status` / `alignment_issues` on
+     the result report it (see *Block-aligned translations* in `docs/cli/artifacts.md`).
      `list_section_artifacts(doc_id, lang)` lists every cached translation with its
      status, so a job can redo the `stale` ones after a re-segment.
    - **Keep artifacts publication-clean — use the right channel.** A translation
@@ -171,7 +177,7 @@ and the report lists every reason:
 
 ```text
 get_next_section(plan_id)                       # the batch
-  … write_section_translation(doc_id, section_id, "vi", content, ...)
+  … write_section_translation(doc_id, section_id, "vi", units=[...], ...)
   … open each asset path, annotate_section(...)
   … bookgraph index build <ws> <doc_id>         # or index="deferred", see below
 complete_reading_batch(plan_id,

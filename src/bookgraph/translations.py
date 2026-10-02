@@ -35,7 +35,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from bookgraph.models import Section, SectionArtifact
+from bookgraph.models import AlignedUnit, Section, SectionArtifact
 from bookgraph.utils import validate_slug_id
 from bookgraph.workspace import WorkspacePaths
 
@@ -159,6 +159,7 @@ def write_translation(
     model: str | None = None,
     created_at: str | None = None,
     notes: str | None = None,
+    alignment: list[AlignedUnit] | None = None,
 ) -> SectionArtifact:
     """Persist a translation body and register it against the section's current content.
 
@@ -167,6 +168,8 @@ def write_translation(
 
     ``content`` is the book content only; anything about the translation that is not
     (QA results, terminology notes) goes in ``notes``, stored in the sidecar only.
+    ``alignment`` maps ``content`` back to the section's source blocks (see
+    :mod:`bookgraph.translation_alignment`); callers validate it first.
     """
 
     paths = translation_paths(workspace, lang, section.doc_id, section.id)
@@ -182,6 +185,7 @@ def write_translation(
         model=model,
         created_at=created_at,
         notes=notes or None,
+        alignment=alignment,
     )
     # Drop the old sidecar, then body, then the new sidecar (the commit record): between
     # the renames the body is untracked, never described by a previous write's sidecar.
@@ -227,6 +231,20 @@ class TranslationState:
     # The exact body bytes the status was decided on; serve these rather than re-reading
     # the file, so a concurrent rewrite cannot pair a new body with the old sidecar.
     body: bytes | None = None
+
+
+def decoded_body(state: TranslationState) -> str | None:
+    """The state's body as text, or ``None`` when there is none or it is not UTF-8.
+
+    Alignment spans are offsets into this text (frontmatter included).
+    """
+
+    if state.body is None:
+        return None
+    try:
+        return state.body.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
 
 
 def translation_state(

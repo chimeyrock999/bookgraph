@@ -25,8 +25,8 @@ from pydantic import BaseModel, Field
 
 from bookgraph.annotations import annotation_path, read_annotation
 from bookgraph.index import default_index_backend
-from bookgraph.mcp.service import (
-    ReadingServiceError,
+from bookgraph.mcp.errors import ReadingServiceError
+from bookgraph.mcp.loading import (
     _current_batch,
     _load_doc_blocks,
     _load_doc_sections,

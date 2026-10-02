@@ -22,7 +22,7 @@ _IMAGE_SUFFIXES = frozenset(
 )
 
 # The parsed-document subdirectory staged images live in (MinerU uses the same one, and
-# ``bookgraph.mcp.service._resolve_asset_path`` looks there). Single source of truth for both the
+# ``bookgraph.assets.resolve_asset_path`` looks there). Single source of truth for both the
 # on-disk directory and the ``<subdir>/<name>`` reference written into the Markdown.
 _ASSETS_SUBDIR = "images"
 
@@ -116,7 +116,7 @@ def _stage_epub_assets(source: Path, output_dir: Path, markdown: str) -> tuple[s
     zip-relative path it found (e.g. ``assets/ddia_0206.png``) and never extracts the bytes,
     so the reference resolves to nothing under ``sources/parsed/<doc_id>/``. Unpack each
     referenced image into ``output_dir/images/`` — the staged-asset directory MinerU also uses
-    (``bookgraph.mcp.service._resolve_asset_path`` looks there) — and rewrite the reference to a
+    (``bookgraph.assets.resolve_asset_path`` looks there) — and rewrite the reference to a
     stable ``images/<name>`` path the downstream asset resolver can open. References that cannot
     be matched to exactly one file in the EPUB are left untouched, collected, and reported via a
     warning, so a lossy or ambiguous conversion is surfaced rather than shipped as a silently

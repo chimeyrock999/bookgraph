@@ -1107,10 +1107,19 @@ chapters of one book. A section whose bookmark sits directly under a bookmark ti
 as a part is a chapter too. Other sections flow inside their chapter. This matters for PDFs: MinerU marks every title as level
 1, so a heading-segmented PDF has a flat manifest that the outline restores.
 
+Two reader-facing modes (`--mode`):
+
+```text
+translated = mixed edition: translation where available, --fallback otherwise
+bilingual  = original | mixed   (side by side, one row per section)
+```
+
 ```bash
 bookgraph export translated-pdf /path/to/workspace ddia --lang vi
 bookgraph export translated-pdf /path/to/workspace ddia --lang vi --fallback skip \
   --out exports/ddia.vi-progress.pdf
+bookgraph export translated-pdf /path/to/workspace ddia --lang vi --mode bilingual \
+  --out exports/ddia.en-vi.pdf
 bookgraph export translated-pdf /path/to/workspace ddia --renderer html   # no PDF extra needed
 bookgraph export translated-pdf /path/to/workspace ddia --check           # coverage + QA only
 ```
@@ -1120,15 +1129,34 @@ bookgraph export translated-pdf /path/to/workspace ddia --check           # cove
 - `workspace_path`, `doc_id`: workspace root and a segmented document id (slug-validated).
 - `--lang` (default `vi`): translation language code, normalised like the registry
   (lowercased, so `VI` and `pt-BR` work).
+- `--mode translated|bilingual` (default `translated`):
+  - `translated` renders each section once: its translation, or the `--fallback`
+    result.
+  - `bilingual` renders each section as a two-column row on a landscape page. The
+    left column is always the original section (rebuilt the same way as an
+    `original` fallback, under its source title). The right column is exactly what
+    `translated` mode renders for that section, so it follows `--fallback` too.
+    Each section's row sits inside its parent's `<section>`, like the sections in
+    `translated` mode, and both columns put its heading at the outline depth.
+    Rows align at section level: translations are free Markdown without block ids,
+    so finer alignment is not attempted. Figures, tables and code appear in the
+    column whose content carries them (the original's figures on the left, the
+    translation's own image links and code on the right); an untranslated section
+    shows the original in both columns. HTML anchors (`id`, and `name` on `<a>`) are
+    kept only in the right column, so every id on the page is unique and in-page links
+    from either column land in the reading edition. The left column is tagged
+    `lang="und"` (no source language is stored), and only right-column headings feed
+    the PDF outline.
 - `--fallback original|skip|fail` (default `original`). This controls what happens to
-  a section that has no translation:
+  a section that has no translation (in `bilingual` mode, to its right column):
   - `original` renders the original section;
   - `skip` renders the title only;
   - `fail` exits `1` and lists every untranslated section. Nothing is written. A
     `stale` or `untracked` translation counts as translated (use `--strict` to refuse
     stale ones).
 - `--out`: output file. A relative path is resolved under the workspace. The default
-  is `exports/<doc_id>.<lang>-progress.pdf`, or `.html` with `--renderer html`.
+  is `exports/<doc_id>.<lang>-progress.pdf` (`exports/<doc_id>.<lang>-bilingual.pdf`
+  with `--mode bilingual`), or `.html` with `--renderer html`.
 - `--renderer auto|weasyprint|playwright|html` (default `auto`). `auto` writes HTML
   for a `.html`/`.htm` output. For any other output it uses the first installed PDF
   backend, trying `weasyprint` first and then `playwright`. Naming a backend that is
@@ -1137,13 +1165,18 @@ bookgraph export translated-pdf /path/to/workspace ddia --check           # cove
   unsupported, a translation is `stale` (`translation_stale`), or a registered
   translation left out its section's figures/tables (`translation_missing_assets`),
   or a translation changed its section's link targets, anchors, or paths
-  (`translation_structure_changed`). An `untracked` translation only warns.
+  (`translation_structure_changed`). An `untracked` translation only warns. In
+  `bilingual` mode the left column counts too: a missing original asset of a
+  **translated** section is refused, even though `translated` mode never shows it.
+  The same workspace can therefore pass `--strict` in `translated` mode and fail it
+  in `bilingual` mode.
 - `--show-status`: debug view. Also print status metadata on the reading pages:
-  coverage/doc_id/fallback on the title page, TOC status markers (`(original)`,
+  coverage/doc_id/mode/fallback on the title page, TOC status markers (`(original)`,
   `(may be outdated)`, `(not tracked)`, `(skipped)`), the *Untranslated — original
-  text* / *Not translated yet* / freshness notes, and *Missing asset* placeholders.
-  Without it that metadata is only in the report and the CLI output, so a reading
-  edition carries book content only.
+  text* / *Not translated yet* / freshness notes, *Missing asset* placeholders, and
+  in `bilingual` mode the legend's sentence on how untranslated rows read. Without it
+  that metadata is only in the report and the CLI output, so a reading edition
+  carries book content only (a `bilingual` page still names its two columns).
 - `--check`: preflight only. Prints coverage and warnings and writes nothing. With
   `--strict`, it exits `1` whenever the real export would be refused.
 - The `--out` suffix must match the renderer: `.pdf` for `weasyprint`/`playwright`,
@@ -1199,7 +1232,7 @@ All images are embedded as `data:` URIs, so the output is self-contained.
 
 ### Prints
 
-- `doc_id`, `lang`, `fallback`, and `coverage: <translated>/<total> (<pct>%)`.
+- `doc_id`, `lang`, `mode`, `fallback`, and `coverage: <translated>/<total> (<pct>%)`.
 - One `warning: <code>: <section_id>: <message>` line per warning, followed by
   ` (in <source_path>)` when the warning names the file carrying the reference.
 - `renderer`, `export`, and `report` paths. With `--check` it prints
@@ -1208,7 +1241,7 @@ All images are embedded as `data:` URIs, so the output is self-contained.
 ### Errors
 
 - Missing sections manifest → `Sections manifest not found` (exit 2).
-- Unknown `--fallback` / `--renderer`, an invalid `--lang`, or an `--out` suffix that
+- Unknown `--mode` / `--fallback` / `--renderer`, an invalid `--lang`, or an `--out` suffix that
   does not match the renderer → exit 2.
 - `--fallback fail` with untranslated sections (including empty or unreadable
   artifacts; stale and untracked translations count as translated), `--strict` with

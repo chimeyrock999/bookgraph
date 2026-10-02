@@ -124,6 +124,7 @@ Sections that are not translated yet appear in the original language:
 
 ```bash
 bookgraph export translated-pdf /path/to/workspace <doc_id> --lang vi   # needs: --extra pdf or pdf-chromium
+bookgraph export translated-pdf /path/to/workspace <doc_id> --lang vi --mode bilingual   # original | translated side by side
 bookgraph export translated-pdf /path/to/workspace <doc_id> --check     # coverage + missing-asset report
 bookgraph assets repair /path/to/workspace <doc_id> --dry-run           # recover figures the parser never staged
 ```
@@ -242,6 +243,11 @@ src/bookgraph/
   assets.py                 # one asset-reference resolver (shared by MCP + quality)
   exports/
     translated.py           # partially translated reading edition (HTML assembly + report)
+    outline.py              # export structure from the PDF outline (depth, order, chapters)
+    render.py               # page shell, title page, TOC, nested sections
+    bilingual.py            # bilingual (original | translated) row layout and styles
+    images.py               # image embedding (data: URIs) + asset warnings for exports
+    html_attrs.py           # attribute-aware HTML tag scanning shared by exports
     renderers.py            # ExportRenderer port: weasyprint / playwright / html
   index/
     base.py                 # IndexBackend port + hits/concept models + tokenizer

@@ -22,6 +22,7 @@ from pathlib import Path
 from markdown_it.token import Token
 
 from bookgraph.assets import resolve_workspace_link
+from bookgraph.exports.html_attrs import HTML_ATTR, HTML_ATTR_RE
 from bookgraph.exports.models import (
     ASSET_MISSING,
     ASSET_REMOTE,
@@ -36,10 +37,7 @@ _EMBEDDABLE_MIME_TYPES = frozenset(
     {"image/png", "image/jpeg", "image/gif", "image/svg+xml", "image/webp"}
 )
 
-# Raw HTML scanning for ``<img>`` tags, attribute by attribute so a ``src=`` or ``>``
-# inside another attribute's quoted value is never mistaken for the real one.
-_HTML_ATTR = r"""[^\s"'<>/=]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+))?"""
-_HTML_ATTR_RE = re.compile(r"""([^\s"'<>/=]+)(?:\s*=\s*("[^"]*"|'[^']*'|[^\s"'=<>`]+))?""")
+# Raw HTML scanning for ``<img>`` tags, attribute by attribute (see ``html_attrs``).
 # ``<img`` followed by whitespace, ``/`` or ``>``: not ``\b``, which would also match
 # custom elements such as ``<img-zoom>`` (``\b`` falls between ``g`` and ``-``).
 _IMG_OPEN = r"<img(?=[\s/>])"
@@ -47,7 +45,7 @@ _IMG_OPEN = r"<img(?=[\s/>])"
 # neither embedded nor reported), a well-formed ``<img>`` tag, and a malformed one
 # (reported, so it cannot vanish silently under the CSP).
 _HTML_IMG_SCAN_RE = re.compile(
-    rf"(?P<comment><!--.*?-->)|(?P<img>{_IMG_OPEN}(?:\s+{_HTML_ATTR})*\s*/?>)|(?P<bad>{_IMG_OPEN}[^>]*>)",
+    rf"(?P<comment><!--.*?-->)|(?P<img>{_IMG_OPEN}(?:\s+{HTML_ATTR})*\s*/?>)|(?P<bad>{_IMG_OPEN}[^>]*>)",
     re.IGNORECASE | re.DOTALL,
 )
 
@@ -269,7 +267,7 @@ def _html_src_attr(attributes: str) -> tuple[str, tuple[int, int]] | None:
     inside another attribute's quoted value).
     """
 
-    for attr in _HTML_ATTR_RE.finditer(attributes):
+    for attr in HTML_ATTR_RE.finditer(attributes):
         if attr.group(1).lower() != "src":
             continue
         raw = attr.group(2)

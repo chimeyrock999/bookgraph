@@ -724,7 +724,7 @@ then reads as `untracked`), or re-register it with `write_section_translation`.
 - An empty or unreadable (including non-UTF-8) body counts as untranslated and is
   reported (`translation_empty` / `translation_unreadable`).
 
-## `exports/<doc_id>.<lang>-progress.pdf` + `.report.json`
+## `exports/<doc_id>.<lang>-progress.pdf` / `-bilingual.pdf` + `.report.json`
 
 Owner: `bookgraph export translated-pdf`. This is derived, reader-facing output and
 can be regenerated at any time. The report (`bookgraph.exports.models.ExportReport`)
@@ -735,16 +735,22 @@ is written beside the export:
   "doc_id": "ddia",
   "title": "Designing Data-Intensive Applications",
   "lang": "vi",
+  "mode": "translated",
   "fallback": "original",
   "generated_at": "2026-10-02T00:00:00Z",
   "total_sections": 3,
   "translated_sections": 1,
+  "original_sections": 2,
+  "skipped_sections": 0,
+  "unpaired_sections": 0,
+  "assets_missing": 1,
   "coverage": 0.3333,
   "sections": [
     {"section_id": "ddia.chapter-1", "title": "Chương 1", "level": 1, "depth": 1,
      "parent_id": null, "source": "translated",
      "artifact": "translations/vi/ddia/ddia.chapter-1.md", "freshness": "fresh",
-     "assets_embedded": 1, "assets_missing": 0}
+     "assets_embedded": 1, "assets_missing": 0,
+     "original_assets_embedded": null, "original_assets_missing": null}
   ],
   "warnings": [
     {"code": "asset_missing", "message": "…", "section_id": "ddia.scalability",
@@ -757,12 +763,23 @@ is written beside the export:
 }
 ```
 
+- `mode` is `translated` or `bilingual` (`--mode`).
 - `sections` are in the export's reading order: the source PDF outline's order when
   `book.json` has one, else `sections.jsonl` order (see `commands.md`).
 - `level` is the manifest's `Section.level`. `depth` is the heading level the section
   renders at, and `parent_id` is the section it renders inside (`null` at the top
-  level).
-- `source` is `translated`, `original`, or `skipped`.
+  level). In `bilingual` mode both columns use `depth`.
+- `source` is `translated`, `original`, or `skipped`: how the section's mixed
+  rendering was filled (the right column in `bilingual` mode).
+- `original_sections` / `skipped_sections` count the sections that took the
+  `--fallback` path. `unpaired_sections` counts `bilingual` rows with no translation
+  to compare against (always `0` in `translated` mode).
+- `assets_embedded` / `assets_missing` count the mixed rendering;
+  `original_assets_embedded` / `original_assets_missing` count the `bilingual` left
+  column (`null` in `translated` mode). The top-level `assets_missing` counts the
+  asset references that could not be embedded, per column. A missing original asset
+  shown in both columns of an untranslated row is counted twice there but warned
+  about once.
 - An asset warning names the section (`section_id`), the raw reference as written
   (`reference`), and the workspace-relative file that carries it (`source_path`): the
   translation artifact, `sources/parsed/<doc_id>/document.json` for an original

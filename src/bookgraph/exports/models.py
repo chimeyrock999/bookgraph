@@ -14,6 +14,12 @@ from pydantic import BaseModel, Field
 FallbackPolicy = Literal["original", "skip", "fail"]
 FALLBACK_POLICIES: tuple[str, ...] = ("original", "skip", "fail")
 
+# The reader-facing layout: ``translated`` is the mixed reading edition (each section's
+# translation, else the ``--fallback`` result); ``bilingual`` puts the original section
+# on the left and that same mixed rendering on the right.
+ExportMode = Literal["translated", "bilingual"]
+EXPORT_MODES: tuple[str, ...] = ("translated", "bilingual")
+
 # How one section ended up in the export: its translation artifact, the original
 # source text (``--fallback original``), or a placeholder (``--fallback skip``).
 SectionSource = Literal["translated", "original", "skipped"]
@@ -74,7 +80,10 @@ class ExportSection(BaseModel):
     ``translated``, ``None`` otherwise. ``level`` is the manifest's ``Section.level``;
     ``depth`` (heading level in the export) and ``parent_id`` (the section it renders
     inside, ``None`` for a top-level one) are its place in the book's structure, which
-    follows the source PDF outline when there is one.
+    follows the source PDF outline when there is one. ``assets_*`` count the mixed
+    rendering (the whole section in ``translated`` mode, the right column in
+    ``bilingual`` mode); ``original_assets_*`` count the bilingual left column and stay
+    ``None`` in ``translated`` mode.
     """
 
     section_id: str
@@ -87,13 +96,19 @@ class ExportSection(BaseModel):
     freshness: TranslationFreshness | None = None
     assets_embedded: int = 0
     assets_missing: int = 0
+    original_assets_embedded: int | None = None
+    original_assets_missing: int | None = None
 
 
 class ExportReport(BaseModel):
     """Coverage + QA report for one translated export, in the export's reading order.
 
     ``coverage`` is ``translated_sections / total_sections`` (``0.0`` for an empty
-    document). ``output``/``renderer`` stay ``None`` for a preflight-only run.
+    document). ``original_sections`` / ``skipped_sections`` count the sections that
+    took the ``--fallback`` path. ``unpaired_sections`` counts bilingual rows with no
+    translation to compare against (``0`` in ``translated`` mode), and
+    ``assets_missing`` the asset references that could not be embedded, per column.
+    ``output``/``renderer`` stay ``None`` for a preflight-only run.
     ``show_status`` records whether status/debug metadata was also printed on the
     reading pages (``--show-status``); by default it lives only in this report.
     """
@@ -101,16 +116,60 @@ class ExportReport(BaseModel):
     doc_id: str
     title: str
     lang: str
+    mode: ExportMode = "translated"
     fallback: FallbackPolicy
     generated_at: str
     total_sections: int
     translated_sections: int
+    original_sections: int = 0
+    skipped_sections: int = 0
+    unpaired_sections: int = 0
+    assets_missing: int = 0
     coverage: float
     sections: list[ExportSection] = Field(default_factory=list)
     warnings: list[ExportWarning] = Field(default_factory=list)
     renderer: str | None = None
     output: str | None = None
     show_status: bool = False
+
+    @classmethod
+    def from_sections(
+        cls,
+        sections: list[ExportSection],
+        *,
+        mode: ExportMode,
+        doc_id: str,
+        title: str,
+        lang: str,
+        fallback: FallbackPolicy,
+        generated_at: str,
+        warnings: list[ExportWarning],
+        show_status: bool = False,
+    ) -> ExportReport:
+        """A report for ``sections`` with its coverage and fallback counts filled in."""
+
+        translated = sum(1 for entry in sections if entry.source == "translated")
+        total = len(sections)
+        return cls(
+            mode=mode,
+            sections=sections,
+            total_sections=total,
+            translated_sections=translated,
+            original_sections=sum(1 for entry in sections if entry.source == "original"),
+            skipped_sections=sum(1 for entry in sections if entry.source == "skipped"),
+            unpaired_sections=total - translated if mode == "bilingual" else 0,
+            assets_missing=sum(
+                entry.assets_missing + (entry.original_assets_missing or 0) for entry in sections
+            ),
+            coverage=round(translated / total, 4) if total else 0.0,
+            doc_id=doc_id,
+            title=title,
+            lang=lang,
+            fallback=fallback,
+            generated_at=generated_at,
+            warnings=warnings,
+            show_status=show_status,
+        )
 
     @property
     def untranslated(self) -> list[str]:

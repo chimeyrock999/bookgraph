@@ -23,7 +23,8 @@ available falls back to its ``Section.text``. Every image is embedded as a
 needs to touch the filesystem or network. An image that cannot be embedded (its file
 is missing, remote, or not an image) is left out of the reader-facing output — its
 caption and the surrounding prose stay — and reported in the export report, with the
-section, the reference, and the file that carries it.
+section, the reference, and the file that carries it. ``bilingual`` mode sets each
+section beside its original (:mod:`.bilingual`).
 
 This is a clean reading edition, not a pixel-perfect reconstruction of the
 publisher's layout.
@@ -45,6 +46,7 @@ from markdown_it.token import Token
 from bookgraph.assets import asset_reference, resolve_asset_path
 from bookgraph.books import read_book_bookmarks
 from bookgraph.documents import read_document
+from bookgraph.exports.bilingual import bilingual_section
 from bookgraph.exports.images import AssetCounter, AssetOrigin, ImageEmbedder
 from bookgraph.exports.models import (
     ASSET_MISSING,
@@ -54,9 +56,9 @@ from bookgraph.exports.models import (
     TRANSLATION_STRUCTURE_CHANGED,
     TRANSLATION_UNREADABLE,
     TRANSLATION_UNTRACKED,
+    ExportMode,
     ExportReport,
     ExportSection,
-    ExportWarning,
     FallbackPolicy,
     SectionSource,
     TranslationFreshness,
@@ -140,6 +142,7 @@ def build_translated_export(
     *,
     lang: str,
     fallback: FallbackPolicy = "original",
+    mode: ExportMode = "translated",
     generated_at: str | None = None,
     show_status: bool = False,
 ) -> TranslatedExport:
@@ -156,6 +159,7 @@ def build_translated_export(
     translation registry does it (``VI`` → ``vi``), so neither id can traverse out of
     the workspace and ``lang="VI"`` finds the ``vi`` translations.
 
+    ``mode="bilingual"`` puts the original beside each section (see ``bilingual``).
     ``show_status`` prints status/debug metadata (freshness and fallback notes, TOC
     status markers, coverage, missing-asset placeholders) on the reading pages; by
     default it is only in the report.
@@ -209,15 +213,23 @@ def build_translated_export(
         )
         for node in flatten(outline)
     }
-    report = _report(
-        doc_id,
-        title,
-        lang,
-        fallback,
-        generated_at or default_generated_at(),
+    if mode == "bilingual":
+        rendered = {
+            node.section.id: bilingual_section(
+                *rendered[node.section.id], assembler.original_column(node), lang
+            )
+            for node in flatten(outline)
+        }
+    report = ExportReport.from_sections(
         [entry for entry, _ in rendered.values()],
-        assembler.warnings,
-        show_status,
+        mode=mode,
+        doc_id=doc_id,
+        title=title,
+        lang=lang,
+        fallback=fallback,
+        generated_at=generated_at or default_generated_at(),
+        warnings=assembler.warnings,
+        show_status=show_status,
     )
     # Checked after rendering, not on artifact existence: an empty or unreadable
     # artifact falls back too, and must count as untranslated under ``fail``. Stale and
@@ -228,33 +240,6 @@ def build_translated_export(
     bodies = {section_id: body for section_id, (_, body) in rendered.items()}
     html = document_html(report, outline, bodies, show_status=show_status)
     return TranslatedExport(html=html, report=report)
-
-
-def _report(
-    doc_id: str,
-    title: str,
-    lang: str,
-    fallback: FallbackPolicy,
-    generated_at: str,
-    entries: list[ExportSection],
-    warnings: list[ExportWarning],
-    show_status: bool,
-) -> ExportReport:
-    translated = sum(1 for entry in entries if entry.source == "translated")
-    total = len(entries)
-    return ExportReport(
-        doc_id=doc_id,
-        title=title,
-        lang=lang,
-        fallback=fallback,
-        generated_at=generated_at,
-        total_sections=total,
-        translated_sections=translated,
-        coverage=round(translated / total, 4) if total else 0.0,
-        sections=entries,
-        warnings=warnings,
-        show_status=show_status,
-    )
 
 
 def _load_document(parsed_dir: Path, doc_id: str) -> tuple[str, dict[str, CanonicalBlock]]:
@@ -284,6 +269,8 @@ def _relative(workspace: WorkspacePaths, path: Path | None) -> str | None:
 class _Assembler(ImageEmbedder):
     blocks: dict[str, CanonicalBlock]
     manifest: Path
+    # Rendered originals by section id: a bilingual fallback row renders (and warns) once.
+    _originals: dict[str, tuple[str, AssetCounter]] = field(default_factory=dict)
     _md: MarkdownIt = field(
         default_factory=lambda: MarkdownIt("commonmark", {"html": True}).enable(
             ["table", "strikethrough"]
@@ -330,6 +317,18 @@ class _Assembler(ImageEmbedder):
         )
         self._quality_warnings(section, source="original")
         return self._entry(node, parent_id, section.title, "original", None, counter), body
+
+    def original_column(self, node: OutlineNode) -> tuple[str, int, int]:
+        """The bilingual left column under its source title, with its asset counts.
+
+        It takes the outline depth, like the mixed column, so both headings match.
+        """
+
+        section, counter = node.section, AssetCounter()
+        body = heading(node.depth, section.title) + self._original_body(
+            section, node.depth, counter
+        )
+        return body, counter.embedded, counter.missing
 
     def _entry(
         self,
@@ -481,6 +480,16 @@ class _Assembler(ImageEmbedder):
         return bool(asset_summaries(self.blocks[b] for b in section.block_ids if b in self.blocks))
 
     def _original_body(self, section: Section, depth: int, counter: AssetCounter) -> str:
+        # Warnings (with their source file/block origin) are raised on the first render.
+        if section.id not in self._originals:
+            own = AssetCounter()
+            self._originals[section.id] = (self._render_original(section, depth, own), own)
+        html, own = self._originals[section.id]
+        counter.embedded += own.embedded
+        counter.missing += own.missing
+        return html
+
+    def _render_original(self, section: Section, depth: int, counter: AssetCounter) -> str:
         blocks = [self.blocks[b] for b in section.block_ids if b in self.blocks]
         if not blocks:
             source = _relative(self.workspace, self.manifest)

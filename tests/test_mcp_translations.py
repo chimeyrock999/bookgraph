@@ -327,3 +327,26 @@ def test_structure_check_rebuilds_parsed_code_blocks(tmp_path: Path) -> None:
     )
 
     assert written.structure_issues == []
+
+
+def test_absolute_image_path_is_never_a_carried_figure(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path, _section("deep-work.a", text="Body."))
+    images = workspace.sources_parsed / "deep-work" / "images"
+    images.mkdir(parents=True)
+    (images / "fig1.png").write_bytes(b"png")
+    absolute = (images / "fig1.png").resolve()
+
+    written = service.write_section_translation(
+        workspace,
+        "deep-work",
+        "deep-work.a",
+        "vi",
+        f"Nội dung.\n\n![Hình 1](fig1.png)\n\n![Hình 1]({absolute})\n",
+        includes_assets=True,
+    )
+
+    # The relative path resolves and is allowed; the absolute one, though it points
+    # at the same workspace file, is an absolute asset link and is reported.
+    assert [(i.kind, i.target, i.change) for i in written.structure_issues] == [
+        ("image", str(absolute), "added")
+    ]

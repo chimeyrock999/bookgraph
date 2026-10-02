@@ -599,10 +599,12 @@ anchors, and exports depend on them:
 
 `[label](target)` may become `[nhãn](target)`; `target` must not change. Two image
 changes are allowed: an image that resolves may be added, which carries the section's
-figures — a `data:image/…` URI, or a local path found next to the body, then under
+figures — a `data:image/…` URI, or a relative path found next to the body, then under
 `sources/parsed/<doc_id>/images/`, `sources/parsed/<doc_id>/`, or the workspace root
 (the export's own lookup) — and a source image path that does not resolve may be
-replaced by one that does. Heading *text* may be translated: export navigation anchors
+replaced by one that does. An absolute path (`/…`, `~/…`, `file:`, `C:\…`) never
+counts as resolving, even when it points at a workspace file: it is an absolute asset
+link, so adding one is reported. Heading *text* may be translated: export navigation anchors
 on section ids, never on heading text.
 
 What is compared:

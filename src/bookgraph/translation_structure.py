@@ -68,6 +68,9 @@ _HTML_ATTR_KINDS: dict[str, StructuralTargetKind] = {
 _HEADING_ID_RE = re.compile(r"\{\s*#(?P<id>[^\s{}]+)[^{}]*\}\s*$")
 _REMOTE_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
 _DATA_IMAGE_RE = re.compile(r"^data:image/", re.IGNORECASE)
+# An absolute local path, as the artifact hygiene rules define it (``/x``, ``~/x``,
+# ``file:``, ``C:\x``): an absolute asset link is contamination, never a fix.
+_ABSOLUTE_RE = re.compile(r"^(?:/(?!/)|~/|file:|[A-Za-z]:[\\/])")
 _BACKTICK_RUN_RE = re.compile(r"`+")
 _TARGET_DISPLAY_LIMIT = 80
 
@@ -277,13 +280,18 @@ def _embeddable(target: str, asset_resolves: Callable[[str], bool]) -> bool:
 
 
 def local_asset_resolver(root: Path, bases: list[Path]) -> Callable[[str], bool]:
-    """An ``asset_resolves`` that resolves image links exactly as the export does.
+    """An ``asset_resolves`` that resolves relative image links as the export does.
 
     Both use :func:`bookgraph.assets.resolve_workspace_link`: the query and fragment
     are dropped, the path is unquoted, and only regular files inside ``root`` count.
+    An absolute path never resolves here, even to a workspace file: it is an absolute
+    asset link (contamination), so adding one is a structure change, not a carried
+    figure or a fixed path.
     """
 
     def resolves(target: str) -> bool:
+        if _ABSOLUTE_RE.match(target):
+            return False
         return resolve_workspace_link(root, target, bases) is not None
 
     return resolves

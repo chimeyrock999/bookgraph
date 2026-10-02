@@ -35,7 +35,7 @@ from bookgraph.concept_hygiene import (
 from bookgraph.concept_registry import ConceptRegistry, read_registry
 from bookgraph.documents import read_document
 from bookgraph.graph import SectionGraph, build_section_graph
-from bookgraph.index import default_index_backend, tokenize
+from bookgraph.index import ConceptMention, default_index_backend, tokenize
 from bookgraph.models import (
     ASSET_BLOCK_TYPES,
     AnnotatedConcept,
@@ -819,17 +819,40 @@ def get_concept(
     requested = _validate_id(concept, "concept")
     registry = _load_registry(workspace)
     slug = registry.resolve(requested)
+    record = registry.record(slug)
     backend = default_index_backend()
     result = backend.get_concept(workspace, slug)
-    if result is None and slug != requested:
-        # The alias was registered after the last build, so its mentions still sit
-        # under the alias slug; serve them rather than miss until the next rebuild.
-        result = backend.get_concept(workspace, requested)
-    if result is None:
+
+    # Fold in mentions still indexed under an alias slug. After a full rebuild there
+    # are none (build rewrites them to the canonical); in the window between a registry
+    # edit and the rebuild this keeps the canonical view complete — including when the
+    # canonical itself has no rows yet.
+    raw_mentions: list[ConceptMention] = list(result.mentions) if result is not None else []
+    seen = {(m.doc_id, m.section_id) for m in raw_mentions}
+    fallback_title: str | None = None
+    for alias in record.aliases if record is not None else []:
+        stale = backend.get_concept(workspace, alias)
+        if stale is None:
+            continue
+        fallback_title = fallback_title or stale.node.title
+        for mention in stale.mentions:
+            if (mention.doc_id, mention.section_id) not in seen:
+                seen.add((mention.doc_id, mention.section_id))
+                raw_mentions.append(mention.model_copy(update={"raw_slug": alias}))
+    if result is None and not raw_mentions:
         raise ConceptNotFoundError(
             f"Concept '{slug}' not found. Run 'bookgraph index build' then "
             "'bookgraph index concepts'."
         )
+    # Stable sort: group by document, keeping each source's reading order.
+    raw_mentions.sort(key=lambda m: m.doc_id)
+
+    if record is not None:
+        title = record.title
+    elif result is not None:
+        title = result.node.title
+    else:  # unreachable: aliases imply a record
+        title = fallback_title or slug
     mentions = [
         ConceptMentionView(
             doc_id=mention.doc_id,
@@ -842,26 +865,25 @@ def get_concept(
             summary=mention.summary if include_annotations else "",
             raw_slug=mention.raw_slug,
         )
-        for mention in result.mentions
+        for mention in raw_mentions
     ]
-    record = registry.record(result.node.slug)
     aliases = list(record.aliases) if record is not None else []
-    for mention in result.mentions:
+    for mention in raw_mentions:
         if mention.raw_slug and mention.raw_slug not in aliases:
             aliases.append(mention.raw_slug)
     return ConceptView(
-        slug=result.node.slug,
-        title=record.title if record is not None else result.node.title,
-        doc_count=result.node.doc_count,
-        mention_count=result.node.mention_count,
+        slug=slug,
+        title=title,
+        doc_count=len({m.doc_id for m in raw_mentions}),
+        mention_count=len(raw_mentions),
         # Count from the raw backend mentions, not the (possibly redacted) view list:
         # the backend returns summaries regardless of the flag, so the compact card can
         # still signal "this concept carries N annotated sections" — a cheap cue for an
         # agent deciding whether an include_annotations=True call is worth it.
-        annotated_mention_count=sum(1 for m in result.mentions if m.summary),
+        annotated_mention_count=sum(1 for m in raw_mentions if m.summary),
         aliases=aliases,
         canonical=record is not None,
-        resolved_from=requested if requested != result.node.slug else None,
+        resolved_from=requested if requested != slug else None,
         mentions=mentions,
     )
 

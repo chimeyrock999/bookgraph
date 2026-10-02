@@ -75,6 +75,37 @@ def test_suggests_acronyms_subsumed_phrases_and_spelling_variants() -> None:
     assert ("partiton-evolution", "partition-evolution", "near-identical spelling") in pairs
 
 
+def test_ses_plurals_fold_to_their_singular() -> None:
+    pairs = _pairs(
+        [
+            _node("database", mention_count=3),
+            _node("databases"),
+            _node("distributed-databases"),
+            _node("class", mention_count=2),
+            _node("classes"),
+        ]
+    )
+
+    assert ("databases", "database", "inflection or word-order variant") in pairs
+    assert ("classes", "class", "inflection or word-order variant") in pairs
+    # Once stemmed, "database" is a subset of "distributed-databases". The subset
+    # check now fires, but a lone word inside a phrase is the head-noun case, so it is
+    # scored below the default threshold rather than suggested.
+    scored = suggest_merges(
+        [_node("database", mention_count=3), _node("distributed-databases")],
+        ConceptRegistry(),
+        threshold=0.0,
+    )
+    assert [(s.alias, s.canonical, s.score) for s in scored] == [
+        ("distributed-databases", "database", 0.4)
+    ]
+
+
+def test_versioned_concepts_are_not_spelling_variants() -> None:
+    assert _pairs([_node("format-v1"), _node("format-v2")]) == set()
+    assert _pairs([_node("format-version-1"), _node("format-version-2")]) == set()
+
+
 def test_unrelated_and_head_noun_only_pairs_are_not_suggested() -> None:
     assert _pairs([_node("table"), _node("table-metadata"), _node("snapshot")]) == set()
 

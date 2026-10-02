@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from bookgraph.annotations import annotation_path, build_annotation, write_annotation
@@ -9,6 +10,7 @@ from bookgraph.cli import app
 from bookgraph.concept_registry import read_registry
 from bookgraph.index.sqlite import SqliteIndexBackend
 from bookgraph.mcp import service
+from bookgraph.mcp.service import ReadingServiceError
 from bookgraph.models import AnnotatedConcept, Section
 from bookgraph.sections import write_sections
 from bookgraph.workspace import WorkspacePaths
@@ -63,10 +65,15 @@ def test_alias_folds_mentions_into_the_canonical_after_rebuild(tmp_path: Path) -
     record = read_registry(workspace.concept_registry).record("table-metadata")
     assert record is not None and record.title == "Table Metadata"
 
-    # Before the rebuild the alias already resolves to the canonical, but its own
-    # mentions are not folded in yet — lint flags the alias node as stale.
-    stale = service.get_concept(workspace, "metadata-file")
-    assert (stale.slug, stale.mention_count) == ("table-metadata", 1)
+    # Before the rebuild the alias's mentions still sit under its own slug: the
+    # canonical view folds them in at read time, and lint flags the alias node as stale.
+    early = service.get_concept(workspace, "metadata-file")
+    assert (early.slug, early.mention_count, early.resolved_from) == (
+        "table-metadata",
+        2,
+        "metadata-file",
+    )
+    assert [m.raw_slug for m in early.mentions] == ["", "metadata-file"]
     assert "stale-alias" in _invoke("concepts", "lint", ws)
 
     _invoke("index", "build", ws)
@@ -136,6 +143,45 @@ def test_invalid_registry_aborts_index_build(tmp_path: Path) -> None:
 
     assert result.exit_code != 0
     assert "Invalid concept registry" in result.output
+
+
+def test_get_concept_serves_a_canonical_that_has_no_rows_yet(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    ws = str(tmp_path)
+    _invoke("index", "build", ws)
+    _invoke("concepts", "alias", ws, "snapshots", "point-in-time-state", "--title", "State")
+
+    for requested in ("snapshots", "point-in-time-state"):
+        concept = service.get_concept(workspace, requested)
+
+        assert concept.slug == "point-in-time-state"
+        assert concept.title == "State"
+        assert concept.canonical is True
+        assert concept.aliases == ["snapshots"]
+        assert [(m.section_id, m.raw_slug) for m in concept.mentions] == [
+            ("iceberg.a", "snapshots")
+        ]
+    assert service.get_concept(workspace, "snapshots").resolved_from == "snapshots"
+    assert service.get_concept(workspace, "point-in-time-state").resolved_from is None
+
+
+def test_concept_hygiene_validates_arguments_and_caps_each_list(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    _invoke("index", "build", str(tmp_path))
+
+    with pytest.raises(ReadingServiceError, match="limit"):
+        service.concept_hygiene(workspace, limit=0)
+    for threshold in (-0.1, 1.1):
+        with pytest.raises(ReadingServiceError, match="threshold"):
+            service.concept_hygiene(workspace, threshold=threshold)
+
+    full = service.concept_hygiene(workspace, threshold=0.0)
+    capped = service.concept_hygiene(workspace, limit=1, threshold=0.0)
+    assert len(full.review_queue) == 4
+    assert len(capped.review_queue) == 1
+    assert len(capped.merge_suggestions) <= 1
+    assert len(capped.lint) <= 1
+    assert capped.concept_count == full.concept_count == 4
 
 
 def test_alias_command_rejects_alias_chains(tmp_path: Path) -> None:

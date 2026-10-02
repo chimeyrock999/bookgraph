@@ -129,11 +129,42 @@ def test_canonicalize_edges_rewrites_aliases_and_keeps_provenance() -> None:
     )
 
     assert [(e.slug, e.title, e.raw_slug, e.gloss) for e in edges] == [
-        # The alias edge wins its section slot (first), keeps its raw slug, and picks up
-        # the first non-empty gloss from the duplicate it absorbed.
-        ("table-metadata", "Table Metadata", "metadata-file", "the root json"),
+        # The edge asserted directly under the canonical slug wins the collision whole —
+        # its gloss is never attached to the alias's raw slug.
+        ("table-metadata", "Table Metadata", "", "the root json"),
         ("snapshot", "Snapshot", "", ""),
     ]
+
+
+def test_canonicalize_edges_keeps_the_first_alias_edge_whole() -> None:
+    registry = add_alias(ConceptRegistry(), "metadata-file", "table-metadata", "Table Metadata")
+    registry = add_alias(registry, "catalog-pointer", "table-metadata", "Table Metadata")
+
+    edges = canonicalize_edges(
+        [_edge("metadata-file"), _edge("catalog-pointer", gloss="points at the root")],
+        registry,
+    )
+
+    # Neither is a direct assertion, so the first alias edge wins without borrowing the
+    # second one's gloss (which belongs to a different slug).
+    assert [(e.slug, e.raw_slug, e.gloss) for e in edges] == [
+        ("table-metadata", "metadata-file", "")
+    ]
+
+
+def test_aliasing_promotes_an_ignored_canonical_and_drops_a_distinct_verdict() -> None:
+    registry = ignore(ConceptRegistry(), "data")
+    registry = mark_distinct(registry, "dataset", "data")
+    registry = mark_distinct(registry, "dataset", "schema")
+
+    registry = add_alias(registry, "dataset", "data", "Data")
+
+    assert registry.resolve("dataset") == "data"
+    assert not registry.is_ignored("data")
+    assert not registry.is_distinct("dataset", "data")
+    assert registry.is_distinct("dataset", "schema")  # unrelated verdicts survive
+    registry = remove_alias(registry, "dataset")
+    assert not registry.is_distinct("dataset", "data")
 
 
 def test_canonicalize_edges_keeps_per_section_mentions() -> None:

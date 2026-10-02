@@ -186,9 +186,11 @@ def set_canonical(
 def add_alias(registry: ConceptRegistry, alias: str, canonical: str, title: str) -> ConceptRegistry:
     """Make ``alias`` resolve to ``canonical`` (merging the two concepts).
 
-    ``canonical`` is created with ``title`` if it is not yet in the registry. If
-    ``alias`` was itself canonical, its own aliases move to ``canonical`` too, so a
-    merge never leaves an alias chain. ``canonical`` may not be an alias itself.
+    ``canonical`` is created with ``title`` if it is not yet in the registry (promoting
+    it out of ``ignored`` if needed). If ``alias`` was itself canonical, its own aliases
+    move to ``canonical`` too, so a merge never leaves an alias chain. ``canonical``
+    may not be an alias itself. A ``distinct`` verdict between the merged slugs is
+    removed.
     """
 
     validate_slug_id(alias, field_name="alias slug")
@@ -203,6 +205,14 @@ def add_alias(registry: ConceptRegistry, alias: str, canonical: str, title: str)
 
     merged = registry.record(alias)
     moved = [alias, *(merged.aliases if merged is not None else [])]
+    # Merging supersedes earlier decisions about the pair: a canonical that was ignored
+    # is promoted (as set_canonical does), and a "distinct" verdict between the merged
+    # slugs is dropped so it cannot resurface after a later unalias.
+    distinct = [
+        pair
+        for pair in registry.distinct
+        if not (canonical in pair and any(slug in pair for slug in moved))
+    ]
     records = [r for r in _without(alias, registry.canonical) if r.slug != alias]
     if not any(r.slug == canonical for r in records):
         records.append(CanonicalConcept(slug=canonical, title=title))
@@ -212,8 +222,13 @@ def add_alias(registry: ConceptRegistry, alias: str, canonical: str, title: str)
         else r
         for r in records
     ]
-    ignored = [s for s in registry.ignored if s != alias]
-    return _rebuild(registry, canonical=[r.model_dump() for r in records], ignored=ignored)
+    ignored = [s for s in registry.ignored if s not in (alias, canonical)]
+    return _rebuild(
+        registry,
+        canonical=[r.model_dump() for r in records],
+        ignored=ignored,
+        distinct=distinct,
+    )
 
 
 def remove_alias(registry: ConceptRegistry, alias: str) -> ConceptRegistry:
@@ -259,9 +274,14 @@ def canonicalize_edges(edges: list[ConceptEdge], registry: ConceptRegistry) -> l
 
     Ignored slugs are dropped; an alias edge is rewritten to its canonical slug, keeping
     the original slug in ``raw_slug`` as provenance; a canonical concept's edges take
-    the registry title so every mention aggregates under one display title. Two edges
-    in the same section that collapse onto one canonical slug are merged — the first
-    wins, and the first non-empty gloss is kept.
+    the registry title so every mention aggregates under one display title.
+
+    Two edges in one section can collapse onto one canonical slug (the agent asserted
+    both ``table-metadata`` and its alias ``metadata-file``). They become one mention,
+    and the mention keeps **one edge whole** — slug provenance and gloss together, never
+    mixed: the edge asserted directly under the canonical slug wins, else the first
+    alias edge. The ``raw_slug`` of any further colliding alias is not stored (the
+    mention has one provenance slot); it remains in the annotation artifact.
     """
 
     result: list[ConceptEdge] = []
@@ -273,28 +293,19 @@ def canonicalize_edges(edges: list[ConceptEdge], registry: ConceptRegistry) -> l
         record = registry.record(slug)
         title = record.title if record is not None else edge.title
         raw_slug = edge.slug if slug != edge.slug else edge.raw_slug
+        canonicalized = ConceptEdge(
+            slug=slug,
+            title=_WHITESPACE_RE.sub(" ", title).strip() or slug,
+            section_id=edge.section_id,
+            gloss=edge.gloss,
+            source=edge.source,
+            raw_slug=raw_slug,
+        )
         key = (edge.section_id, slug)
         if key in index:
-            first = result[index[key]]
-            if not first.gloss and edge.gloss:
-                result[index[key]] = ConceptEdge(
-                    slug=first.slug,
-                    title=first.title,
-                    section_id=first.section_id,
-                    gloss=edge.gloss,
-                    source=first.source,
-                    raw_slug=first.raw_slug,
-                )
+            if result[index[key]].raw_slug and not raw_slug:
+                result[index[key]] = canonicalized  # the direct assertion beats an alias
             continue
         index[key] = len(result)
-        result.append(
-            ConceptEdge(
-                slug=slug,
-                title=_WHITESPACE_RE.sub(" ", title).strip() or slug,
-                section_id=edge.section_id,
-                gloss=edge.gloss,
-                source=edge.source,
-                raw_slug=raw_slug,
-            )
-        )
+        result.append(canonicalized)
     return result

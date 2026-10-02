@@ -16,6 +16,8 @@ ignore / distinct), which edits the registry that the next ``index build`` appli
 
 from __future__ import annotations
 
+import re
+from dataclasses import dataclass
 from difflib import SequenceMatcher
 from typing import Literal
 
@@ -146,46 +148,93 @@ class ReviewItem(BaseModel):
 
 
 def _stem(token: str) -> str:
-    """A tiny plural folder: ``snapshots``→``snapshot``, ``indexes``→``index``."""
+    """A tiny plural folder: ``snapshots``→``snapshot``, ``indexes``→``index``.
+
+    Only sibilant plurals drop ``-es`` (``classes``, ``indexes``, ``batches``,
+    ``hashes``); any other ``-ses`` word just drops the ``s``
+    (``databases``→``database``).
+    """
 
     if len(token) > 4 and token.endswith("ies"):
         return token[:-3] + "y"
-    if len(token) > 4 and token.endswith(("ses", "xes", "ches", "shes")):
+    if len(token) > 4 and token.endswith(("sses", "xes", "ches", "shes")):
         return token[:-2]
     if len(token) > 3 and token.endswith("s") and not token.endswith(("ss", "us", "is")):
         return token[:-1]
     return token
 
 
-def _stems(slug: str) -> list[str]:
-    return [_stem(token) for token in slug.split("-") if token]
+_DIGITS_RE = re.compile(r"[0-9]+")
 
 
-def _similarity(left: str, right: str) -> tuple[float, str] | None:
-    """Score how likely two slugs name the same concept, with the reason, or ``None``."""
+@dataclass(frozen=True)
+class _Profile:
+    """Per-node features, computed once so the pairwise scoring stays cheap."""
 
-    left_stems, right_stems = _stems(left), _stems(right)
-    if left_stems == right_stems or (
-        len(left_stems) > 1 and sorted(left_stems) == sorted(right_stems)
+    node: ConceptNode
+    stems: tuple[str, ...]
+    stem_set: frozenset[str]
+    initials: str
+    undigited: str
+
+    @classmethod
+    def of(cls, node: ConceptNode) -> _Profile:
+        stems = tuple(_stem(token) for token in node.slug.split("-") if token)
+        return cls(
+            node=node,
+            stems=stems,
+            stem_set=frozenset(stems),
+            initials="".join(token[0] for token in stems),
+            undigited=_DIGITS_RE.sub("", node.slug),
+        )
+
+    def blocking_keys(self) -> set[str]:
+        """Keys two profiles must share for any rule to be able to fire.
+
+        Inflection, word-order, and subsumption all imply a shared stem; an acronym
+        shares its letters with the phrase's initials; a near-identical spelling (ratio
+        >= 0.88) almost always keeps the first or last three characters intact.
+        """
+
+        keys = {f"t:{stem}" for stem in self.stem_set}
+        keys.add(f"a:{self.initials if len(self.stems) > 1 else self.node.slug}")
+        keys.add(f"p:{self.node.slug[:3]}")
+        keys.add(f"s:{self.node.slug[-3:]}")
+        return keys
+
+
+def _similarity(left: _Profile, right: _Profile) -> tuple[float, str] | None:
+    """Score how likely two concepts are the same, with the reason, or ``None``."""
+
+    if left.stems == right.stems or (
+        len(left.stems) > 1 and sorted(left.stems) == sorted(right.stems)
     ):
         return 1.0, "inflection or word-order variant"
 
-    short, long = sorted((left_stems, right_stems), key=len)
-    if len(short) == 1 and len(long) >= 2 and "".join(t[0] for t in long) == short[0]:
+    short, long = sorted((left, right), key=lambda profile: len(profile.stems))
+    if len(short.stems) == 1 and len(long.stems) >= 2 and long.initials == short.stems[0]:
         return 0.9, "acronym"
 
     best: tuple[float, str] | None = None
-    if short and set(short) < set(long):
+    if short.stem_set and short.stem_set < long.stem_set:
         # A lone word inside a phrase ("table" in "table-metadata") is weak evidence —
         # it is usually the phrase's head noun, not a duplicate — so it scores lower.
-        weight = 1.0 if len(short) > 1 else 0.8
-        best = (weight * len(short) / len(long), "one concept's words subsume the other's")
+        weight = 1.0 if len(short.stems) > 1 else 0.8
+        best = (
+            weight * len(short.stems) / len(long.stems),
+            "one concept's words subsume the other's",
+        )
 
-    ratio = SequenceMatcher(None, left, right)
-    if ratio.real_quick_ratio() >= _SPELLING_THRESHOLD and ratio.ratio() >= _SPELLING_THRESHOLD:
-        spelling = round(ratio.ratio(), 3)
-        if best is None or spelling > best[0]:
-            best = (spelling, "near-identical spelling")
+    a, b = left.node.slug, right.node.slug
+    # Slugs that differ only in digits are versions (format-v1 / format-v2), not typos.
+    if left.undigited != right.undigited:
+        upper_bound = 2 * min(len(a), len(b)) / (len(a) + len(b))  # real_quick_ratio
+        if upper_bound >= _SPELLING_THRESHOLD:
+            matcher = SequenceMatcher(None, a, b)
+            if matcher.quick_ratio() >= _SPELLING_THRESHOLD:
+                spelling = round(matcher.ratio(), 3)
+                if spelling >= _SPELLING_THRESHOLD and (best is None or spelling > best[0]):
+                    best = (spelling, "near-identical spelling")
     return best
 
 
@@ -213,32 +262,48 @@ def suggest_merges(
     distinct, and aliases (which are already merged). Each suggestion names the side
     that should become canonical — a registry-canonical concept, else the better
     connected one.
+
+    Only pairs that share a blocking key (see :meth:`_Profile.blocking_keys`) are
+    scored, so the scan is near-linear in practice instead of all-pairs.
     """
 
-    candidates = [
-        node
+    profiles = [
+        _Profile.of(node)
         for node in nodes
         if not registry.is_ignored(node.slug) and registry.canonical_of(node.slug) is None
     ]
+    buckets: dict[str, list[int]] = {}
+    for position, profile in enumerate(profiles):
+        for key in profile.blocking_keys():
+            buckets.setdefault(key, []).append(position)
+    pairs: set[tuple[int, int]] = set()
+    for members in buckets.values():
+        for i, first in enumerate(members):
+            for second in members[i + 1 :]:
+                pairs.add((first, second))
+
+    distinct = {frozenset(pair) for pair in registry.distinct}
     suggestions: list[MergeSuggestion] = []
-    for i, left in enumerate(candidates):
-        for right in candidates[i + 1 :]:
-            if registry.is_distinct(left.slug, right.slug):
-                continue
-            scored = _similarity(left.slug, right.slug)
-            if scored is None or scored[0] < threshold:
-                continue
-            canonical, alias = sorted((left, right), key=lambda n: _canonical_rank(n, registry))
-            suggestions.append(
-                MergeSuggestion(
-                    canonical=canonical.slug,
-                    alias=alias.slug,
-                    canonical_title=canonical.title,
-                    alias_title=alias.title,
-                    score=round(scored[0], 3),
-                    reason=scored[1],
-                )
+    for left_pos, right_pos in pairs:
+        left, right = profiles[left_pos], profiles[right_pos]
+        if frozenset((left.node.slug, right.node.slug)) in distinct:
+            continue
+        scored = _similarity(left, right)
+        if scored is None or scored[0] < threshold:
+            continue
+        canonical, alias = sorted(
+            (left.node, right.node), key=lambda n: _canonical_rank(n, registry)
+        )
+        suggestions.append(
+            MergeSuggestion(
+                canonical=canonical.slug,
+                alias=alias.slug,
+                canonical_title=canonical.title,
+                alias_title=alias.title,
+                score=round(scored[0], 3),
+                reason=scored[1],
             )
+        )
     suggestions.sort(key=lambda s: (-s.score, s.canonical, s.alias))
     return suggestions if limit is None else suggestions[:limit]
 

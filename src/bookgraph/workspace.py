@@ -81,17 +81,16 @@ class WorkspacePaths:
         return self.root / "annotations"
 
     @property
+    def translations_root(self) -> Path:
+        return self.root / "translations"
+
+    @property
     def reading_plans_root(self) -> Path:
         return self.root / "reading_plans"
 
     @property
     def runs_root(self) -> Path:
         return self.root / "runs"
-
-    @property
-    def translations_root(self) -> Path:
-        """Per-language translation artifacts: ``translations/<lang>/<doc_id>/<section_id>.md``."""
-        return self.root / "translations"
 
     @property
     def translation_cache_root(self) -> Path:
@@ -114,6 +113,7 @@ class WorkspacePaths:
             self.wiki_daily,
             self.indexes_root,
             self.annotations_root,
+            self.translations_root,
             self.reading_plans_root,
             self.runs_root,
         ]
@@ -132,6 +132,7 @@ class WorkspacePaths:
             "wiki.daily": self.wiki_daily,
             "indexes.root": self.indexes_root,
             "annotations.root": self.annotations_root,
+            "translations.root": self.translations_root,
             "reading_plans.root": self.reading_plans_root,
             "runs.root": self.runs_root,
         }

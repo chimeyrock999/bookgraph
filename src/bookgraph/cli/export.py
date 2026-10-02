@@ -11,6 +11,7 @@ from bookgraph.exports.models import FALLBACK_POLICIES, ExportReport, FallbackPo
 from bookgraph.exports.renderers import (
     AUTO_RENDERER,
     RenderError,
+    check_output_suffix,
     default_renderer_registry,
     select_renderer,
 )
@@ -98,6 +99,10 @@ def export_translated_pdf(
     output = out or Path("exports") / f"{resolved_doc_id}.{resolved_lang}-progress{suffix}"
     if not output.is_absolute():
         output = workspace.root / output
+    try:
+        check_output_suffix(registry, renderer_name, output)
+    except RenderError as exc:
+        raise typer.BadParameter(str(exc), param_hint="--out") from exc
 
     try:
         export = build_translated_export(
@@ -113,6 +118,13 @@ def export_translated_pdf(
     _print_report(export.report)
     if check:
         typer.echo("export: (check only, not written)")
+        # A preflight must fail exactly when the real export would be refused.
+        if strict and export.report.asset_warnings:
+            typer.echo(
+                f"error: {len(export.report.asset_warnings)} asset problem(s) in strict mode",
+                err=True,
+            )
+            raise typer.Exit(code=1)
         return
 
     try:

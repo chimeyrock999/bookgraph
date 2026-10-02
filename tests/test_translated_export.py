@@ -17,6 +17,7 @@ from bookgraph.exports.renderers import (
     ExportRenderer,
     HtmlRenderer,
     RenderError,
+    check_output_suffix,
     default_renderer_registry,
     select_renderer,
 )
@@ -428,3 +429,60 @@ def test_real_pdf_backend_renders_vietnamese(workspace: WorkspacePaths, backend:
         pytest.skip(str(exc))
 
     assert output.read_bytes().startswith(b"%PDF")
+
+
+@pytest.mark.parametrize("body", ["", "   \n", "---\ntitle: x\n---\n"])
+def test_fail_fallback_counts_empty_artifacts_as_untranslated(
+    workspace: WorkspacePaths, body: str
+) -> None:
+    chapter, second, third = _section_ids(workspace)
+    _translate(workspace, chapter, "# Chương\n")
+    _translate(workspace, second, body)
+    _translate(workspace, third, "# Phần Ba\n")
+
+    with pytest.raises(UntranslatedSectionsError) as excinfo:
+        build_translated_export(workspace, DOC, lang="vi", fallback="fail")
+
+    assert excinfo.value.report.untranslated == [second]
+    assert TRANSLATION_EMPTY in [w.code for w in excinfo.value.report.warnings]
+
+
+def test_raw_html_images_are_embedded_or_reported(workspace: WorkspacePaths) -> None:
+    chapter, _, _ = _section_ids(workspace)
+    _translate(
+        workspace,
+        chapter,
+        "# Chương\n\n"
+        '<figure><img alt="ok" src="images/fig1.png"></figure>\n\n'
+        "Inline <img src='images/gone.png'> and <img data-src=\"images/fig1.png\"> here.\n\n"
+        "<table><tr><td><img src=https://example.com/t.png></td></tr></table>\n",
+    )
+
+    export = build_translated_export(workspace, DOC, lang="vi", generated_at=GENERATED_AT)
+    by_ref = {w.reference: w.code for w in export.report.warnings if w.section_id == chapter}
+
+    assert f'<img alt="ok" src="{PNG_URI}">' in export.html
+    assert by_ref["images/gone.png"] == ASSET_MISSING
+    assert by_ref["https://example.com/t.png"] == ASSET_REMOTE
+    assert by_ref['<img data-src="images/fig1.png">'] == ASSET_MISSING  # no real src
+    assert export.report.sections[0].assets_embedded == 1
+    assert export.report.sections[0].assets_missing == 3
+    assert "<img src='images/gone.png'>" not in export.html
+    assert export.report.asset_warnings  # so --strict refuses this export
+
+
+def test_output_suffix_must_match_renderer() -> None:
+    registry = default_renderer_registry()
+
+    check_output_suffix(registry, "html", Path("book.htm"))
+    check_output_suffix(registry, "weasyprint", Path("book.PDF"))
+    check_output_suffix(registry, "auto", Path("book.pdf"))
+    check_output_suffix(registry, "auto", Path("book.html"))
+    with pytest.raises(RenderError, match="writes .html files"):
+        check_output_suffix(registry, "html", Path("book.pdf"))
+    with pytest.raises(RenderError, match="writes .pdf files"):
+        check_output_suffix(registry, "playwright", Path("book.html"))
+    with pytest.raises(RenderError, match="Cannot infer"):
+        check_output_suffix(registry, "auto", Path("book.txt"))
+    with pytest.raises(RenderError, match="writes .html files"):
+        select_renderer(registry, "html", Path("book.pdf"))

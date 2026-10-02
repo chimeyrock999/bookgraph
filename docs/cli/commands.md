@@ -813,7 +813,11 @@ bookgraph export translated-pdf /path/to/workspace ddia --check           # cove
   not installed is an error.
 - `--strict`: exit `1` without writing anything if any asset is missing, remote, or
   unsupported.
-- `--check`: preflight only. Prints coverage and warnings and writes nothing.
+- `--check`: preflight only. Prints coverage and warnings and writes nothing. With
+  `--strict`, it exits `1` whenever the real export would be refused.
+- The `--out` suffix must match the renderer: `.pdf` for `weasyprint`/`playwright`,
+  `.html`/`.htm` for `html`. A mismatch, or a suffix that `auto` cannot map to a
+  format, exits `2`.
 
 ### Reads
 
@@ -830,7 +834,8 @@ bookgraph export translated-pdf /path/to/workspace ddia --check           # cove
 
 All images are embedded as `data:` URIs, so the output is self-contained.
 
-- A Markdown image link in an artifact is resolved against the artifact's own
+- Markdown image links and raw HTML `<img src>` tags are handled the same way. A link
+  in an artifact is resolved against the artifact's own
   directory, then `sources/parsed/<doc_id>/images/`, then `sources/parsed/<doc_id>/`,
   then the workspace root. An absolute path is accepted only if it points inside the
   workspace.
@@ -864,8 +869,10 @@ All images are embedded as `data:` URIs, so the output is self-contained.
 ### Errors
 
 - Missing sections manifest → `Sections manifest not found` (exit 2).
-- Unknown `--fallback` / `--renderer`, or an invalid `--lang` → exit 2.
-- `--fallback fail` with untranslated sections, `--strict` with asset problems, or a
+- Unknown `--fallback` / `--renderer`, an invalid `--lang`, or an `--out` suffix that
+  does not match the renderer → exit 2.
+- `--fallback fail` with untranslated sections (including empty or unreadable
+  artifacts), `--strict` with asset problems (also under `--check`), or a
   missing or failing renderer → exit 1, with nothing written.
 
 ### PDF backends (optional extras)

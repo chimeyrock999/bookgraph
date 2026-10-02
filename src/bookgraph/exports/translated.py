@@ -22,10 +22,11 @@ import base64
 import json
 import mimetypes
 import os
+import re
 import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from html import escape
+from html import escape, unescape
 from pathlib import Path
 from urllib.parse import unquote
 
@@ -61,6 +62,12 @@ from bookgraph.workspace import WorkspacePaths
 # Image types every supported renderer can draw from a data: URI.
 _EMBEDDABLE_MIME_TYPES = frozenset(
     {"image/png", "image/jpeg", "image/gif", "image/svg+xml", "image/webp"}
+)
+
+# Raw HTML ``<img>`` tags and their ``src`` attribute (double-, single- or unquoted).
+_HTML_IMG_RE = re.compile(r"<img\b[^>]*>", re.IGNORECASE)
+_HTML_SRC_RE = re.compile(
+    r"""(?<![\w-])src\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))""", re.IGNORECASE
 )
 
 # Ingest quality warnings worth repeating in an export report: the section's source
@@ -165,28 +172,6 @@ def build_translated_export(
         section.id: find_translation_artifact(workspace, doc_id, section.id, lang)
         for section in sections
     }
-    if fallback == "fail" and any(path is None for path in artifacts.values()):
-        raise UntranslatedSectionsError(
-            _report(
-                doc_id,
-                title,
-                lang,
-                fallback,
-                generated_at or default_generated_at(),
-                [
-                    ExportSection(
-                        section_id=s.id,
-                        title=s.title,
-                        level=s.level,
-                        source="translated" if artifacts[s.id] else "original",
-                        artifact=_relative(workspace, artifacts[s.id]),
-                    )
-                    for s in sections
-                ],
-                [],
-            )
-        )
-
     rendered = [
         assembler.render_section(section, artifacts[section.id], fallback) for section in sections
     ]
@@ -199,6 +184,10 @@ def build_translated_export(
         [entry for entry, _ in rendered],
         assembler.warnings,
     )
+    # Checked after rendering, not on artifact existence: an empty or unreadable
+    # artifact falls back too, and must count as untranslated under ``fail``.
+    if fallback == "fail" and report.untranslated:
+        raise UntranslatedSectionsError(report)
     html = _document_html(report, [body for _, body in rendered])
     return TranslatedExport(html=html, report=report)
 
@@ -412,12 +401,25 @@ class _Assembler:
     def _rewrite_images(
         self, tokens: list[Token], section_id: str, bases: list[Path], counter: _AssetCounter
     ) -> None:
-        """Embed every Markdown image as a data: URI, or swap it for a placeholder."""
+        """Embed every image as a data: URI, or swap it for a placeholder.
+
+        Covers Markdown ``image`` tokens and raw HTML ``<img>`` tags (artifacts may
+        carry HTML, e.g. MinerU tables): the page's CSP only allows ``data:`` images,
+        so an ``<img>`` left untouched would vanish silently instead of being embedded
+        or reported.
+        """
 
         for token in tokens:
+            if token.type == "html_block":
+                token.content = self._rewrite_html_images(token.content, section_id, bases, counter)
             if not token.children:
                 continue
             for index, child in enumerate(token.children):
+                if child.type == "html_inline":
+                    child.content = self._rewrite_html_images(
+                        child.content, section_id, bases, counter
+                    )
+                    continue
                 if child.type != "image":
                     continue
                 src = str(child.attrGet("src") or "")
@@ -428,6 +430,27 @@ class _Assembler:
                 else:
                     counter.embedded += 1
                     child.attrSet("src", uri)
+
+    def _rewrite_html_images(
+        self, html: str, section_id: str, bases: list[Path], counter: _AssetCounter
+    ) -> str:
+        def replace(match: re.Match[str]) -> str:
+            tag = match.group(0)
+            src_match = _HTML_SRC_RE.search(tag)
+            if src_match is None:
+                self._warn(ASSET_MISSING, "HTML <img> tag has no src", section_id, tag)
+                counter.missing += 1
+                return _missing(tag)
+            src = unescape(next(g for g in src_match.groups() if g is not None))
+            uri = self._link_data_uri(src, section_id, bases)
+            if uri is None:
+                counter.missing += 1
+                return _missing(src)
+            counter.embedded += 1
+            start, end = src_match.span()
+            return f'{tag[:start]}src="{uri}"{tag[end:]}'
+
+        return _HTML_IMG_RE.sub(replace, html)
 
     def _link_data_uri(self, src: str, section_id: str, bases: list[Path]) -> str | None:
         if not src:

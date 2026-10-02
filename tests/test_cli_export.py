@@ -130,3 +130,34 @@ def test_export_rejects_bad_options(tmp_path: Path) -> None:
     assert bad_lang.exit_code == 2
     assert missing_doc.exit_code == 2
     assert "Sections manifest not found" in missing_doc.output
+
+
+def test_export_check_strict_fails_like_the_real_export(tmp_path: Path) -> None:
+    paths = _workspace(tmp_path)
+
+    result = CliRunner().invoke(
+        app, ["export", "translated-pdf", str(tmp_path), DOC, "--check", "--strict"]
+    )
+
+    assert result.exit_code == 1
+    assert "asset problem(s) in strict mode" in result.output
+    assert not paths.exports_root.exists()
+
+
+def test_export_rejects_output_suffix_that_does_not_match_renderer(tmp_path: Path) -> None:
+    paths = _workspace(tmp_path)
+    runner = CliRunner()
+
+    html_as_pdf = runner.invoke(
+        app,
+        ["export", "translated-pdf", str(tmp_path), DOC, "--renderer", "html", "--out", "x.pdf"],
+    )
+    unknown = runner.invoke(
+        app, ["export", "translated-pdf", str(tmp_path), DOC, "--out", "x.txt", "--check"]
+    )
+
+    assert html_as_pdf.exit_code == 2
+    assert "writes .html files" in html_as_pdf.output
+    assert unknown.exit_code == 2
+    assert not paths.exports_root.exists()
+    assert not (tmp_path / "x.pdf").exists()

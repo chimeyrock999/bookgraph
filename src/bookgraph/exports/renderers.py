@@ -123,6 +123,35 @@ def default_renderer_registry() -> PluginRegistry[ExportRenderer]:
     return registry
 
 
+def check_output_suffix(registry: PluginRegistry[ExportRenderer], name: str, output: Path) -> None:
+    """Refuse an output path whose suffix does not match the renderer's format.
+
+    Without this, ``--renderer html --out book.pdf`` would write HTML into a
+    ``.pdf`` file (and a PDF backend would do the reverse). ``auto`` accepts any
+    suffix one of the registered renderers produces, since it picks by suffix.
+    """
+
+    suffix = output.suffix.lower()
+    if name == AUTO_RENDERER:
+        allowed = set().union(*(_accepted_suffixes(r) for r in registry.all()))
+        if suffix not in allowed:
+            raise RenderError(
+                f"Cannot infer the export format from '{output.name}': use one of "
+                f"{', '.join(sorted(allowed))}, or pass --renderer."
+            )
+        return
+    renderer = registry.get(name)
+    if suffix not in _accepted_suffixes(renderer):
+        raise RenderError(
+            f"Renderer '{name}' writes {renderer.suffix} files, but the output is "
+            f"'{output.name}'. Change --out or --renderer."
+        )
+
+
+def _accepted_suffixes(renderer: ExportRenderer) -> set[str]:
+    return {".html", ".htm"} if renderer.suffix == ".html" else {renderer.suffix}
+
+
 def select_renderer(
     registry: PluginRegistry[ExportRenderer], name: str, output: Path
 ) -> ExportRenderer:
@@ -130,9 +159,11 @@ def select_renderer(
 
     ``auto`` writes HTML for a ``.html``/``.htm`` output and otherwise the first
     available PDF backend. An explicitly named backend that is not installed is an
-    error rather than a silent switch to another engine.
+    error rather than a silent switch to another engine, and so is an output suffix
+    the renderer does not produce (see :func:`check_output_suffix`).
     """
 
+    check_output_suffix(registry, name, output)
     if name != AUTO_RENDERER:
         renderer = registry.get(name)
         if not renderer.available():

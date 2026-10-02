@@ -108,8 +108,10 @@ def _atomic_write(path: Path, text: str) -> None:
     # lock a delivery job running as another user out of the cache).
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(text)
+        # Write bytes, not text: text mode would translate newlines on Windows and the
+        # body on disk would no longer match the ``content_hash`` computed from it.
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(text.encode("utf-8"))
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(tmp, path)
@@ -187,6 +189,9 @@ class TranslationState:
     paths: TranslationPaths
     artifact: SectionArtifact | None
     current_section_hash: str | None
+    # The exact body bytes the status was decided on; serve these rather than re-reading
+    # the file, so a concurrent rewrite cannot pair a new body with the old sidecar.
+    body: bytes | None = None
 
 
 def translation_state(
@@ -235,6 +240,7 @@ def translation_state(
         paths=paths,
         artifact=artifact,
         current_section_hash=current_section_hash,
+        body=body,
     )
 
 

@@ -963,11 +963,9 @@ def _artifact_view(
     artifact = state.artifact
     body_exists = state.status != "missing"
     content: str | None = None
-    if include_content and body_exists:
-        try:
-            content = state.paths.body.read_text(encoding="utf-8")
-        except OSError:
-            content = None
+    if include_content and state.body is not None:
+        # Decode the bytes the status was computed from (no second read of the file).
+        content = state.body.decode("utf-8", errors="replace")
     return SectionArtifactView(
         lang=state.lang,
         doc_id=state.doc_id,

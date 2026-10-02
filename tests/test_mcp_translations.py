@@ -204,3 +204,25 @@ def test_list_section_artifacts_orphans_unsegmented_documents(tmp_path: Path) ->
 def test_list_section_artifacts_rejects_unknown_type(tmp_path: Path) -> None:
     with pytest.raises(ReadingServiceError, match="unknown artifact type"):
         service.list_section_artifacts(WorkspacePaths(tmp_path), artifact_type="summary")
+
+
+def test_get_serves_the_body_it_validated_not_a_second_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A rewrite landing after the status check must not pair new text with the old sidecar.
+    workspace = _workspace(tmp_path, _section("deep-work.a"))
+    service.write_section_translation(workspace, "deep-work", "deep-work.a", "vi", "Bản A")
+
+    body = workspace.translations_root / "vi" / "deep-work" / "deep-work.a.md"
+    real_read_text = Path.read_text
+
+    def guarded_read_text(self: Path, *args: object, **kwargs: object) -> str:
+        if self == body:
+            raise AssertionError("content must come from the validated bytes")
+        return real_read_text(self, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "read_text", guarded_read_text)
+    view = service.get_section_translation(workspace, "deep-work", "deep-work.a", "vi")
+
+    assert view.status == "fresh"
+    assert view.content == "Bản A"

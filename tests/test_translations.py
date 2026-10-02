@@ -221,3 +221,26 @@ def test_cache_files_follow_the_umask(tmp_path: Path) -> None:
 
     assert stat.S_IMODE(paths.body.stat().st_mode) == 0o644
     assert stat.S_IMODE(paths.metadata.stat().st_mode) == 0o644
+
+
+def test_body_bytes_on_disk_match_the_recorded_hash(tmp_path: Path) -> None:
+    # Bytes, not text mode: newlines are not translated, so the hash survives any platform.
+    workspace = WorkspacePaths(tmp_path)
+    content = "dòng một\ndòng hai\r\n"
+
+    artifact = write_translation(workspace, _section(), "vi", content)
+
+    body = translation_paths(workspace, "vi", "deep-work", "deep-work.alpha").body
+    assert body.read_bytes() == content.encode("utf-8")
+    assert artifact.content_hash == body_content_hash(body.read_bytes())
+
+
+def test_state_carries_the_body_bytes_it_hashed(tmp_path: Path) -> None:
+    workspace = WorkspacePaths(tmp_path)
+    section = _section()
+    write_translation(workspace, section, "vi", "Xin chào.")
+
+    current = section_content_hash(section)
+    state = translation_state(workspace, "vi", "deep-work", section.id, current)
+
+    assert state.body == "Xin chào.".encode()

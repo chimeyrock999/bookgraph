@@ -124,6 +124,7 @@ Sections that are not translated yet appear in the original language:
 
 ```bash
 bookgraph export translated-pdf /path/to/workspace <doc_id> --lang vi   # needs: --extra pdf or pdf-chromium
+bookgraph export translated-pdf /path/to/workspace <doc_id> --lang vi --mode bilingual   # original | translated side by side
 bookgraph export translated-pdf /path/to/workspace <doc_id> --check     # coverage + missing-asset report
 ```
 

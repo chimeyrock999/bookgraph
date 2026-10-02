@@ -14,6 +14,12 @@ from pydantic import BaseModel, Field
 FallbackPolicy = Literal["original", "skip", "fail"]
 FALLBACK_POLICIES: tuple[str, ...] = ("original", "skip", "fail")
 
+# The reader-facing layout: ``translated`` is the mixed reading edition (each section's
+# translation, else the ``--fallback`` result); ``bilingual`` puts the original section
+# on the left and that same mixed rendering on the right.
+ExportMode = Literal["translated", "bilingual"]
+EXPORT_MODES: tuple[str, ...] = ("translated", "bilingual")
+
 # How one section ended up in the export: its translation artifact, the original
 # source text (``--fallback original``), or a placeholder (``--fallback skip``).
 SectionSource = Literal["translated", "original", "skipped"]
@@ -63,7 +69,10 @@ class ExportSection(BaseModel):
     """Where one section's content came from in the export.
 
     ``freshness`` is the translation's registry status when ``source`` is
-    ``translated``, ``None`` otherwise.
+    ``translated``, ``None`` otherwise. ``assets_*`` count the mixed rendering (the
+    whole section in ``translated`` mode, the right column in ``bilingual`` mode);
+    ``original_assets_*`` count the bilingual left column and stay ``None`` in
+    ``translated`` mode.
     """
 
     section_id: str
@@ -74,22 +83,33 @@ class ExportSection(BaseModel):
     freshness: TranslationFreshness | None = None
     assets_embedded: int = 0
     assets_missing: int = 0
+    original_assets_embedded: int | None = None
+    original_assets_missing: int | None = None
 
 
 class ExportReport(BaseModel):
     """Coverage + QA report for one translated export, in reading order.
 
     ``coverage`` is ``translated_sections / total_sections`` (``0.0`` for an empty
-    document). ``output``/``renderer`` stay ``None`` for a preflight-only run.
+    document). ``original_sections`` / ``skipped_sections`` count the sections that
+    took the ``--fallback`` path. ``unpaired_sections`` counts bilingual rows with no
+    translation to compare against (``0`` in ``translated`` mode), and
+    ``assets_missing`` every *Missing asset* placeholder on the page.
+    ``output``/``renderer`` stay ``None`` for a preflight-only run.
     """
 
     doc_id: str
     title: str
     lang: str
+    mode: ExportMode = "translated"
     fallback: FallbackPolicy
     generated_at: str
     total_sections: int
     translated_sections: int
+    original_sections: int = 0
+    skipped_sections: int = 0
+    unpaired_sections: int = 0
+    assets_missing: int = 0
     coverage: float
     sections: list[ExportSection] = Field(default_factory=list)
     warnings: list[ExportWarning] = Field(default_factory=list)

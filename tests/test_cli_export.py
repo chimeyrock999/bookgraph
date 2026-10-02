@@ -161,3 +161,53 @@ def test_export_rejects_output_suffix_that_does_not_match_renderer(tmp_path: Pat
     assert unknown.exit_code == 2
     assert not paths.exports_root.exists()
     assert not (tmp_path / "x.pdf").exists()
+
+
+def test_export_bilingual_mode_writes_side_by_side_edition(tmp_path: Path) -> None:
+    paths = _workspace(tmp_path)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "export",
+            "translated-pdf",
+            str(tmp_path),
+            DOC,
+            "--mode",
+            "bilingual",
+            "--renderer",
+            "html",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    output = paths.exports_root / f"{DOC}.vi-bilingual.html"
+    assert f"export: {output}" in result.output
+    assert "mode: bilingual" in result.output
+    html = output.read_text(encoding="utf-8")
+    assert html.count('<table class="bilingual">') == 2
+    payload = json.loads((paths.exports_root / f"{DOC}.vi-bilingual.report.json").read_text())
+    assert payload["mode"] == "bilingual"
+    assert payload["translated_sections"] == 1
+    assert payload["original_sections"] == 1
+    assert payload["unpaired_sections"] == 1
+
+
+def test_export_default_mode_is_translated(tmp_path: Path) -> None:
+    _workspace(tmp_path)
+
+    result = CliRunner().invoke(app, ["export", "translated-pdf", str(tmp_path), DOC, "--check"])
+
+    assert result.exit_code == 0, result.output
+    assert "mode: translated" in result.output
+
+
+def test_export_rejects_unknown_mode(tmp_path: Path) -> None:
+    _workspace(tmp_path)
+
+    result = CliRunner().invoke(
+        app, ["export", "translated-pdf", str(tmp_path), DOC, "--mode", "original-only"]
+    )
+
+    assert result.exit_code == 2
+    assert "--mode must be one of: translated, bilingual" in result.output

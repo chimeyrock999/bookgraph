@@ -1041,10 +1041,19 @@ Assemble a partially translated book into one reading edition. Sections come out
 artifact; any other section follows `--fallback`. This produces a clean reading
 edition. It does not reproduce the publisher's page layout.
 
+Two reader-facing modes (`--mode`):
+
+```text
+translated = mixed edition: translation where available, --fallback otherwise
+bilingual  = original | mixed   (side by side, one row per section)
+```
+
 ```bash
 bookgraph export translated-pdf /path/to/workspace ddia --lang vi
 bookgraph export translated-pdf /path/to/workspace ddia --lang vi --fallback skip \
   --out exports/ddia.vi-progress.pdf
+bookgraph export translated-pdf /path/to/workspace ddia --lang vi --mode bilingual \
+  --out exports/ddia.en-vi.pdf
 bookgraph export translated-pdf /path/to/workspace ddia --renderer html   # no PDF extra needed
 bookgraph export translated-pdf /path/to/workspace ddia --check           # coverage + QA only
 ```
@@ -1054,15 +1063,28 @@ bookgraph export translated-pdf /path/to/workspace ddia --check           # cove
 - `workspace_path`, `doc_id`: workspace root and a segmented document id (slug-validated).
 - `--lang` (default `vi`): translation language code, normalised like the registry
   (lowercased, so `VI` and `pt-BR` work).
+- `--mode translated|bilingual` (default `translated`):
+  - `translated` renders each section once: its translation, or the `--fallback`
+    result.
+  - `bilingual` renders each section as a two-column row on a landscape page. The
+    left column is always the original section (rebuilt the same way as an
+    `original` fallback, under its source title). The right column is exactly what
+    `translated` mode renders for that section, so it follows `--fallback` too.
+    Rows align at section level: translations are free Markdown without block ids,
+    so finer alignment is not attempted. Figures, tables and code appear in the
+    column whose content carries them (the original's figures on the left, the
+    translation's own image links and code on the right); an untranslated section
+    shows the original in both columns.
 - `--fallback original|skip|fail` (default `original`). This controls what happens to
-  a section that has no translation:
+  a section that has no translation (in `bilingual` mode, to its right column):
   - `original` renders the original section, labelled *Untranslated — original text*;
   - `skip` renders the title with a *Not translated yet* placeholder;
   - `fail` exits `1` and lists every untranslated section. Nothing is written. A
     `stale` or `untracked` translation counts as translated (use `--strict` to refuse
     stale ones).
 - `--out`: output file. A relative path is resolved under the workspace. The default
-  is `exports/<doc_id>.<lang>-progress.pdf`, or `.html` with `--renderer html`.
+  is `exports/<doc_id>.<lang>-progress.pdf` (`exports/<doc_id>.<lang>-bilingual.pdf`
+  with `--mode bilingual`), or `.html` with `--renderer html`.
 - `--renderer auto|weasyprint|playwright|html` (default `auto`). `auto` writes HTML
   for a `.html`/`.htm` output. For any other output it uses the first installed PDF
   backend, trying `weasyprint` first and then `playwright`. Naming a backend that is
@@ -1121,7 +1143,7 @@ All images are embedded as `data:` URIs, so the output is self-contained.
 
 ### Prints
 
-- `doc_id`, `lang`, `fallback`, and `coverage: <translated>/<total> (<pct>%)`.
+- `doc_id`, `lang`, `mode`, `fallback`, and `coverage: <translated>/<total> (<pct>%)`.
 - One `warning: <code>: <section_id>: <message>` line per warning.
 - `renderer`, `export`, and `report` paths. With `--check` it prints
   `export: (check only, not written)` instead.
@@ -1129,7 +1151,7 @@ All images are embedded as `data:` URIs, so the output is self-contained.
 ### Errors
 
 - Missing sections manifest → `Sections manifest not found` (exit 2).
-- Unknown `--fallback` / `--renderer`, an invalid `--lang`, or an `--out` suffix that
+- Unknown `--mode` / `--fallback` / `--renderer`, an invalid `--lang`, or an `--out` suffix that
   does not match the renderer → exit 2.
 - `--fallback fail` with untranslated sections (including empty or unreadable
   artifacts; stale and untracked translations count as translated), `--strict` with

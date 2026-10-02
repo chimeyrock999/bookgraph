@@ -42,9 +42,7 @@ def test_missing_translation_reports_current_hash(tmp_path: Path) -> None:
     assert view.status == "missing"
     assert view.content is None
     assert view.path is None
-    assert view.current_section_hash is not None and view.current_section_hash.startswith(
-        "sha256:"
-    )
+    assert view.current_section_hash is not None and view.current_section_hash.startswith("sha256:")
 
 
 def test_write_then_get_returns_fresh_cached_content(tmp_path: Path) -> None:
@@ -65,9 +63,7 @@ def test_write_then_get_returns_fresh_cached_content(tmp_path: Path) -> None:
     assert written.status == "fresh"
     assert written.lang == "vi"
     assert written.content is None  # writes do not echo the body back
-    assert written.path == str(
-        workspace.translations_root / "vi" / "deep-work" / "deep-work.a.md"
-    )
+    assert written.path == str(workspace.translations_root / "vi" / "deep-work" / "deep-work.a.md")
     view = service.get_section_translation(workspace, "deep-work", "deep-work.a", "vi")
     assert view.status == "fresh"
     assert view.content == "# Bản dịch"
@@ -288,3 +284,46 @@ def test_translation_may_carry_the_sections_figures(tmp_path: Path) -> None:
     assert [(i.kind, i.target, i.change) for i in written.structure_issues] == [
         ("image", "missing.png", "added")
     ]
+
+
+def test_structure_check_ignores_frontmatter_like_the_export(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path, _section("deep-work.a", text=LINKED))
+
+    written = service.write_section_translation(
+        workspace,
+        "deep-work",
+        "deep-work.a",
+        "vi",
+        "---\nsource: <https://example.com/book/ch01.html>\n---\n"
+        "Xem [chương](ch03.html#sec_models) và [hình](#fig_query).",
+    )
+
+    assert written.structure_issues == []
+
+
+def test_structure_check_rebuilds_parsed_code_blocks(tmp_path: Path) -> None:
+    workspace = WorkspacePaths(tmp_path)
+    blocks = [
+        CanonicalBlock(id="b0", type="title", text="A", level=1),
+        CanonicalBlock(id="b1", type="text", text="See [x](a.html)."),
+        CanonicalBlock(id="b2", type="text", text='<div id="app"></div>', metadata={"code": True}),
+    ]
+    write_document(
+        Document(doc_id="deep-work", title="Deep Work", blocks=blocks),
+        workspace.sources_parsed / "deep-work",
+    )
+    text = 'See [x](a.html).\n\n<div id="app"></div>'
+    write_sections(
+        [_section("deep-work.a", text=text, block_ids=["b0", "b1", "b2"])],
+        workspace.sources_sections / "deep-work",
+    )
+
+    written = service.write_section_translation(
+        workspace,
+        "deep-work",
+        "deep-work.a",
+        "vi",
+        'Xem [x](a.html).\n\n```html\n<div id="app"></div>\n```\n',
+    )
+
+    assert written.structure_issues == []

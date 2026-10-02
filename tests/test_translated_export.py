@@ -555,7 +555,11 @@ def test_raw_html_img_scanning_is_attribute_aware(workspace: WorkspacePaths) -> 
     # Custom elements named ``img-*`` are not images.
     assert '<img-zoom src="x"></img-zoom>' in html
     assert "<img-comparison-slider>" in html
-    # No asset warnings (the added ``src`` paths are reported as structure changes only).
+    # No asset warnings. The embedded ``<img>``s (a resolving file, a ``data:`` URI)
+    # are not structure changes; only the custom element's ``src="x"``, a link the
+    # source section never had, is.
+    structure = [w for w in export.report.warnings if w.code == TRANSLATION_STRUCTURE_CHANGED]
+    assert [w.message.split(": ", 1)[1] for w in structure] == ["link 'x' added"]
     assert [
         w
         for w in export.report.warnings

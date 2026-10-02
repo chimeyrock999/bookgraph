@@ -22,7 +22,6 @@ publisher's layout.
 from __future__ import annotations
 
 import base64
-import json
 import mimetypes
 import os
 import re
@@ -31,12 +30,11 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from html import escape, unescape
 from pathlib import Path
-from urllib.parse import unquote
 
 from markdown_it import MarkdownIt
 from markdown_it.token import Token
 
-from bookgraph.assets import asset_reference, resolve_asset_path
+from bookgraph.assets import asset_reference, resolve_asset_path, resolve_workspace_link
 from bookgraph.documents import read_document
 from bookgraph.exports.models import (
     ASSET_MISSING,
@@ -65,14 +63,14 @@ from bookgraph.quality import (
 )
 from bookgraph.sections import read_sections
 from bookgraph.translation_structure import (
-    check_translation_structure,
+    check_section_translation,
     describe_structure_issues,
     local_asset_resolver,
-    section_source_markdown,
 )
 from bookgraph.translations import (
     TranslationState,
     section_content_hash,
+    split_frontmatter,
     translation_state,
     validate_lang,
 )
@@ -402,8 +400,8 @@ class _Assembler:
         resolves = local_asset_resolver(
             self.workspace.root, [artifact.parent, *self._parsed_bases()]
         )
-        issues = check_translation_structure(
-            section_source_markdown(section), body, asset_resolves=resolves
+        issues = check_section_translation(
+            section, body, blocks=self.blocks, asset_resolves=resolves
         )
         if issues:
             self._warn(
@@ -581,7 +579,7 @@ class _Assembler:
                 src,
             )
             return None
-        path = self._resolve_link(unquote(src.split("#", 1)[0].split("?", 1)[0]), bases)
+        path = self._resolve_link(src, bases)
         if path is None:
             self._warn(
                 ASSET_MISSING,
@@ -592,23 +590,10 @@ class _Assembler:
             return None
         return self._data_uri(path, section_id, src)
 
-    def _resolve_link(self, raw: str, bases: list[Path]) -> Path | None:
+    def _resolve_link(self, link: str, bases: list[Path]) -> Path | None:
         """Resolve an image link to a regular file that stays inside the workspace."""
 
-        try:
-            root_real = self.workspace.root.resolve()
-        except (OSError, ValueError):
-            return None
-        candidate = Path(raw)
-        options = [candidate] if candidate.is_absolute() else [base / candidate for base in bases]
-        for option in options:
-            try:
-                real = option.resolve()
-                if real.is_relative_to(root_real) and real.is_file():
-                    return real
-            except (OSError, ValueError):
-                continue
-        return None
+        return resolve_workspace_link(self.workspace.root, link, bases)
 
     def _data_uri(self, path: Path, section_id: str, reference: str) -> str | None:
         key = path.resolve()
@@ -642,34 +627,6 @@ class _Assembler:
 class _AssetCounter:
     embedded: int = 0
     missing: int = 0
-
-
-def split_frontmatter(text: str) -> tuple[dict[str, object], str]:
-    """Split an optional leading ``---`` YAML frontmatter block from Markdown.
-
-    Only flat ``key: value`` lines are read (values as JSON scalars when they parse,
-    raw strings otherwise) — enough for the ``title``/provenance fields translation
-    artifacts carry, without a YAML dependency. Text without frontmatter is returned
-    unchanged.
-    """
-
-    lines = text.splitlines()
-    if not lines or lines[0].strip() != "---":
-        return {}, text
-    end = next((i for i, line in enumerate(lines[1:], start=1) if line.strip() == "---"), None)
-    if end is None:
-        return {}, text
-    fields: dict[str, object] = {}
-    for line in lines[1:end]:
-        key, sep, value = line.partition(":")
-        if not sep or not key.strip():
-            continue
-        value = value.strip()
-        try:
-            fields[key.strip()] = json.loads(value)
-        except ValueError:
-            fields[key.strip()] = value.strip("'\"")
-    return fields, "\n".join(lines[end + 1 :])
 
 
 def _first_heading_text(tokens: list[Token]) -> str | None:

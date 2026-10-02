@@ -5,9 +5,11 @@ at. Link labels, image alt text, and prose may be translated; these must survive
 byte-for-byte, because intra-book references, TOC anchors, and exports depend on them:
 
 - ``link`` — Markdown link destinations (``[label](ch03.html#sec_x)``, ``(#fig_y)``,
-  autolinks, links resolved from reference definitions) and HTML ``href`` values;
-- ``image`` — Markdown image destinations and HTML ``src`` values (file paths);
-- ``reference`` — reference-style definitions, identifier and destination
+  autolinks, links resolved from reference definitions), HTML ``href`` values, and
+  ``src`` on elements other than ``<img>`` (``<script>``, ``<iframe>``, …);
+- ``image`` — Markdown image destinations and ``<img src>`` values (file paths);
+- ``reference`` — reference-style definitions, identifier (compared as CommonMark
+  normalises it: case- and whitespace-insensitive) and destination
   (``[graphql-spec]: https://…``);
 - ``html_id`` — HTML ``id`` / ``name`` anchors;
 - ``heading_id`` — explicit heading ids (``## Title {#sec_x}``).
@@ -16,28 +18,42 @@ byte-for-byte, because intra-book references, TOC anchors, and exports depend on
 the translation, so a dropped, added, or rewritten target is reported. The one allowed
 rewrite is a broken local image path normalised to one that resolves, and a translation
 may add local images that resolve (it carries the section's figures, which are not part
-of the section text); both are decided by the caller's ``asset_resolves``. Code
-spans/blocks and HTML comments are not structure.
+of the section text); both are decided by the caller's ``asset_resolves``. ``data:``
+images are embedded as they are, so they always count as resolving. Code spans/blocks
+and HTML comments are not structure.
+
+The source side is :func:`section_source_markdown`: parsers store code blocks as plain
+text with their fences removed, so it re-fences them from the section's canonical
+blocks; code a translator left unfenced is forgiven too (see
+:func:`check_translation_structure`). Parsers also drop reference definitions from the
+section text (``[spec]: …`` never reaches ``Section.text``), so the ``reference`` kind
+only protects definitions a section's text actually carries (sections written by hand
+or by a future parser that keeps them).
 """
 
 from __future__ import annotations
 
 import re
 from collections import Counter
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
-from urllib.parse import unquote
 
 from markdown_it import MarkdownIt
 from markdown_it.token import Token
 
-from bookgraph.models import Section, StructuralTargetKind, TranslationStructureIssue
+from bookgraph.assets import resolve_workspace_link
+from bookgraph.models import (
+    CanonicalBlock,
+    Section,
+    StructuralTargetKind,
+    TranslationStructureIssue,
+)
 
 Target = tuple[StructuralTargetKind, str]
 
 _HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
 # A start tag, quote-aware: a '>' inside a quoted attribute value does not end it.
-_HTML_TAG_RE = re.compile(r"""<[A-Za-z][\w:-]*(?P<attrs>(?:"[^"]*"|'[^']*'|[^'">])*)>""")
+_HTML_TAG_RE = re.compile(r"""<(?P<tag>[A-Za-z][\w:-]*)(?P<attrs>(?:"[^"]*"|'[^']*'|[^'">])*)>""")
 # One attribute, walked left to right so a quoted value (``alt='a src=x'``) is consumed
 # whole and never read as attributes of its own.
 _HTML_ATTR_RE = re.compile(
@@ -47,11 +63,13 @@ _HTML_ATTR_KINDS: dict[str, StructuralTargetKind] = {
     "id": "html_id",
     "name": "html_id",
     "href": "link",
-    "src": "image",
+    "src": "link",  # ``image`` on ``<img>`` only, as the export only embeds those
 }
 _HEADING_ID_RE = re.compile(r"\{\s*#(?P<id>[^\s{}]+)[^{}]*\}\s*$")
-_REFERENCE_LABEL_RE = re.compile(r"^ {0,3}\[(?P<label>(?:\\.|[^\]\\])+)\]:")
 _REMOTE_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
+_DATA_IMAGE_RE = re.compile(r"^data:image/", re.IGNORECASE)
+_BACKTICK_RUN_RE = re.compile(r"`+")
+_TARGET_DISPLAY_LIMIT = 80
 
 
 def _parser() -> MarkdownIt:
@@ -65,10 +83,56 @@ def _parser() -> MarkdownIt:
 _MD = _parser()
 
 
-def section_source_markdown(section: Section) -> str:
-    """The Markdown a translator works from: the section's title heading and its text."""
+def section_source_markdown(
+    section: Section, blocks: Mapping[str, CanonicalBlock] | None = None
+) -> str:
+    """The Markdown a translator works from: the section's title heading and its text.
 
-    return f"# {section.title}\n\n{section.text}"
+    With the parsed document's ``blocks``, the text is rebuilt from the section's blocks
+    the way the segmenter joins them (title blocks are not part of the text), but code
+    blocks (``metadata.code``) and equations are fenced: parsers store them as plain
+    text with the fences removed, and parsing ``handlers[0](event)`` or
+    ``<div id="app">`` sample code as Markdown would invent links and anchors. Without
+    blocks (a sections-only workspace) ``Section.text`` is used as is.
+    """
+
+    owned = [blocks[b] for b in section.block_ids if b in blocks] if blocks else []
+    if not owned:
+        return f"# {section.title}\n\n{section.text}"
+    parts = [f"# {section.title}"]
+    for block in owned:
+        text = block.text.strip()
+        if block.type == "title" or not text:
+            continue
+        if block.metadata.get("code") or block.type == "equation":
+            parts.append(_fenced(text))
+        else:
+            parts.append(text)
+    return "\n\n".join(parts)
+
+
+def _fenced(code: str) -> str:
+    longest = max((len(run) for run in _BACKTICK_RUN_RE.findall(code)), default=0)
+    fence = "`" * max(3, longest + 1)
+    return f"{fence}\n{code}\n{fence}"
+
+
+def check_section_translation(
+    section: Section,
+    body: str,
+    *,
+    blocks: Mapping[str, CanonicalBlock] | None = None,
+    asset_resolves: Callable[[str], bool] | None = None,
+) -> list[TranslationStructureIssue]:
+    """Check a translation ``body`` (frontmatter already split off) against ``section``.
+
+    The one entry point the MCP views, reading-batch completion, and the translated
+    export share, so they always judge the same text the same way.
+    """
+
+    return check_translation_structure(
+        section_source_markdown(section, blocks), body, asset_resolves=asset_resolves
+    )
 
 
 def structural_targets(markdown: str) -> Counter[Target]:
@@ -86,8 +150,21 @@ def structural_targets(markdown: str) -> Counter[Target]:
                 if match:
                     targets[("heading_id", match.group("id"))] += 1
             targets.update(_inline_targets(token.children or []))
-    targets.update(_reference_targets(markdown, env))
+    targets.update(_reference_targets(env))
     return targets
+
+
+def _code_contents(markdown: str) -> list[str]:
+    """The text of every code block and code span in ``markdown``."""
+
+    contents: list[str] = []
+    for token in _MD.parse(markdown):
+        if token.type in {"fence", "code_block"}:
+            contents.append(token.content)
+        for child in token.children or []:
+            if child.type == "code_inline":
+                contents.append(child.content)
+    return contents
 
 
 def _inline_targets(children: list[Token]) -> Iterable[Target]:
@@ -102,26 +179,24 @@ def _inline_targets(children: list[Token]) -> Iterable[Target]:
 
 def _html_targets(html: str) -> Iterable[Target]:
     for tag in _HTML_TAG_RE.finditer(_HTML_COMMENT_RE.sub("", html)):
+        is_img = tag.group("tag").lower() == "img"
         for match in _HTML_ATTR_RE.finditer(tag.group("attrs")):
-            kind = _HTML_ATTR_KINDS.get(match.group("name").lower())
+            name = match.group("name").lower()
+            kind = "image" if is_img and name == "src" else _HTML_ATTR_KINDS.get(name)
             value = next((v for v in match.group("dq", "sq", "bare") if v is not None), None)
             if kind is not None and value is not None:
                 yield kind, value
 
 
-def _reference_targets(markdown: str, env: dict[str, object]) -> Iterable[Target]:
+def _reference_targets(env: dict[str, object]) -> Iterable[Target]:
+    # Keyed by the CommonMark-normalised label (case-folded, whitespace collapsed), so
+    # ``[Spec]`` → ``[spec]`` — which still matches every use — is not a change,
+    # wherever the definition sits. markdown-it upper-cases the key; show it lower.
     references = env.get("references")
     if not isinstance(references, dict):
         return
-    lines = markdown.splitlines()
-    for normalized, definition in references.items():
-        label = normalized
-        line_map = definition.get("map")
-        if line_map and line_map[0] < len(lines):
-            match = _REFERENCE_LABEL_RE.match(lines[line_map[0]])
-            if match:
-                label = match.group("label")
-        yield "reference", f"[{label}]: {definition.get('href', '')}"
+    for label, definition in references.items():
+        yield "reference", f"[{label.lower()}]: {definition.get('href', '')}"
 
 
 def check_translation_structure(
@@ -137,14 +212,20 @@ def check_translation_structure(
     whether a local image path points at a real file; with it, added images that
     resolve are allowed, and a source image path that does not resolve may be replaced
     by one that does — normalising a known broken asset path is the one permitted
-    rewrite. Missing targets are listed first, in source order, then added ones in
-    translation order.
+    rewrite. An added target that appears verbatim in the source's code (a code block
+    or span) is not reported: it is sample code the translation left unfenced. Missing
+    targets are listed first, in source order, then added ones in translation order.
     """
 
     expected = structural_targets(source)
     actual = structural_targets(translated)
     missing = expected - actual
     added = actual - expected
+    code = _code_contents(source)
+    if code:
+        added = Counter(
+            {target: n for target, n in added.items() if not any(target[1] in c for c in code)}
+        )
     if asset_resolves is not None:
         missing, added = _forgive_fixed_images(missing, added, asset_resolves)
     issues = [
@@ -171,7 +252,7 @@ def _forgive_fixed_images(
     fixed = [
         target
         for target in added
-        if target[0] == "image" and _is_local(target[1]) and asset_resolves(target[1])
+        if target[0] == "image" and _embeddable(target[1], asset_resolves)
         for _ in range(added[target])
     ]
     broken = [
@@ -187,32 +268,23 @@ def _is_local(target: str) -> bool:
     return bool(target) and not _REMOTE_RE.match(target)
 
 
-def local_asset_resolver(root: Path, bases: list[Path]) -> Callable[[str], bool]:
-    """An ``asset_resolves`` that finds an image path under ``bases``, inside ``root``.
+def _embeddable(target: str, asset_resolves: Callable[[str], bool]) -> bool:
+    """A ``data:image/…`` URI (embedded as is) or a local path that resolves."""
 
-    Mirrors how ``bookgraph export translated-pdf`` resolves image links: the query and
-    fragment are dropped, the path is unquoted, and only regular files inside the
-    workspace count.
+    if _DATA_IMAGE_RE.match(target):
+        return True
+    return _is_local(target) and asset_resolves(target)
+
+
+def local_asset_resolver(root: Path, bases: list[Path]) -> Callable[[str], bool]:
+    """An ``asset_resolves`` that resolves image links exactly as the export does.
+
+    Both use :func:`bookgraph.assets.resolve_workspace_link`: the query and fragment
+    are dropped, the path is unquoted, and only regular files inside ``root`` count.
     """
 
     def resolves(target: str) -> bool:
-        raw = unquote(target.split("#", 1)[0].split("?", 1)[0])
-        if not raw:
-            return False
-        try:
-            root_real = root.resolve()
-        except (OSError, ValueError):
-            return False
-        candidate = Path(raw)
-        options = [candidate] if candidate.is_absolute() else [base / candidate for base in bases]
-        for option in options:
-            try:
-                real = option.resolve()
-                if real.is_relative_to(root_real) and real.is_file():
-                    return True
-            except (OSError, ValueError):
-                continue
-        return False
+        return resolve_workspace_link(root, target, bases) is not None
 
     return resolves
 
@@ -221,10 +293,17 @@ def describe_structure_issues(issues: list[TranslationStructureIssue], limit: in
     """A one-line summary of ``issues`` for warnings and batch messages."""
 
     parts = [
-        f"{issue.kind} '{issue.target}' {issue.change}"
+        f"{issue.kind} '{_shorten(issue.target)}' {issue.change}"
         + (f" ×{issue.count}" if issue.count > 1 else "")
         for issue in issues[:limit]
     ]
     if len(issues) > limit:
         parts.append(f"and {len(issues) - limit} more")
     return "; ".join(parts)
+
+
+def _shorten(target: str) -> str:
+    # A ``data:`` URI can be megabytes of base64; messages only need to identify it.
+    if len(target) <= _TARGET_DISPLAY_LIMIT:
+        return target
+    return target[: _TARGET_DISPLAY_LIMIT - 1] + "…"

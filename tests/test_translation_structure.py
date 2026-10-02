@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+from bookgraph.models import CanonicalBlock, Document, Section
+from bookgraph.parsers.markdown import blocks_from_markdown
+from bookgraph.segmenters.heading import HeadingSegmenter
 from bookgraph.translation_structure import (
+    check_section_translation,
     check_translation_structure,
     describe_structure_issues,
     structural_targets,
@@ -168,3 +172,92 @@ def test_html_attributes_are_read_quote_aware() -> None:
         ("link", "ch01.html#top"): 1,
         ("html_id", "top"): 1,
     }
+
+
+def test_reference_labels_compare_case_insensitively_everywhere() -> None:
+    for wrap in ("{}", "> {}", "- {}"):
+        source = wrap.format("[Spec]: http://x") + "\n\n[a][Spec]\n"
+        translated = wrap.format("[spec]: http://x") + "\n\n[b][spec]\n"
+        assert check_translation_structure(source, translated) == [], wrap
+
+
+def test_html_src_is_an_image_only_on_img() -> None:
+    html = '<script src="app.js"></script> <iframe src="embed.html"></iframe> <img src="f.png">\n'
+
+    assert structural_targets(html) == {
+        ("link", "app.js"): 1,
+        ("link", "embed.html"): 1,
+        ("image", "f.png"): 1,
+    }
+    # A resolving ``src`` on a non-image element is not a carried figure.
+    issues = check_translation_structure(
+        "x\n", '<img-zoom src="f.png">\n', asset_resolves=lambda _: True
+    )
+    assert [(i.kind, i.change) for i in issues] == [("link", "added")]
+
+
+def test_data_image_may_be_added_and_long_targets_are_shortened() -> None:
+    payload = "data:image/png;base64," + "A" * 500
+
+    assert (
+        check_translation_structure("x\n", f"![f]({payload})\n", asset_resolves=lambda _: False)
+        == []
+    )
+    issues = check_translation_structure(f"![f]({payload})\n", "x\n")
+    text = describe_structure_issues(issues)
+    assert len(text) < 120
+    assert text.endswith("…' missing")
+
+
+def _parsed_section(markdown: str) -> tuple[Section, dict[str, CanonicalBlock]]:
+    blocks = blocks_from_markdown(markdown)
+    document = Document(doc_id="doc", title="Doc", blocks=blocks)
+    (section,) = HeadingSegmenter(target_level=1).segment(document)
+    return section, {block.id: block for block in blocks}
+
+
+CODE_CHAPTER = """# Rendering
+
+Wire it up as in [the guide](guide.html#setup):
+
+```html
+<div id="app"><a href="/home">Home</a></div>
+```
+
+```markdown
+Read [the spec](https://spec.example).
+```
+
+    handlers[0](event)
+"""
+
+
+def test_parsed_code_is_not_structure_whether_or_not_the_translation_fences_it() -> None:
+    section, blocks = _parsed_section(CODE_CHAPTER)
+    assert "```" not in section.text  # the parser strips the fences
+
+    fenced = CODE_CHAPTER.replace("Wire it up as in [the guide]", "Kết nối như [hướng dẫn]")
+    unfenced = (
+        "# Kết xuất\n\nKết nối như [hướng dẫn](guide.html#setup):\n\n"
+        + section.text.split("\n\n", 1)[1]
+    )
+
+    for body in (fenced, unfenced):
+        assert check_section_translation(section, body, blocks=blocks) == []
+    # Real structure next to the code is still checked.
+    broken = fenced.replace("guide.html#setup", "huong-dan.html")
+    assert {
+        (i.target, i.change) for i in check_section_translation(section, broken, blocks=blocks)
+    } == {
+        ("guide.html#setup", "missing"),
+        ("huong-dan.html", "added"),
+    }
+
+
+def test_parser_drops_reference_definitions_so_they_are_not_checked() -> None:
+    # Pins a documented limitation: ``[spec]: …`` never reaches ``Section.text``, so a
+    # reference-style link in a parsed section is plain text on both sides.
+    section, blocks = _parsed_section("# Refs\n\nRead [the spec][spec].\n\n[spec]: https://x\n")
+
+    assert "[spec]:" not in section.text
+    assert check_section_translation(section, "Đọc [đặc tả][spec].", blocks=blocks) == []

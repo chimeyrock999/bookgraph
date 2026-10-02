@@ -804,19 +804,23 @@ telling the user to `uv sync --extra mcp`.
   `untracked` / `missing`, see `artifacts.md`), `path`, `metadata_path`,
   `source_section_hash`, `current_section_hash`, `includes_assets`,
   `section_has_assets` (whether the section owns any figure/table block), `model`,
-  `created_at`, and `content` (the body, unless `include_content=False`). A missing
-  translation is a normal result, not an error.
+  `created_at`, `content` (the body, unless `include_content=False`), and
+  `structure_issues` (the link destinations, image paths, reference definitions,
+  HTML anchors, and heading ids the body dropped or added relative to the section;
+  see the structure rule in `artifacts.md`). A missing translation is a normal
+  result, not an error.
 - `write_section_translation(doc_id, section_id, lang, content, includes_assets=False,
   model=None, source_section_hash=None)` → write
   `translations/<lang>/<doc_id>/<section_id>.md` and its registry sidecar,
   replacing any previous translation; returns the entry (status `fresh`, no
-  `content`). Empty `content` is rejected. When `source_section_hash` is given and
+  `content`, with `structure_issues` for the body just written — the write is kept
+  either way). Empty `content` is rejected. When `source_section_hash` is given and
   differs from the section's current hash the write is refused, so a translation of
   outdated content is never registered as fresh.
 - `list_section_artifacts(doc_id=None, lang=None, type="translation")` → every
   cached translation (filtered by `doc_id` / `lang`) with its status, including
-  `orphaned` ones whose section no longer exists; no bodies. Only
-  `type="translation"` exists.
+  `orphaned` ones whose section no longer exists; no bodies, but each entry carries
+  its `structure_issues`. Only `type="translation"` exists.
 - `list_documents()` → the workspace's segmented documents, each with `doc_id`,
   `title` (from the parsed `document.json`, falling back to `doc_id`), and
   `section_count`. Lets an agent discover what there is to read before picking a

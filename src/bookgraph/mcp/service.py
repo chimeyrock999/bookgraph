@@ -62,16 +62,13 @@ from bookgraph.reading_plans import (
     write_reading_plan,
 )
 from bookgraph.sections import count_sections, read_sections
-from bookgraph.translation_structure import (
-    check_translation_structure,
-    local_asset_resolver,
-    section_source_markdown,
-)
+from bookgraph.translation_structure import check_section_translation, local_asset_resolver
 from bookgraph.translations import (
     TranslationState,
     TranslationStatus,
     iter_translation_keys,
     section_content_hash,
+    split_frontmatter,
     translation_state,
     validate_lang,
     write_translation,
@@ -1460,9 +1457,10 @@ def translation_structure_issues(
 ) -> list[TranslationStructureIssue]:
     """Structural targets the cached body changed relative to the section it translates.
 
-    Image paths resolve the way the translated export resolves them (next to the body,
-    then the parsed document's images), so a broken source image path normalised to a
-    working one is not reported. No body (or a non-UTF-8 one) has nothing to check.
+    Judged exactly as the translated export judges it: frontmatter is split off, the
+    source is rebuilt from the parsed blocks (code re-fenced), and image paths resolve
+    next to the body, then under the parsed document. No body (or a non-UTF-8 one) has
+    nothing to check.
     """
 
     if state.body is None:
@@ -1476,8 +1474,12 @@ def translation_structure_issues(
         workspace.root,
         [state.paths.body.parent, parsed_dir / "images", parsed_dir, workspace.root],
     )
-    return check_translation_structure(
-        section_source_markdown(section), body, asset_resolves=resolves
+    _, body = split_frontmatter(body)
+    return check_section_translation(
+        section,
+        body,
+        blocks=_load_doc_blocks(workspace, section.doc_id),
+        asset_resolves=resolves,
     )
 
 

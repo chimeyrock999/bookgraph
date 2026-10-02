@@ -591,21 +591,38 @@ anchors, and exports depend on them:
 
 | Kind | Preserved |
 | --- | --- |
-| `link` | Markdown link destinations and fragments (`[label](ch03.html#sec_x)`, `(#fig_y)`), autolinks, HTML `href` |
-| `image` | Markdown image paths and HTML `src` |
-| `reference` | Reference-style definitions, identifier and destination (`[spec]: https://…`) |
+| `link` | Markdown link destinations and fragments (`[label](ch03.html#sec_x)`, `(#fig_y)`), autolinks, HTML `href`, and `src` on elements other than `<img>` |
+| `image` | Markdown image paths and `<img src>` |
+| `reference` | Reference-style definitions, identifier (case- and whitespace-insensitive, as CommonMark matches labels) and destination (`[spec]: https://…`) |
 | `html_id` | HTML `id` / `name` anchors |
 | `heading_id` | Explicit heading ids (`## Title {#sec_x}`) |
 
 `[label](target)` may become `[nhãn](target)`; `target` must not change. Two image
-changes are allowed: a local image that resolves (next to the body, then under
-`sources/parsed/<doc_id>/images/`, `sources/parsed/<doc_id>/`, or the workspace root)
-may be added, which carries the section's figures, and a source image path that does
-not resolve may be replaced by one that does. Code spans/blocks and HTML comments are
-not structure. Heading *text* may be translated: export navigation anchors on section
-ids, never on heading text.
+changes are allowed: an image that resolves may be added, which carries the section's
+figures — a `data:image/…` URI, or a local path found next to the body, then under
+`sources/parsed/<doc_id>/images/`, `sources/parsed/<doc_id>/`, or the workspace root
+(the export's own lookup) — and a source image path that does not resolve may be
+replaced by one that does. Heading *text* may be translated: export navigation anchors
+on section ids, never on heading text.
 
-`bookgraph.translation_structure.check_translation_structure` does the comparison.
+What is compared:
+
+- The source is the section's title heading plus its text, rebuilt from the parsed
+  blocks when `document.json` exists. Parsers store code blocks as plain text without
+  fences, so code (`metadata.code`) and equation blocks are re-fenced and never count
+  as structure; a target the translation added that appears verbatim in the source's
+  code (sample code left unfenced) is not reported either. Without `document.json`,
+  `Section.text` is used as is.
+- The translation body is compared after its frontmatter is split off, exactly as the
+  export renders it.
+- Code spans/blocks and HTML comments are not structure on either side.
+- Known limitation: the Markdown/MarkItDown parsers drop reference definitions
+  (`[spec]: …`) from the section text, so for parsed sections the `reference` kind
+  has nothing to protect, and a reference-style link reads as plain text on both
+  sides.
+
+`bookgraph.translation_structure.check_section_translation` does the comparison for
+the MCP tools, reading-batch completion, and the export alike.
 The translation tools return its findings as `structure_issues` (each `{kind, target,
 change: "missing" | "added", count}`; a rewritten target is one `missing` plus one
 `added`). Writes are not refused, because the body is the deliverable, but

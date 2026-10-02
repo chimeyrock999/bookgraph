@@ -27,6 +27,7 @@ from bookgraph.annotations import annotation_path, read_annotation
 from bookgraph.index import default_index_backend
 from bookgraph.mcp.service import (
     ReadingServiceError,
+    _current_batch,
     _load_doc_blocks,
     _load_doc_sections,
     _load_plan,
@@ -36,11 +37,10 @@ from bookgraph.mcp.service import (
 from bookgraph.models import ReadingPlan, Section, SectionAnnotation
 from bookgraph.reading_plans import (
     mark_section_read,
-    next_sections,
     plan_lock,
     write_reading_plan,
 )
-from bookgraph.utils import validate_slug_id
+from bookgraph.translations import section_content_hash, translation_state, validate_lang
 from bookgraph.workspace import WorkspacePaths
 
 IndexPolicy = Literal["fresh", "deferred", "ignore"]
@@ -58,8 +58,9 @@ class BatchRequirements(BaseModel):
       the nightly maintenance pass, will fold it in); ``"ignore"`` — skip it.
     - ``require_assets``: every figure/table of the section that resolves to a file is
       listed in ``inspected_assets`` (block ids the caller has opened/embedded).
-    - ``translation_lang``: when set, ``translations/<lang>/<doc_id>/<section_id>.md``
-      exists and is non-empty.
+    - ``translation_lang``: when set, the section's cached translation
+      (``translations/<lang>/<doc_id>/<section_id>.md``) exists, is non-empty, and is
+      not ``stale`` in the translation registry (an ``untracked`` body only warns).
     - ``artifacts``: extra workspace-relative path templates that must exist and be
       non-empty per section; ``{doc_id}``, ``{section_id}`` and ``{plan_id}`` expand.
     """
@@ -112,16 +113,25 @@ def validate_reading_batch(
     plan_id: str,
     section_ids: list[str] | None = None,
     requirements: BatchRequirements | None = None,
+    *,
+    stop_at_boundary: bool = False,
+    chapter_level: int | None = None,
 ) -> ReadingBatchReport:
     """Check a batch's readiness without writing anything.
 
-    ``section_ids`` defaults to the plan's current batch (what ``get_next_section``
-    returns). Request errors — an unknown plan, an invalid ``translation_lang`` or
-    artifact template, an empty batch — raise :class:`ReadingServiceError`; readiness
+    ``section_ids`` defaults to the plan's current batch — exactly what
+    ``get_next_section`` returns for the same ``stop_at_boundary`` / ``chapter_level``,
+    so an agent reading boundary-clipped batches must pass the same flags here. Explicit
+    ``section_ids`` take precedence over both flags.
+
+    Request errors — an unknown plan, an invalid ``translation_lang``, artifact template
+    or ``chapter_level``, an empty batch — raise :class:`ReadingServiceError`; readiness
     problems are returned as issues.
     """
 
-    return _evaluate(workspace, plan_id, section_ids, requirements)[2]
+    return _evaluate(
+        workspace, plan_id, section_ids, requirements, stop_at_boundary, chapter_level
+    )[2]
 
 
 def complete_reading_batch(
@@ -129,6 +139,9 @@ def complete_reading_batch(
     plan_id: str,
     section_ids: list[str] | None = None,
     requirements: BatchRequirements | None = None,
+    *,
+    stop_at_boundary: bool = False,
+    chapter_level: int | None = None,
 ) -> ReadingBatchReport:
     """Validate a batch and, only if nothing blocks, mark all of it read atomically.
 
@@ -141,7 +154,9 @@ def complete_reading_batch(
     # Checks and write run under one plan lock, so a concurrent mark_read cannot land
     # between the plan load inside _evaluate and the replace below and be overwritten.
     with plan_lock(_plan_path(workspace, plan_id)):
-        path, plan, report = _evaluate(workspace, plan_id, section_ids, requirements)
+        path, plan, report = _evaluate(
+            workspace, plan_id, section_ids, requirements, stop_at_boundary, chapter_level
+        )
         if not report.ok:
             return report
         updated = plan
@@ -161,12 +176,21 @@ def _progress(plan: ReadingPlan) -> tuple[int, int, bool]:
     return completed, total, total > 0 and completed >= total
 
 
-def _resolve_batch(plan: ReadingPlan, section_ids: list[str] | None) -> list[str]:
+def _resolve_batch(
+    plan: ReadingPlan,
+    sections: list[Section],
+    section_ids: list[str] | None,
+    stop_at_boundary: bool,
+    chapter_level: int | None,
+) -> list[str]:
+    if chapter_level is not None and chapter_level < 1:
+        raise ReadingServiceError("chapter_level must be at least 1")
     if section_ids is None:
-        pack = next_sections(plan)
-        if pack.done:
+        if not set(plan.section_ids) - set(plan.completed):
             raise ReadingServiceError(f"reading plan '{plan.plan_id}' is already complete")
-        return pack.sections
+        return _current_batch(
+            plan, sections, stop_at_boundary=stop_at_boundary, chapter_level=chapter_level
+        )
     if not section_ids:
         raise ReadingServiceError("section_ids must not be empty (omit it for the current batch)")
     return list(dict.fromkeys(section_ids))  # de-duplicate, keep the caller's order
@@ -177,14 +201,17 @@ def _evaluate(
     plan_id: str,
     section_ids: list[str] | None,
     requirements: BatchRequirements | None,
+    stop_at_boundary: bool = False,
+    chapter_level: int | None = None,
 ) -> tuple[Path, ReadingPlan, ReadingBatchReport]:
     reqs = requirements or BatchRequirements()
     path, plan = _load_plan(workspace, plan_id)
-    batch = _resolve_batch(plan, section_ids)
     lang = _validate_lang(reqs.translation_lang)
     templates = [_validate_template(template) for template in reqs.artifacts]
+    sections = _load_doc_sections(workspace, plan.doc_id)
+    batch = _resolve_batch(plan, sections, section_ids, stop_at_boundary, chapter_level)
 
-    sections_by_id = {section.id: section for section in _load_doc_sections(workspace, plan.doc_id)}
+    sections_by_id = {section.id: section for section in sections}
     in_plan = set(plan.section_ids)
     completed = set(plan.completed)
     issues: list[BatchIssue] = []
@@ -292,15 +319,9 @@ def _evaluate(
                         )
 
         if lang is not None:
-            relative = Path("translations") / lang / section.doc_id / f"{section.id}.md"
-            if not _non_empty_file(workspace.root / relative):
-                issues.append(
-                    BatchIssue(
-                        code="translation_missing",
-                        section_id=section.id,
-                        message=f"Translation '{relative}' is missing or empty.",
-                    )
-                )
+            issue = _translation_issue(workspace, lang, section)
+            if issue is not None:
+                issues.append(issue)
 
         for template in templates:
             relative_path = _render_template(template, plan.plan_id, section)
@@ -408,13 +429,54 @@ def _index_reflects(
     return {node.slug for node in indexed} == {concept.slug for concept in annotation.concepts}
 
 
+def _translation_issue(workspace: WorkspacePaths, lang: str, section: Section) -> BatchIssue | None:
+    """Check the section's cached translation against the translation registry.
+
+    ``missing`` (or an empty body) and ``stale`` (the section changed since it was
+    translated) block; ``untracked`` — a body with no valid registry sidecar, e.g.
+    written by hand or before the registry existed — only warns, since its freshness is
+    unknown rather than known-bad.
+    """
+
+    state = translation_state(
+        workspace, lang, section.doc_id, section.id, section_content_hash(section)
+    )
+    relative = state.paths.body.relative_to(workspace.root)
+    if state.status == "missing" or not state.body:
+        return BatchIssue(
+            code="translation_missing",
+            section_id=section.id,
+            message=f"Translation '{relative}' is missing or empty; write it first.",
+        )
+    if state.status == "stale":
+        return BatchIssue(
+            code="translation_stale",
+            section_id=section.id,
+            message=(
+                f"Translation '{relative}' was made from an older version of the section; "
+                "re-translate it with write_section_translation."
+            ),
+        )
+    if state.status == "untracked":
+        return BatchIssue(
+            code="translation_untracked",
+            section_id=section.id,
+            blocking=False,
+            message=(
+                f"Translation '{relative}' has no registry record, so its freshness is "
+                "unknown; write it with write_section_translation to track it."
+            ),
+        )
+    return None
+
+
 def _validate_lang(lang: str | None) -> str | None:
     if lang is None:
         return None
     try:
-        return validate_slug_id(lang.strip().lower(), field_name="translation_lang")
+        return validate_lang(lang)
     except ValueError as exc:
-        raise ReadingServiceError(str(exc)) from exc
+        raise ReadingServiceError(f"invalid translation_lang: {exc}") from exc
 
 
 def _validate_template(template: str) -> str:

@@ -70,7 +70,9 @@ batch), advance with `complete_reading_batch(plan_id, inspected_assets=[...],
 translation_lang=..., ...)` instead of `mark_read`: it marks the whole batch read
 only after verifying the work, and otherwise returns `committed: false` with
 actionable `issues`. Fix every blocking issue and retry — never advance past a
-failed step. `validate_reading_batch` takes the same arguments as a dry run.
+failed step. If you read with `get_next_section(stop_at_boundary=True)`, pass the same
+`stop_at_boundary` / `chapter_level` so it completes the batch you were handed.
+`validate_reading_batch` takes the same arguments as a dry run.
 
 ## Navigating and connecting
 

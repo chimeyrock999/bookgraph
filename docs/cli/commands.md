@@ -669,7 +669,7 @@ telling the user to `uv sync --extra mcp`.
   next unread one) and persist the plan; returns `completed`/`total`/`done`.
 - `validate_reading_batch(plan_id, section_ids=None, require_annotation=True,
   index="fresh", require_assets=True, inspected_assets=None, translation_lang=None,
-  artifacts=None)` → check whether a batch of sections is ready to be marked read,
+  artifacts=None, stop_at_boundary=False, chapter_level=None)` → check whether a batch of sections is ready to be marked read,
   **without writing**. Returns the same report as `complete_reading_batch` (see
   below) with `committed: false`.
 - `complete_reading_batch(...)` (same arguments) → the formal completion boundary
@@ -797,9 +797,13 @@ client drive a full reading session without any CLI step (see `docs/mcp/reading-
 ### Reading batch completion
 
 `validate_reading_batch` / `complete_reading_batch` take a `plan_id`, an optional
-`section_ids` list (default: the plan's current batch, i.e. what `get_next_section`
-returns; duplicates are dropped, an empty list is rejected), and the requirements
-the batch must meet. Each requirement applies to every section of the batch:
+`section_ids` list, and the requirements the batch must meet. When `section_ids` is
+omitted the batch is the plan's current batch, resolved by the **same** resolver as
+`get_next_section` for the same `stop_at_boundary` / `chapter_level`: an agent that
+reads boundary-clipped batches (`get_next_section(stop_at_boundary=True)`) must pass
+the same flags here, or the default batch would spill past the chapter boundary.
+Explicit `section_ids` take precedence over both flags; duplicates are dropped and an
+empty list is rejected. Each requirement applies to every section of the batch:
 
 | Argument | Default | Check |
 |---|---|---|
@@ -807,7 +811,7 @@ the batch must meet. Each requirement applies to every section of the batch:
 | `index` | `"fresh"` | The document is in the index **and** the index reflects each section's current annotation: the stored `summary`/`model`/`created_at` match the file, and — when the annotation asserts `concepts` — the section's indexed concept edges are exactly those, agent-sourced. An unannotated section is fresh when the index stores no annotation for it. `"fresh"` makes a missing/stale index blocking; `"deferred"` reports it without blocking (the next `index build`, e.g. the nightly maintenance pass, folds it in); `"ignore"` skips the check. |
 | `require_assets` | `true` | Every figure/table of the section whose file resolves (the `assets` of `get_section`) is listed by `block_id` in `inspected_assets` — the caller's declaration that it opened/embedded it. |
 | `inspected_assets` | `[]` | Block ids the caller inspected. |
-| `translation_lang` | `null` | When set (a slug such as `vi`, `pt-br`; lowercased), `translations/<lang>/<doc_id>/<section_id>.md` exists and is non-empty. |
+| `translation_lang` | `null` | When set (a slug such as `vi`, `pt-br`; lowercased), the section's cached translation `translations/<lang>/<doc_id>/<section_id>.md` exists, is non-empty, and is not `stale` in the translation registry (see `artifacts.md`). An `untracked` body (no valid registry sidecar) passes with a warning. |
 | `artifacts` | `[]` | Extra workspace-relative path templates that must exist and be non-empty per section. `{doc_id}`, `{section_id}`, `{plan_id}` expand; an absolute path, a `..` segment, an unknown field, or a path resolving outside the workspace is rejected as a request error. |
 
 Both return a report:
@@ -849,10 +853,14 @@ Issue codes (`blocking` unless noted):
 - `asset_unknown` — non-blocking; `inspected_assets` names a block that is not an
   asset of the batch (likely a typo).
 - `translation_missing`, `artifact_missing` — the required file is absent or empty.
+- `translation_stale` — the registry records a translation of an older version of
+  the section; re-translate with `write_section_translation`.
+- `translation_untracked` — non-blocking; the body has no registry record, so its
+  freshness is unknown.
 
 Request errors — unknown/invalid `plan_id`, an unsegmented document, an empty
 `section_ids`, a plan that is already complete when `section_ids` is omitted, an
-invalid `translation_lang` or artifact template — raise a tool error instead of
+invalid `translation_lang`, artifact template, or `chapter_level` — raise a tool error instead of
 returning a report.
 
 ### Reads / writes

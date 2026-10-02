@@ -273,7 +273,26 @@ def test_translation_presence(tmp_path: Path) -> None:
     target.write_text("")  # an empty body is a failed translation, not a cached one
     assert not validate_reading_batch(workspace, "daily", requirements=reqs).ok
     target.write_text("Bản dịch.")
-    assert validate_reading_batch(workspace, "daily", requirements=reqs).ok
+    # A body with no registry sidecar may be reused, but its freshness is unknown.
+    report = validate_reading_batch(workspace, "daily", requirements=reqs)
+    assert report.ok
+    assert _codes(report, blocking=False) == ["translation_untracked"]
+
+
+def test_translation_registry_freshness(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path, _section(A, text="Original."), daily=1)
+    reqs = NOTHING.model_copy(update={"translation_lang": "vi"})
+    service.write_section_translation(workspace, DOC, A, "vi", "Bản gốc.")
+
+    assert validate_reading_batch(workspace, "daily", requirements=reqs).issues == []
+
+    # The section changes after it was translated: the cached translation is stale.
+    write_sections([_section(A, text="Revised.")], workspace.sources_sections / DOC)
+    report = complete_reading_batch(workspace, "daily", requirements=reqs)
+
+    assert not report.committed
+    assert [(i.code, i.section_id) for i in report.issues] == [("translation_stale", A)]
+    assert "write_section_translation" in report.issues[0].message
 
 
 def test_artifact_templates(tmp_path: Path) -> None:
@@ -390,3 +409,66 @@ def test_plan_writes_leave_no_temp_files(tmp_path: Path) -> None:
     assert not [name for name in names if name.endswith(".tmp")]
     assert "daily.json" in names
     assert _plan(workspace).completed == [A, B, C]
+
+
+# front matter → Chapter 1 (two subsections) → Chapter 2
+def _chaptered_workspace(tmp_path: Path) -> WorkspacePaths:
+    def node(section_id: str, level: int) -> Section:
+        return _section(section_id).model_copy(update={"level": level})
+
+    return _workspace(
+        tmp_path,
+        node("deep-work.ch1", 1),
+        node("deep-work.ch1-a", 2),
+        node("deep-work.ch2", 1),
+        node("deep-work.ch2-a", 2),
+        daily=3,
+    )
+
+
+def test_default_batch_matches_a_boundary_clipped_get_next_section(tmp_path: Path) -> None:
+    workspace = _chaptered_workspace(tmp_path)
+    clipped = service.get_next_section(workspace, "daily", stop_at_boundary=True)
+    assert [view.id for view in clipped.sections] == ["deep-work.ch1", "deep-work.ch1-a"]
+
+    # Relaxed checks: nothing but the batch selection stands between the call and the
+    # write, so the batch must be the one the agent was actually handed.
+    report = complete_reading_batch(workspace, "daily", requirements=NOTHING, stop_at_boundary=True)
+
+    assert report.committed
+    assert report.section_ids == [view.id for view in clipped.sections]
+    assert _plan(workspace).completed == ["deep-work.ch1", "deep-work.ch1-a"]
+    assert "deep-work.ch2" not in _plan(workspace).completed  # past the chapter boundary
+
+
+def test_default_batch_without_boundary_matches_get_next_section(tmp_path: Path) -> None:
+    workspace = _chaptered_workspace(tmp_path)
+    unclipped = service.get_next_section(workspace, "daily")
+
+    report = validate_reading_batch(workspace, "daily", requirements=NOTHING)
+
+    assert report.section_ids == [view.id for view in unclipped.sections]
+    assert len(report.section_ids) == 3  # spills into Chapter 2, as get_next_section does
+
+
+def test_chapter_level_scopes_the_boundary(tmp_path: Path) -> None:
+    workspace = _chaptered_workspace(tmp_path)
+    complete_reading_batch(workspace, "daily", ["deep-work.ch1"], NOTHING)
+
+    report = validate_reading_batch(
+        workspace, "daily", requirements=NOTHING, stop_at_boundary=True, chapter_level=2
+    )
+
+    assert report.section_ids == ["deep-work.ch1-a"]
+    with pytest.raises(ReadingServiceError, match="chapter_level"):
+        validate_reading_batch(workspace, "daily", requirements=NOTHING, chapter_level=0)
+
+
+def test_explicit_section_ids_take_precedence_over_the_boundary(tmp_path: Path) -> None:
+    workspace = _chaptered_workspace(tmp_path)
+
+    report = validate_reading_batch(
+        workspace, "daily", ["deep-work.ch2"], NOTHING, stop_at_boundary=True
+    )
+
+    assert report.section_ids == ["deep-work.ch2"]

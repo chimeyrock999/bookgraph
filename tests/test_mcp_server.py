@@ -111,6 +111,26 @@ def test_complete_reading_batch_tool_blocks_then_commits(tmp_path: Path) -> None
     assert done.structured_content["committed"] is True
     assert done.structured_content["done"] is True
     assert done.structured_content["index_rebuild_needed"] is True
+def test_batch_tools_accept_boundary_arguments(tmp_path: Path) -> None:
+    server = build_server(_workspace(tmp_path))
+
+    result = asyncio.run(
+        server.call_tool(
+            "validate_reading_batch",
+            {
+                "plan_id": "daily",
+                "require_annotation": False,
+                "index": "ignore",
+                "stop_at_boundary": True,
+                "chapter_level": 1,
+            },
+        )
+    )
+
+    assert result.structured_content["section_ids"] == ["deep-work.a"]
+    assert result.structured_content["ok"] is True
+
+
 def test_get_plan_progress_tool_reports_chapter_progress(tmp_path: Path) -> None:
     server = build_server(_workspace(tmp_path))
 

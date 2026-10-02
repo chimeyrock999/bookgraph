@@ -620,6 +620,29 @@ def _section_ref(section: Section | SectionNode) -> SectionRef:
     return SectionRef(id=section.id, title=section.title, level=section.level)
 
 
+def _current_batch(
+    plan: ReadingPlan,
+    sections: list[Section],
+    *,
+    stop_at_boundary: bool = False,
+    chapter_level: int | None = None,
+    progress: ChapterProgress | None = None,
+) -> list[str]:
+    """The plan's current batch: the one resolver behind ``get_next_section`` and the
+    reading-batch tools, so the batch an agent was handed is the batch it completes.
+
+    Without ``stop_at_boundary`` it is the next ``daily_sections`` unread sections; with
+    it, that batch clipped at the end of the current chapter (``chapter_level`` picks
+    the chapter's heading level). Pass an already computed ``progress`` to reuse it.
+    """
+
+    if not stop_at_boundary:
+        return next_sections(plan).sections
+    if progress is None:
+        progress = _chapter_progress(plan, sections, chapter_level)
+    return progress.next_section_ids
+
+
 def get_next_section(
     workspace: WorkspacePaths,
     plan_id: str,
@@ -649,7 +672,7 @@ def get_next_section(
                 f"in document '{plan.doc_id}'."
             )
     progress = _chapter_progress(plan, sections, chapter_level)
-    batch = progress.next_section_ids if stop_at_boundary else pack.sections
+    batch = _current_batch(plan, sections, stop_at_boundary=stop_at_boundary, progress=progress)
     blocks_by_id = _load_doc_blocks(workspace, plan.doc_id) if include_assets else None
     views = [
         _section_view(

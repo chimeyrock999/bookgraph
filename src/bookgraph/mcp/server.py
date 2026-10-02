@@ -136,12 +136,15 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
         inspected_assets: list[str] | None = None,
         translation_lang: str | None = None,
         artifacts: list[str] | None = None,
+        stop_at_boundary: bool = False,
+        chapter_level: int | None = None,
     ) -> ReadingBatchReport:
         """Check whether a reading batch is ready to be marked read, without writing.
 
         Same checks and arguments as complete_reading_batch; returns every problem as
         an issue {code, message, section_id, blocking}. section_ids defaults to the
-        plan's current batch.
+        plan's current batch, resolved like get_next_section for the same
+        stop_at_boundary/chapter_level.
         """
 
         requirements = BatchRequirements(
@@ -154,7 +157,12 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
         )
         try:
             return reading_batch.validate_reading_batch(
-                workspace, plan_id, section_ids, requirements
+                workspace,
+                plan_id,
+                section_ids,
+                requirements,
+                stop_at_boundary=stop_at_boundary,
+                chapter_level=chapter_level,
             )
         except ReadingServiceError as exc:
             raise ToolError(str(exc)) from exc
@@ -169,6 +177,8 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
         inspected_assets: list[str] | None = None,
         translation_lang: str | None = None,
         artifacts: list[str] | None = None,
+        stop_at_boundary: bool = False,
+        chapter_level: int | None = None,
     ) -> ReadingBatchReport:
         """Mark a whole reading batch read — only if its enrichment is complete.
 
@@ -177,11 +187,13 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
         section: an annotation exists (require_annotation); the index reflects it
         (index="fresh" blocks, "deferred" only reports, "ignore" skips); every
         figure/table file was inspected — list their block ids in inspected_assets
-        (require_assets); translations/<lang>/<doc_id>/<section_id>.md exists
-        (translation_lang); and each artifacts path template exists ({doc_id},
+        (require_assets); the cached translation for translation_lang exists and is not
+        stale in the translation registry; and each artifacts path template exists ({doc_id},
         {section_id}, {plan_id} expand). If any blocking issue is found, nothing is
         written: committed=false and issues lists every reason to fix before retrying.
-        section_ids defaults to the plan's current batch.
+        section_ids defaults to the plan's current batch, resolved exactly like
+        get_next_section: if you read with stop_at_boundary=True (and a chapter_level),
+        pass the same values here so sections past the chapter boundary are not marked.
         """
 
         requirements = BatchRequirements(
@@ -194,7 +206,12 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
         )
         try:
             return reading_batch.complete_reading_batch(
-                workspace, plan_id, section_ids, requirements
+                workspace,
+                plan_id,
+                section_ids,
+                requirements,
+                stop_at_boundary=stop_at_boundary,
+                chapter_level=chapter_level,
             )
         except ReadingServiceError as exc:
             raise ToolError(str(exc)) from exc

@@ -160,8 +160,10 @@ Relax what does not apply: `require_annotation=False`, `require_assets=False`,
 `index="deferred"` (report a stale index as `index_rebuild_needed` without blocking —
 for agents that cannot run the CLI and rely on the nightly rebuild) or
 `index="ignore"`. Add `translation_lang` and `artifacts` (path templates with
-`{doc_id}`/`{section_id}`/`{plan_id}`) for outputs your job produces. Call
-`validate_reading_batch` with the same arguments for a dry run. Issue codes and the
+`{doc_id}`/`{section_id}`/`{plan_id}`) for outputs your job produces. If you read
+boundary-clipped batches (`get_next_section(plan_id, stop_at_boundary=True)`), pass the
+same `stop_at_boundary` / `chapter_level` here so the default batch is the one you were
+handed. Call `validate_reading_batch` with the same arguments for a dry run. Issue codes and the
 full contract: `docs/cli/commands.md`, *Reading batch completion*.
 
 State (reading-plan progress in `reading_plans/<plan_id>.json` and annotations in

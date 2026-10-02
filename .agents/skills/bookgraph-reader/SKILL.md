@@ -113,7 +113,9 @@ Optional translation cache tools (when the user wants sections translated):
      `mark_read`. Call `complete_reading_batch(plan_id, inspected_assets=[...],
      translation_lang=..., ...)` after the work; if `committed` is false, fix every
      blocking `issue` it lists (each says what to do) and call it again. Never
-     advance progress past a failed step.
+     advance progress past a failed step. If you read with
+     `get_next_section(stop_at_boundary=True)`, pass the same `stop_at_boundary` /
+     `chapter_level` so it completes the batch you were handed.
 
 ## Behavior rules
 

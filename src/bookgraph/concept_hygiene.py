@@ -151,17 +151,20 @@ def _stem(token: str) -> str:
     """A tiny plural folder used as a comparison key (not a display form).
 
     ``-ies`` becomes ``-y``. A trailing ``s`` is dropped (except after ``ss``/``us``/
-    ``is``). Then a trailing ``e`` after a sibilant (``se``/``xe``/``ze``/``che``/
-    ``she``) is dropped, so singular and plural meet on one key however English spells
-    the plural: ``cache``/``caches`` → ``cach``, ``batch``/``batches`` → ``batch``,
-    ``database``/``databases`` → ``databas``, ``status``/``statuses`` → ``status``.
+    ``is``). Then a trailing ``e`` is dropped only where an ``-es`` plural leaves one
+    behind (``sse``/``use``/``xe``/``che``/``she``), so singular and plural meet on one
+    key: ``cache``/``caches`` → ``cach``, ``batch``/``batches`` → ``batch``,
+    ``status``/``statuses`` → ``status``, ``class``/``classes`` → ``class``. Plain
+    ``-se``/``-ze`` singulars keep their ``e`` (``case``, ``base``, ``size``): their
+    plurals already meet them once the ``s`` is gone, and stripping it would fold them
+    onto unrelated three-letter tokens (``case`` vs ``cas``, compare-and-swap).
     """
 
     if len(token) > 4 and token.endswith("ies"):
         return token[:-3] + "y"
     if len(token) > 3 and token.endswith("s") and not token.endswith(("ss", "us", "is")):
         token = token[:-1]
-    if len(token) > 3 and token.endswith(("se", "xe", "ze", "che", "she")):
+    if len(token) > 3 and token.endswith(("sse", "use", "xe", "che", "she")):
         token = token[:-1]
     return token
 

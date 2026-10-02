@@ -123,6 +123,32 @@ def test_ses_plurals_fold_to_their_singular() -> None:
     ]
 
 
+def test_plain_se_singulars_do_not_fold_onto_three_letter_tokens() -> None:
+    # "cas" (compare-and-swap) is a real concept next to "case" in this domain.
+    for word, short in (("case", "cas"), ("base", "bas"), ("size", "siz"), ("pose", "pos")):
+        assert _pairs([_node(word), _node(short)]) == set()
+    # Longer slugs may still look alike by spelling, but are never an inflection match.
+    reasons = {reason for _, _, reason in _pairs([_node("use-case"), _node("use-cas")])}
+    assert "inflection or word-order variant" not in reasons
+
+
+def test_singulars_still_meet_their_plurals() -> None:
+    plurals = {
+        "case": "cases",
+        "base": "bases",
+        "size": "sizes",
+        "response": "responses",
+        "house": "houses",
+        "index": "indexes",
+        "hash": "hashes",
+        "tax": "taxes",
+        "bus": "buses",
+    }
+    for singular, plural in plurals.items():
+        pairs = _pairs([_node(singular, mention_count=2), _node(plural)])
+        assert pairs == {(plural, singular, "inflection or word-order variant")}
+
+
 def test_versioned_concepts_are_not_spelling_variants() -> None:
     assert _pairs([_node("format-v1"), _node("format-v2")]) == set()
     assert _pairs([_node("format-version-1"), _node("format-version-2")]) == set()

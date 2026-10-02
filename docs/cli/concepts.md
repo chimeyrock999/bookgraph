@@ -112,10 +112,12 @@ The default threshold is 0.5. A lone head noun inside a phrase (`table` /
 `table-metadata`, `database` / `distributed-databases` = 0.4) falls below it. Ignored
 slugs, aliases (already merged), and distinct pairs are never suggested.
 
-- Plurals are folded per token into a comparison key. `-ies` → `-y`, a trailing `s`
-  is dropped, and then a trailing `e` after a sibilant is dropped. So singular and
-  plural meet however the plural is spelled: `cache`/`caches`, `batch`/`batches`,
-  `database`/`databases`, `status`/`statuses`.
+- Plurals are folded per token into a comparison key. `-ies` → `-y`, and a trailing
+  `s` is dropped. Then the `e` that an `-es` plural leaves behind is dropped
+  (`-sse`, `-use`, `-xe`, `-che`, `-she`). So `cache`/`caches`, `batch`/`batches`,
+  `status`/`statuses` and `class`/`classes` meet. Plain `-se`/`-ze` singulars
+  (`case`, `base`, `size`) keep their `e`, so they never fold onto unrelated
+  three-letter tokens such as `cas` (compare-and-swap).
 - Slugs that differ only in digits (`format-v1` / `format-v2`) are versions, not
   spelling variants, and are never matched by the spelling rule.
 - Only pairs that share a blocking key are scored, so the scan is near-linear rather

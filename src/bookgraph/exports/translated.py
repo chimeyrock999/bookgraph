@@ -323,12 +323,19 @@ class _Assembler(ImageEmbedder):
         """The bilingual left column under its source title, with its asset counts.
 
         It takes the outline depth, like the mixed column, so both headings match.
+        Warnings raised here are tagged ``column="original"``. Every mixed rendering is
+        built first, so a fallback row's original (cached, warned once) is already
+        tagged ``mixed``: only problems ``--mode translated`` would not show get here.
         """
 
         section, counter = node.section, AssetCounter()
-        body = heading(node.depth, section.title) + self._original_body(
-            section, node.depth, counter
-        )
+        self.column = "original"
+        try:
+            body = heading(node.depth, section.title) + self._original_body(
+                section, node.depth, counter
+            )
+        finally:
+            self.column = "mixed"
         return body, counter.embedded, counter.missing
 
     def _entry(
@@ -380,6 +387,7 @@ class _Assembler(ImageEmbedder):
                     f"translation artifact {relative} is unreadable ({reason}); "
                     "using the fallback policy instead",
                     section.id,
+                    content="translation",
                 )
             return None
         try:
@@ -390,6 +398,7 @@ class _Assembler(ImageEmbedder):
                 f"translation artifact {relative} is unreadable ({exc}); "
                 "using the fallback policy instead",
                 section.id,
+                content="translation",
             )
             return None
         frontmatter, body = split_frontmatter(raw)
@@ -398,6 +407,7 @@ class _Assembler(ImageEmbedder):
                 TRANSLATION_EMPTY,
                 f"translation artifact {relative} is empty; using the fallback policy instead",
                 section.id,
+                content="translation",
             )
             return None
         self._structure_warnings(section, body, artifact)
@@ -407,7 +417,12 @@ class _Assembler(ImageEmbedder):
         heading_title = _first_heading_text(tokens)
         _shift_headings(tokens, depth)
         self._rewrite_images(
-            tokens, section.id, self._translation_bases(artifact), counter, relative
+            tokens,
+            section.id,
+            self._translation_bases(artifact),
+            counter,
+            relative,
+            content="translation",
         )
         fm_title = frontmatter.get("title")
         title = heading_title or (fm_title if isinstance(fm_title, str) and fm_title else None)
@@ -438,6 +453,7 @@ class _Assembler(ImageEmbedder):
                 f"translation {_relative(self.workspace, artifact)} changed structural "
                 f"Markdown of its section: {describe_structure_issues(issues)}",
                 section.id,
+                content="translation",
             )
 
     def _freshness_warnings(
@@ -450,6 +466,7 @@ class _Assembler(ImageEmbedder):
                 f"translation {relative} was made from an older version of the section; "
                 "rendered with a 'may be outdated' note",
                 section.id,
+                content="translation",
             )
         elif freshness == "untracked":
             self._warn(
@@ -458,6 +475,7 @@ class _Assembler(ImageEmbedder):
                 "registration), so its freshness is unknown; register it with "
                 "write_section_translation",
                 section.id,
+                content="translation",
             )
 
     def _translation_bases(self, artifact: Path) -> list[Path]:
@@ -492,6 +510,7 @@ class _Assembler(ImageEmbedder):
                 section.id,
                 asset.link,
                 AssetOrigin(document, asset.block_id),
+                content="translation",
             )
         if (
             not check.missing
@@ -503,6 +522,7 @@ class _Assembler(ImageEmbedder):
                 f"translation {relative} is prose-only (includes_assets=false) but the "
                 "section has figures/tables; they are not in the translated text",
                 section.id,
+                content="translation",
             )
 
     def _original_body(self, section: Section, depth: int, counter: AssetCounter) -> str:
@@ -642,8 +662,8 @@ def write_translated_export(
 
     if strict and export.report.strict_warnings:
         raise ExportError(
-            f"{len(export.report.strict_warnings)} problem(s) in strict mode: "
-            + "; ".join(w.message for w in export.report.strict_warnings)
+            f"{export.report.strict_summary()}: "
+            + "; ".join(w.describe() for w in export.report.strict_warnings)
         )
     output.parent.mkdir(parents=True, exist_ok=True)
     partial = output.with_name(f".{output.name}.partial")

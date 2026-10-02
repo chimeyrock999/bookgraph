@@ -106,9 +106,12 @@ class ImageEmbedder:
         origin = AssetOrigin(source, block_id)
         for position, token in enumerate(tokens):
             if token.type == "html_block":
+                missing_before = counter.missing
                 token.content = self._rewrite_html_images(
                     token.content, section_id, bases, counter, origin
                 )
+                if counter.missing > missing_before and not self.show_status:
+                    token.content = _strip_emptied_html(token.content)
             if not token.children:
                 continue
             children: list[Token] = []
@@ -137,7 +140,7 @@ class ImageEmbedder:
                         child.attrSet("src", uri)
                 children.append(child)
             if dropped:
-                children = _drop_empty_links(children)
+                children = _drop_empty_wrappers(children)
             token.children = children
             if dropped and not any(_has_content(child) for child in children):
                 _hide_paragraph(tokens, position)
@@ -291,37 +294,94 @@ def _html_src_attr(attributes: str) -> tuple[str, tuple[int, int]] | None:
     return None
 
 
+# Inline/block HTML elements that render nothing once their content is gone. Table
+# parts are left out on purpose: an empty cell keeps a table's shape.
+_WRAPPER_TAGS = "a|p|figure|picture|span|em|strong|b|i|s|u|div|center|small|sup|sub"
+_EMPTY_ELEMENT_RE = re.compile(rf"<({_WRAPPER_TAGS})\b[^>]*>\s*</\1\s*>", re.IGNORECASE)
+_OPEN_TAG_RE = re.compile(r"^\s*<([a-z][\w-]*)\b[^>]*(?<!/)>\s*$", re.IGNORECASE)
+_CLOSE_TAG_RE = re.compile(r"^\s*</([a-z][\w-]*)\s*>\s*$", re.IGNORECASE)
+_ANY_TAG_RE = re.compile(r"<[^>]*>")
+
+
+def _html_visible(html: str) -> bool:
+    """Whether a piece of raw HTML shows anything: an image, or text outside tags."""
+
+    return "<img" in html.lower() or bool(_ANY_TAG_RE.sub("", html).strip())
+
+
 def _has_content(token: Token) -> bool:
     """Whether an inline child renders anything a reader would see.
 
-    Link tags alone render nothing visible; text and raw HTML count only when they
-    are not blank.
+    Wrapper tags alone (Markdown ``*_open``/``*_close`` such as links and emphasis, or
+    a raw HTML ``<a …>``/``</a>``) render nothing visible; text and raw HTML count
+    only when they show something.
     """
 
-    if token.type in {"softbreak", "hardbreak", "link_open", "link_close"}:
+    if token.type in {"softbreak", "hardbreak"} or token.nesting != 0:
         return False
-    if token.type in {"text", "html_inline"}:
+    if token.type == "text":
         return bool(token.content.strip())
+    if token.type == "html_inline":
+        return _html_visible(token.content)
     return True
 
 
-def _drop_empty_links(children: list[Token]) -> list[Token]:
-    """Remove links left wrapping nothing (``[![fig](gone.png)](url)``).
+def _wrapper_key(token: Token) -> tuple[str, int] | None:
+    """``(kind, +1 open / -1 close)`` for an inline wrapper token, else ``None``."""
 
-    Called only after an image was dropped, so an empty, clickable ``<a>`` never
-    stands in for the figure.
+    if token.nesting != 0:
+        return token.type.rsplit("_", 1)[0], token.nesting
+    if token.type == "html_inline":
+        if match := _OPEN_TAG_RE.match(token.content):
+            return "html:" + match.group(1).lower(), 1
+        if match := _CLOSE_TAG_RE.match(token.content):
+            return "html:" + match.group(1).lower(), -1
+    return None
+
+
+def _drop_empty_wrappers(children: list[Token]) -> list[Token]:
+    """Remove wrappers left around nothing once an image was dropped.
+
+    Covers Markdown links and emphasis (``[![fig](gone.png)](url)``,
+    ``*![fig](gone.png)*``) and raw HTML pairs (``<a href="…"><img src="gone.png"></a>``),
+    so neither an empty, clickable ``<a>`` nor an empty ``<em>`` stands in for the
+    figure. Called only after an image was dropped.
     """
 
     empty: set[int] = set()
-    opened: list[int] = []
+    opened: list[tuple[str, int]] = []
     for index, child in enumerate(children):
-        if child.type == "link_open":
-            opened.append(index)
-        elif child.type == "link_close" and opened:
-            start = opened.pop()
-            if not any(_has_content(inner) for inner in children[start + 1 : index]):
-                empty.update(range(start, index + 1))
+        key = _wrapper_key(child)
+        if key is None:
+            continue
+        kind, direction = key
+        if direction > 0:
+            opened.append((kind, index))
+            continue
+        while opened and opened[-1][0] != kind:
+            opened.pop()  # an unbalanced raw tag: never pair across it
+        if not opened:
+            continue
+        _, start = opened.pop()
+        inner = [c for i, c in enumerate(children[start + 1 : index], start + 1) if i not in empty]
+        if not any(_has_content(c) for c in inner):
+            empty.update(range(start, index + 1))
     return [child for index, child in enumerate(children) if index not in empty]
+
+
+def _strip_emptied_html(html: str) -> str:
+    """Strip the wrapper elements an HTML block's dropped image left empty.
+
+    Repeats until stable (``<p><a …></a></p>`` → ``<p></p>`` → nothing). A block with
+    nothing visible left becomes empty, so it renders nothing at all.
+    """
+
+    while True:
+        stripped = _EMPTY_ELEMENT_RE.sub("", html)
+        if stripped == html:
+            break
+        html = stripped
+    return html if _html_visible(html) else ""
 
 
 def _hide_paragraph(tokens: list[Token], inline_index: int) -> None:

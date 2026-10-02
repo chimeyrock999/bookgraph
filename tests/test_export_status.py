@@ -9,6 +9,7 @@ relative ``AssetRef.link`` a translation should use for a figure.
 from __future__ import annotations
 
 import base64
+import re
 from pathlib import Path
 
 import pytest
@@ -158,6 +159,11 @@ def test_missing_block_asset_warning_names_its_source(workspace: WorkspacePaths)
         "![a](nope.png)",
         '![a](nope.png) <img src="nope2.png">',
         "[![l](nope3.png)](http://x)",
+        '<a href="http://x"><img src="nope.png"></a>',
+        "*![a](nope.png)*",
+        "**[![a](nope.png)](http://x)**",
+        '<p><img src="nope.png"></p>',
+        '<figure><img src="nope.png"></figure>',
     ],
 )
 def test_a_dropped_image_leaves_no_empty_wrapper(workspace: WorkspacePaths, body: str) -> None:
@@ -167,9 +173,24 @@ def test_a_dropped_image_leaves_no_empty_wrapper(workspace: WorkspacePaths, body
 
     section = html[html.index(f'id="{ONE}"') :]
     section = section[: section.index("</section>")]
-    assert "<p></p>" not in section and "<p> </p>" not in section
-    assert '<a href="http://x"></a>' not in section
+    # No element is left wrapping nothing (whitespace aside).
+    assert not re.search(r"<(p|a|em|strong|figure)\b[^>]*>\s*</\1>", section), section
+    assert "Trước." in section
     assert "<em>Hình 1. Chú thích.</em>" in section  # the caption stays
+
+
+def test_html_figure_keeps_its_caption_when_the_image_is_dropped(
+    workspace: WorkspacePaths,
+) -> None:
+    _register(
+        workspace,
+        ONE,
+        '# Một\n\n<figure><img src="nope.png"><figcaption>Hình 2.</figcaption></figure>\n',
+    )
+
+    html = _export(workspace)
+
+    assert "<figure><figcaption>Hình 2.</figcaption></figure>" in html
 
 
 def test_a_link_around_a_kept_image_stays(workspace: WorkspacePaths) -> None:

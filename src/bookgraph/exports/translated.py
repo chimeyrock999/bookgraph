@@ -253,7 +253,10 @@ def build_translated_export(
     if fallback == "fail" and report.untranslated:
         raise UntranslatedSectionsError(report)
     bodies = {section_id: body for section_id, (_, body) in rendered.items()}
-    return TranslatedExport(report, outline, bodies, bilingual_layout)
+    sources = {
+        node.section.id: assembler.original_source(node.section) for node in flatten(outline)
+    }
+    return TranslatedExport(report, outline, bodies, bilingual_layout, sources)
 
 
 def _load_document(parsed_dir: Path, doc_id: str) -> tuple[str, dict[str, CanonicalBlock]]:

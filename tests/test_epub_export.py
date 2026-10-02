@@ -78,15 +78,17 @@ def _nav_links(files: dict[str, bytes]) -> list[str]:
     return [a.get("href", "") for a in toc.iter(f"{{{_NS['x']}}}a")]
 
 
-def _markdown_book(tmp_path: Path) -> tuple[WorkspacePaths, list[Section]]:
-    """A three-chapter Markdown book through the real parse → segment pipeline."""
+_BOOK = (
+    "# Chapter One\n\nOpening prose.\n\n## Details\n\nDetail prose.\n\n"
+    "# Chapter Two\n\nSecond chapter prose.\n\n# Chapter Three\n\nThird chapter prose.\n"
+)
+
+
+def _markdown_book(tmp_path: Path, text: str = _BOOK) -> tuple[WorkspacePaths, list[Section]]:
+    """A Markdown book through the real parse → segment pipeline."""
 
     source = tmp_path / "book.md"
-    source.write_text(
-        "# Chapter One\n\nOpening prose.\n\n## Details\n\nDetail prose.\n\n"
-        "# Chapter Two\n\nSecond chapter prose.\n\n# Chapter Three\n\nThird chapter prose.\n",
-        encoding="utf-8",
-    )
+    source.write_text(text, encoding="utf-8")
     workspace = WorkspacePaths(tmp_path / "ws")
     document = MarkdownParser().parse(source, workspace.sources_parsed / "book")
     document = document.model_copy(update={"doc_id": "book", "title": "Markdown Book"})
@@ -255,6 +257,54 @@ def test_html_the_epub_cannot_carry_is_repaired_and_reported(
     assert "dropped element <script>" in warning.message
     written = ExportReport.model_validate_json(report_path_for(tmp_path / "book.epub").read_text())
     assert [w.code for w in written.warnings].count("xhtml_repaired") == 1
+
+
+def test_markup_shown_as_text_is_never_read_as_markup(tmp_path: Path) -> None:
+    workspace, sections = _markdown_book(
+        tmp_path,
+        "# Chapter One\n\n"
+        'Write `<a href="https://x.example/docs">docs</a>` or `<a href="other.html">x</a>` '
+        'or `<p id="book.chapter-two">`.\n\n'
+        'An inline image looks like `<img src="data:image/png;base64,iVBORw0KGgo=">` in HTML.\n\n'
+        "# Chapter Two\n\nSecond prose.\n",
+    )
+    two = sections[1].id
+
+    files, _ = _write_epub(workspace, tmp_path / "book.epub", doc_id="book")
+
+    first = _text(files, "chapter-001.xhtml")
+    assert "&lt;a href=&quot;other.html&quot;&gt;x&lt;/a&gt;" in first  # the sample is intact
+    assert "&lt;img src=&quot;data:image/png;base64,iVBORw0KGgo=&quot;&gt;" in first
+    assert not any(name.startswith("OEBPS/images/") for name in files)
+    assert f"chapter-002.xhtml#{two}" in _nav_links(files)
+
+
+def test_bilingual_repairs_name_the_side_they_were_made_in(tmp_path: Path) -> None:
+    workspace, sections = _markdown_book(
+        tmp_path, "# Chapter One\n\n<center>centred</center>\n\n# Chapter Two\n\nTwo.\n"
+    )
+    one, two = sections
+    write_translation(workspace, one, "vi", "# Chương Một\n\nCăn giữa.\n")
+    write_translation(workspace, two, "vi", "# Chương Hai\n\n<div><b>Hai.</div>\n")
+
+    files, report = _write_epub(workspace, tmp_path / "book.epub", doc_id="book", mode="bilingual")
+
+    repairs = {
+        (w.section_id, w.column, w.origin, w.source_path): w.message
+        for w in report.warnings
+        if w.code == "xhtml_repaired"
+    }
+    assert set(repairs) == {
+        (one.id, "original", "source", "sources/parsed/book/document.json"),
+        (two.id, "mixed", "translation", f"translations/vi/book/{two.id}.md"),
+    }
+    assert (
+        "dropped element <center>"
+        in repairs[one.id, "original", "source", ("sources/parsed/book/document.json")]
+    )
+    for name in ("chapter-001.xhtml", "chapter-002.xhtml"):
+        ET.fromstring(files[f"OEBPS/{name}"])
+        assert "<!--" not in _text(files, name)
 
 
 # -- languages -----------------------------------------------------------------------

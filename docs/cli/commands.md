@@ -1482,8 +1482,9 @@ laid out for reflowable screens:
   system can follow it, and epubcheck rejects it.
 - **XHTML.** Every section body is re-serialised as well-formed XHTML: void elements
   self-closed, text and attributes escaped, implied end tags (`p`, `li`, `td`, …)
-  added, and tags balanced. What changes the content is reported as
-  `xhtml_repaired` (once per section): a stray end tag dropped, an element left open
+  added, and tags balanced (each side of a `bilingual` pair on its own). Quotes in text
+  are escaped too. What changes the content is reported as `xhtml_repaired` (once per
+  section and side, naming the file the markup came from): a stray end tag dropped, an element left open
   closed, a `script`/`style`/`iframe`/`object`/`embed` element dropped with its
   content, a document wrapper or obsolete presentational tag (`body`, `center`,
   `font`, …) dropped with its content kept, an attribute name XML cannot carry or an

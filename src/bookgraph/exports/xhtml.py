@@ -197,6 +197,12 @@ class _XhtmlBuilder(HTMLParser):
         if tag in self._literal:
             self.out.append(xml_escape(f"</{self._literal[tag]}>"))
             return
+        if tag not in _HTML_ELEMENTS and tag not in _UNWRAP and tag not in _DROP_WITH_CONTENT:
+            # Its start tag was not in this fragment (a multi-line one read as text):
+            # still not markup, so the reader sees it as written, lowercased.
+            self.issues.append(f"kept unknown element <{tag}> as text")
+            self.out.append(xml_escape(f"</{tag}>"))
+            return
         if tag not in self._open:
             self.issues.append(f"dropped stray </{tag}>")
             return
@@ -219,7 +225,9 @@ class _XhtmlBuilder(HTMLParser):
 
     def handle_data(self, data: str) -> None:
         if not self._skip:
-            self.out.append(xml_escape(data, quote=False))
+            # Quotes too: text then never holds an attribute-like ``name="…"``, so the
+            # EPUB writer's scans of the serialised markup only ever match real tags.
+            self.out.append(xml_escape(data, quote=False).replace('"', "&quot;"))
 
     def handle_comment(self, data: str) -> None:
         return

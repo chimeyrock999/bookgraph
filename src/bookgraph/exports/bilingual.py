@@ -64,6 +64,9 @@ _LEGEND_FALLBACK = {
 # Where a unit of the mixed column and a source block of the original column start.
 _UNIT_MARK_RE = re.compile(r"<!--bg:unit=(\d+)-->\n?")
 _BLOCK_MARK_RE = re.compile(r"<!--bg:block=(.*?)-->")
+# The content of one side of an interleaved pair, so a writer can treat each side (and
+# report on it) apart: ``original`` or ``translation``.
+SIDE_RE = re.compile(r"<!--bg:side=(original|translation)-->(.*?)<!--bg:/side-->", re.S)
 
 
 def block_marker(block_id: str) -> str:
@@ -165,7 +168,16 @@ def _side(kind: str, html: str, lang: str) -> str:
 
     if not html.strip():
         return ""
-    return f'<div class="{kind}" lang="{escape(lang, quote=True)}">{html}</div>'
+    return (
+        f'<div class="{kind}" lang="{escape(lang, quote=True)}">'
+        f"<!--bg:side={kind}-->{html}<!--bg:/side--></div>"
+    )
+
+
+def strip_side_marks(html: str) -> str:
+    """``html`` with the interleaved side marks dropped (their content stays)."""
+
+    return SIDE_RE.sub(lambda match: match.group(2), html)
 
 
 def _split_marks(html: str, pattern: re.Pattern[str]) -> tuple[str, dict[str, str]]:

@@ -35,8 +35,15 @@ from html import unescape
 from pathlib import Path
 from urllib.parse import unquote_to_bytes
 
+from bookgraph.exports.bilingual import SIDE_RE
 from bookgraph.exports.edition import TranslatedExport
-from bookgraph.exports.models import XHTML_REPAIRED, ExportReport, ExportSection, ExportWarning
+from bookgraph.exports.models import (
+    XHTML_REPAIRED,
+    ExportReport,
+    ExportSection,
+    ExportWarning,
+    WarningColumn,
+)
 from bookgraph.exports.outline import OutlineNode
 from bookgraph.exports.render import front_matter
 from bookgraph.exports.renderers import ExportWriter
@@ -63,6 +70,10 @@ _DATA_SRC_RE = re.compile(r'(?<=\s)src="data:([^";,]+)((?:;[^";,]*)*),([^"]*)"')
 _HREF_RE = re.compile(r'\shref="([^"]*)"')
 _SCHEME_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*:")
 _ID_RE = re.compile(r'(?<=\s)id="([^"]*)"')
+# Stands for a normalised side of an interleaved pair while the rest is normalised: a
+# private-use character no section text carries once its sides are taken out.
+_SIDE_SLOT = "\ue000"
+_SIDE_SLOT_RE = re.compile(f"{_SIDE_SLOT}(\\d+){_SIDE_SLOT}")
 # Zip timestamps cannot go before 1980.
 _ZIP_EPOCH = (1980, 1, 1, 0, 0, 0)
 
@@ -123,6 +134,7 @@ class _Book:
         self.report: ExportReport = export.report
         self.outline = export.outline
         self.bodies = export.bodies
+        self.original_sources = export.original_sources
         self.entries: dict[str, ExportSection] = {e.section_id: e for e in self.report.sections}
         self.warnings: list[ExportWarning] = []
         self.images: dict[str, tuple[str, bytes]] = {}  # href → (media type, bytes)
@@ -191,18 +203,55 @@ class _Book:
         return self.report.lang if entry.source == "translated" else self.report.original_lang
 
     def _body(self, entry: ExportSection) -> str:
-        xhtml, issues = to_xhtml(self.bodies[entry.section_id])
-        if issues:
-            self.warnings.append(
-                ExportWarning(
-                    code=XHTML_REPAIRED,
-                    message="changed to be well-formed XHTML: " + "; ".join(dict.fromkeys(issues)),
-                    section_id=entry.section_id,
-                    source_path=entry.artifact,
-                    origin="translation" if entry.artifact is not None else "source",
-                )
-            )
+        """The section's body as XHTML, its repairs reported per side.
+
+        Each side of an interleaved bilingual pair is normalised on its own, so markup
+        broken on one side never spills into the other, and a repair names the side
+        (and file) it was made in.
+        """
+
+        issues: dict[str, list[str]] = {"original": [], "translation": []}
+        sides: list[str] = []
+
+        def take(match: re.Match[str]) -> str:
+            xhtml, found = to_xhtml(match.group(2))
+            issues[match.group(1)].extend(found)
+            sides.append(xhtml)
+            return f"{_SIDE_SLOT}{len(sides) - 1}{_SIDE_SLOT}"
+
+        rest, found = to_xhtml(SIDE_RE.sub(take, self.bodies[entry.section_id]))
+        issues["translation" if entry.source == "translated" else "original"].extend(found)
+        xhtml = _SIDE_SLOT_RE.sub(lambda match: sides[int(match.group(1))], rest)
+        for side, repairs in issues.items():
+            if repairs:
+                self._repaired(entry, side, repairs)
         return _DATA_SRC_RE.sub(self._image_file, xhtml)
+
+    def _repaired(self, entry: ExportSection, side: str, repairs: list[str]) -> None:
+        """Report one side's repairs: the translation, or the original text.
+
+        As for other warnings, the original is the ``original`` column only where the
+        reading edition does not show it too: a translated or skipped section in
+        ``bilingual`` mode.
+        """
+
+        column: WarningColumn = "mixed"
+        if side == "translation":
+            source_path = entry.artifact
+        else:
+            source_path = self.original_sources.get(entry.section_id)
+            if self.report.mode == "bilingual" and entry.source != "original":
+                column = "original"
+        self.warnings.append(
+            ExportWarning(
+                code=XHTML_REPAIRED,
+                message="changed to be well-formed XHTML: " + "; ".join(dict.fromkeys(repairs)),
+                section_id=entry.section_id,
+                source_path=source_path,
+                column=column,
+                origin="translation" if side == "translation" else "source",
+            )
+        )
 
     def _image_file(self, match: re.Match[str]) -> str:
         media_type, params, payload = match.group(1).lower(), match.group(2), match.group(3)

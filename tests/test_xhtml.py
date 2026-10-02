@@ -83,6 +83,20 @@ def test_elements_html_does_not_define_are_kept_as_text() -> None:
     _parses(xhtml)
 
 
+def test_an_unknown_end_tag_alone_is_kept_as_text() -> None:
+    # A multi-line start tag can end up in paragraph text and its end tag in raw HTML.
+    xhtml, issues = to_xhtml("<p>a</p></rdf:RDF>")
+
+    assert xhtml == "<p>a</p>&lt;/rdf:rdf&gt;"
+    assert issues == ["kept unknown element <rdf:rdf> as text"]
+
+
+def test_quotes_in_text_are_escaped_so_text_never_looks_like_an_attribute() -> None:
+    xhtml, _ = to_xhtml('<code>&lt;a href="x" id="y"&gt;</code>')
+
+    assert xhtml == "<code>&lt;a href=&quot;x&quot; id=&quot;y&quot;&gt;</code>"
+
+
 def test_obsolete_presentational_tags_are_unwrapped() -> None:
     xhtml, issues = to_xhtml("<center><font size=2>small</font></center><p>x</p>")
 

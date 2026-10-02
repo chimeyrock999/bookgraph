@@ -483,6 +483,69 @@ The concept edges here are the authoritative set for that section and, on the ne
 prunes that section's mentions). See **`annotations.md`** for the field rules, the
 presence-based merge rule, and the `markdown-graph` non-goal.
 
+## Translation artifacts
+
+Read by `bookgraph export translated-pdf`. BookGraph does not write these files: a
+translation agent or a person produces them. There is one Markdown file per section.
+The export uses the first location below that exists:
+
+```text
+translations/<lang>/<doc_id>/<section_id>.md          # curated translation
+translation_cache/<doc_id>/<section_id>.<lang>.md     # translation-run cache
+```
+
+- Optional leading `---` frontmatter. Only flat `key: value` lines are read. `title`
+  is the translated section title used in the table of contents.
+- If the body starts with a heading, that heading is the translated title. Artifact
+  headings are shifted so the top one sits at the section's `level`. A body with no
+  heading gets the frontmatter `title`, or the original title.
+- Image links (`![caption](images/fig1.png)`) may point at workspace files, for
+  example the parsed assets under `sources/parsed/<doc_id>/images/`. They may also be
+  absolute paths inside the workspace, such as an MCP `AssetRef.path`. See the
+  asset-handling rules in `commands.md`.
+- An empty or unreadable artifact counts as untranslated and is reported
+  (`translation_empty` / `translation_unreadable`).
+
+## `exports/<doc_id>.<lang>-progress.pdf` + `.report.json`
+
+Owner: `bookgraph export translated-pdf`. This is derived, reader-facing output and
+can be regenerated at any time. The report (`bookgraph.exports.models.ExportReport`)
+is written beside the export:
+
+```json
+{
+  "doc_id": "ddia",
+  "title": "Designing Data-Intensive Applications",
+  "lang": "vi",
+  "fallback": "original",
+  "generated_at": "2026-10-02T00:00:00Z",
+  "total_sections": 3,
+  "translated_sections": 1,
+  "coverage": 0.3333,
+  "sections": [
+    {"section_id": "ddia.chapter-1", "title": "Chương 1", "level": 1,
+     "source": "translated", "artifact": "translations/vi/ddia/ddia.chapter-1.md",
+     "assets_embedded": 1, "assets_missing": 0}
+  ],
+  "warnings": [
+    {"code": "asset_missing", "message": "…", "section_id": "ddia.scalability",
+     "reference": "t1.png"}
+  ],
+  "renderer": "playwright",
+  "output": "/path/to/workspace/exports/ddia.vi-progress.pdf"
+}
+```
+
+- `source` is `translated`, `original`, or `skipped`.
+- `generated_at` follows `SOURCE_DATE_EPOCH` when it is set. With unchanged inputs and
+  a pinned timestamp, the assembled HTML is byte-identical.
+- Stable warning codes:
+  - `asset_missing`, `asset_remote`, `asset_unsupported`: an asset is not in the
+    export. These are the codes `--strict` refuses.
+  - `translation_empty`, `translation_unreadable`.
+  - `asset_captions_only` / `asset_text_sparse`: ingest quality warnings, passed
+    through for rendered sections whose source prose is mostly captions.
+
 ## Future artifacts
 
 Do not implement these without updating this file.

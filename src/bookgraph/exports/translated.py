@@ -31,7 +31,6 @@ publisher's layout.
 
 from __future__ import annotations
 
-import json
 import os
 import time
 from collections import Counter
@@ -52,6 +51,7 @@ from bookgraph.exports.models import (
     TRANSLATION_EMPTY,
     TRANSLATION_MISSING_ASSETS,
     TRANSLATION_STALE,
+    TRANSLATION_STRUCTURE_CHANGED,
     TRANSLATION_UNREADABLE,
     TRANSLATION_UNTRACKED,
     ExportReport,
@@ -78,9 +78,15 @@ from bookgraph.quality import (
     section_warnings,
 )
 from bookgraph.sections import read_sections
+from bookgraph.translation_structure import (
+    check_section_translation,
+    describe_structure_issues,
+    local_asset_resolver,
+)
 from bookgraph.translations import (
     TranslationState,
     section_content_hash,
+    split_frontmatter,
     translation_state,
     validate_lang,
 )
@@ -394,6 +400,7 @@ class _Assembler(ImageEmbedder):
                 section.id,
             )
             return None
+        self._structure_warnings(section, body, artifact)
 
         tokens = self._md.parse(body)
         heading_title = _first_heading_text(tokens)
@@ -412,6 +419,27 @@ class _Assembler(ImageEmbedder):
             tokens = tokens[heading_end:]
         html = self._md.renderer.render(tokens, self._md.options, {})
         return title or section.title, heading_html, html
+
+    def _structure_warnings(self, section: Section, body: str, artifact: Path) -> None:
+        """Flag a translation whose link destinations/anchors/paths differ from the source.
+
+        Export navigation itself anchors on section ids, never on (translated) heading
+        text, but intra-book links and image paths in the body only work as written.
+        """
+
+        resolves = local_asset_resolver(
+            self.workspace.root, [artifact.parent, *self._parsed_bases()]
+        )
+        issues = check_section_translation(
+            section, body, blocks=self.blocks, asset_resolves=resolves
+        )
+        if issues:
+            self._warn(
+                TRANSLATION_STRUCTURE_CHANGED,
+                f"translation {_relative(self.workspace, artifact)} changed structural "
+                f"Markdown of its section: {describe_structure_issues(issues)}",
+                section.id,
+            )
 
     def _freshness_warnings(
         self, section: Section, state: TranslationState, freshness: TranslationFreshness
@@ -524,34 +552,6 @@ class _Assembler(ImageEmbedder):
         tokens = self._md.parse(text)
         self._rewrite_images(tokens, section_id, self._parsed_bases(), counter, source, block_id)
         return str(self._md.renderer.render(tokens, self._md.options, {}))
-
-
-def split_frontmatter(text: str) -> tuple[dict[str, object], str]:
-    """Split an optional leading ``---`` YAML frontmatter block from Markdown.
-
-    Only flat ``key: value`` lines are read (values as JSON scalars when they parse,
-    raw strings otherwise) — enough for the ``title``/provenance fields translation
-    artifacts carry, without a YAML dependency. Text without frontmatter is returned
-    unchanged.
-    """
-
-    lines = text.splitlines()
-    if not lines or lines[0].strip() != "---":
-        return {}, text
-    end = next((i for i, line in enumerate(lines[1:], start=1) if line.strip() == "---"), None)
-    if end is None:
-        return {}, text
-    fields: dict[str, object] = {}
-    for line in lines[1:end]:
-        key, sep, value = line.partition(":")
-        if not sep or not key.strip():
-            continue
-        value = value.strip()
-        try:
-            fields[key.strip()] = json.loads(value)
-        except ValueError:
-            fields[key.strip()] = value.strip("'\"")
-    return fields, "\n".join(lines[end + 1 :])
 
 
 def _first_heading_text(tokens: list[Token]) -> str | None:

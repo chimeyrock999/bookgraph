@@ -74,6 +74,12 @@ Optional translation cache tools (when the user wants sections translated):
   source_section_hash=<current_section_hash>, notes=...)` — cache a new
   translation. `content` is book content only; QA/checker results and terminology
   decisions go in `notes` (see *Artifact channels* below).
+  Translate content, preserve structural Markdown: translate prose, captions, and
+  link labels, but keep link destinations and fragment ids, image and file paths,
+  reference-style identifiers, HTML `id`/`name` anchors, and `{#id}` heading ids
+  byte-for-byte. A non-empty `structure_issues` in the result lists what changed;
+  fix and rewrite it (`complete_reading_batch` blocks on
+  `translation_structure_changed`).
 - `list_section_artifacts(doc_id=None, lang=None)` — list cached translations and
   their freshness.
 

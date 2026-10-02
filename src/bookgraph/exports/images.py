@@ -18,10 +18,10 @@ import re
 from dataclasses import dataclass, field
 from html import escape, unescape
 from pathlib import Path
-from urllib.parse import unquote
 
 from markdown_it.token import Token
 
+from bookgraph.assets import resolve_workspace_link
 from bookgraph.exports.models import (
     ASSET_MISSING,
     ASSET_REMOTE,
@@ -192,7 +192,7 @@ class ImageEmbedder:
                 origin,
             )
             return None
-        path = self._resolve_link(unquote(src.split("#", 1)[0].split("?", 1)[0]), bases)
+        path = self._resolve_link(src, bases)
         if path is None:
             self._warn(
                 ASSET_MISSING,
@@ -204,23 +204,10 @@ class ImageEmbedder:
             return None
         return self._data_uri(path, section_id, src, origin)
 
-    def _resolve_link(self, raw: str, bases: list[Path]) -> Path | None:
+    def _resolve_link(self, link: str, bases: list[Path]) -> Path | None:
         """Resolve an image link to a regular file that stays inside the workspace."""
 
-        try:
-            root_real = self.workspace.root.resolve()
-        except (OSError, ValueError):
-            return None
-        candidate = Path(raw)
-        options = [candidate] if candidate.is_absolute() else [base / candidate for base in bases]
-        for option in options:
-            try:
-                real = option.resolve()
-                if real.is_relative_to(root_real) and real.is_file():
-                    return real
-            except (OSError, ValueError):
-                continue
-        return None
+        return resolve_workspace_link(self.workspace.root, link, bases)
 
     def _data_uri(
         self, path: Path, section_id: str, reference: str, origin: AssetOrigin

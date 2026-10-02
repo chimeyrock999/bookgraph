@@ -241,5 +241,7 @@ def test_server_instructions_tell_agents_where_diagnostics_go(tmp_path: Path) ->
         "require_annotation=False",
         'index="ignore"',
         "inspected_assets",
+        "{#id} heading ids byte-for-byte",
+        "structure_issues",
     ):
         assert rule in instructions

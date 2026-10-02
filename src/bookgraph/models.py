@@ -137,3 +137,23 @@ class SectionArtifact(BaseModel):
     model: str | None = None
     created_at: str | None = None
     notes: str | None = None
+
+
+# What a translation must carry over unchanged from its source section (see
+# ``bookgraph.translation_structure``): link and image destinations, reference-style
+# link definitions, HTML ``id``/``name`` anchors, and explicit heading ids (``{#id}``).
+StructuralTargetKind = Literal["link", "image", "reference", "html_id", "heading_id"]
+
+
+class TranslationStructureIssue(BaseModel):
+    """One structural target a translation changed relative to its source section.
+
+    ``missing`` means the source has ``target`` (``count`` more times) than the
+    translation; ``added`` means the translation has it and the source does not. A
+    rewritten destination shows up as one ``missing`` plus one ``added`` entry.
+    """
+
+    kind: StructuralTargetKind
+    target: str
+    change: Literal["missing", "added"]
+    count: int = 1

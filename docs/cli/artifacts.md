@@ -602,6 +602,56 @@ the hash does not cover assets, so a re-parse that newly stages a figure leaves 
 prose-only translation `fresh`. Reuse a translation as-is only when `status` is
 `fresh` **and** (`includes_assets` or not `section_has_assets`).
 
+**Structure rule: translate content, preserve structural Markdown.** A translation
+translates prose, captions, and link labels, but keeps every structural target of the
+section (its title heading + text) byte-for-byte, because intra-book references, TOC
+anchors, and exports depend on them:
+
+| Kind | Preserved |
+| --- | --- |
+| `link` | Markdown link destinations and fragments (`[label](ch03.html#sec_x)`, `(#fig_y)`), autolinks, HTML `href`, and `src` on elements other than `<img>` |
+| `image` | Markdown image paths and `<img src>` |
+| `reference` | Reference-style definitions, identifier (case- and whitespace-insensitive, as CommonMark matches labels) and destination (`[spec]: https://…`) |
+| `html_id` | HTML `id` / `name` anchors |
+| `heading_id` | Explicit heading ids (`## Title {#sec_x}`) |
+
+`[label](target)` may become `[nhãn](target)`; `target` must not change. Two image
+changes are allowed: an image that resolves may be added, which carries the section's
+figures — a `data:image/…` URI, or a relative path found next to the body, then under
+`sources/parsed/<doc_id>/images/`, `sources/parsed/<doc_id>/`, or the workspace root
+(the export's own lookup) — and a source image path that does not resolve may be
+replaced by one that does. An absolute path (`/…`, `~/…`, `file:`, `C:\…`) never
+counts as resolving, even when it points at a workspace file: the reading-agent
+contract links each carried figure/table by its relative `AssetRef.link`, never by its
+absolute `AssetRef.path`, so adding an absolute image link is reported. Heading *text* may be translated: export navigation anchors
+on section ids, never on heading text.
+
+What is compared:
+
+- The source is the section's title heading plus its text, rebuilt from the parsed
+  blocks when `document.json` exists. Parsers store code blocks as plain text without
+  fences, so code (`metadata.code`) and equation blocks are re-fenced and never count
+  as structure. The rebuild is used only when, fences aside, it reproduces
+  `Section.text` exactly (with or without title blocks, as segmenters differ);
+  otherwise, and without `document.json`, `Section.text` is used as is.
+- Targets the translation added that the source's code blocks and spans yield when
+  read as Markdown (sample code left unfenced) are not reported, up to their count.
+- The translation body is compared after its frontmatter is split off, exactly as the
+  export renders it.
+- Code spans/blocks and HTML comments are not structure on either side.
+- Known limitation: the Markdown/MarkItDown parsers drop reference definitions
+  (`[spec]: …`) from the section text, so for parsed sections the `reference` kind
+  has nothing to protect, and a reference-style link reads as plain text on both
+  sides.
+
+`bookgraph.translation_structure.check_section_translation` does the comparison for
+the MCP tools, reading-batch completion, and the export alike.
+The translation tools return its findings as `structure_issues` (each `{kind, target,
+change: "missing" | "added", count}`; a rewritten target is one `missing` plus one
+`added`). Writes are not refused, because the body is the deliverable, but
+`complete_reading_batch` blocks on `translation_structure_changed` and the export
+flags it.
+
 Write order: remove the previous sidecar, write the body, then write the new sidecar,
 each via a same-directory temp file + fsync + rename (files take the process umask,
 not `mkstemp`'s 0600). A crash or a racing writer between the steps leaves an
@@ -736,6 +786,10 @@ is written beside the export:
     refuses it.
   - `translation_untracked`: no valid registry record, or the body was edited after
     registration. Rendered (with a note under `--show-status`); never refused.
+  - `translation_structure_changed`: the rendered translation dropped, added, or
+    rewrote a link destination, image path, reference definition, HTML anchor, or
+    heading id of its section (see the structure rule above). Rendered as written;
+    `--strict` refuses it.
   - `translation_empty`, `translation_unreadable`: the section falls back.
   - `asset_captions_only` / `asset_text_sparse`: ingest quality warnings, passed
     through for rendered sections whose source prose is mostly captions.

@@ -77,7 +77,8 @@ def export_translated_pdf(
         typer.Option(
             "--strict",
             help="Fail instead of exporting when an asset is missing, a translation is "
-            "stale, or a translation left out the section's figures/tables.",
+            "stale, a translation left out the section's figures/tables, or a translation "
+            "changed its section's link targets, anchors, or paths.",
         ),
     ] = False,
     show_status: Annotated[

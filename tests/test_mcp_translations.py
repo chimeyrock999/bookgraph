@@ -42,9 +42,7 @@ def test_missing_translation_reports_current_hash(tmp_path: Path) -> None:
     assert view.status == "missing"
     assert view.content is None
     assert view.path is None
-    assert view.current_section_hash is not None and view.current_section_hash.startswith(
-        "sha256:"
-    )
+    assert view.current_section_hash is not None and view.current_section_hash.startswith("sha256:")
 
 
 def test_write_then_get_returns_fresh_cached_content(tmp_path: Path) -> None:
@@ -65,9 +63,7 @@ def test_write_then_get_returns_fresh_cached_content(tmp_path: Path) -> None:
     assert written.status == "fresh"
     assert written.lang == "vi"
     assert written.content is None  # writes do not echo the body back
-    assert written.path == str(
-        workspace.translations_root / "vi" / "deep-work" / "deep-work.a.md"
-    )
+    assert written.path == str(workspace.translations_root / "vi" / "deep-work" / "deep-work.a.md")
     view = service.get_section_translation(workspace, "deep-work", "deep-work.a", "vi")
     assert view.status == "fresh"
     assert view.content == "# Bản dịch"
@@ -226,6 +222,134 @@ def test_get_serves_the_body_it_validated_not_a_second_read(
 
     assert view.status == "fresh"
     assert view.content == "Bản A"
+
+
+LINKED = "See [the models chapter](ch03.html#sec_models) and [the figure](#fig_query)."
+
+
+def test_translation_view_flags_changed_link_targets(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path, _section("deep-work.a", text=LINKED))
+
+    written = service.write_section_translation(
+        workspace,
+        "deep-work",
+        "deep-work.a",
+        "vi",
+        "Xem [chương mô hình](ch03.html#sec_mo_hinh) và [hình](#fig_query).",
+    )
+
+    # The write is kept (the body is the deliverable) but reported, so the job can fix it.
+    assert written.status == "fresh"
+    assert [(i.kind, i.target, i.change) for i in written.structure_issues] == [
+        ("link", "ch03.html#sec_models", "missing"),
+        ("link", "ch03.html#sec_mo_hinh", "added"),
+    ]
+    view = service.get_section_translation(workspace, "deep-work", "deep-work.a", "vi")
+    assert len(view.structure_issues) == 2
+    listed = service.list_section_artifacts(workspace, doc_id="deep-work")
+    assert len(listed.artifacts[0].structure_issues) == 2
+
+
+def test_translated_labels_with_preserved_targets_have_no_structure_issues(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path, _section("deep-work.a", text=LINKED))
+
+    written = service.write_section_translation(
+        workspace,
+        "deep-work",
+        "deep-work.a",
+        "vi",
+        "# Phần A\n\nXem [chương mô hình](ch03.html#sec_models) và [hình](#fig_query).",
+    )
+
+    assert written.structure_issues == []
+
+
+def test_translation_may_carry_the_sections_figures(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path, _section("deep-work.a", text="Body."))
+    images = workspace.sources_parsed / "deep-work" / "images"
+    images.mkdir(parents=True)
+    (images / "fig1.png").write_bytes(b"png")
+
+    written = service.write_section_translation(
+        workspace,
+        "deep-work",
+        "deep-work.a",
+        "vi",
+        "Nội dung.\n\n![Hình 1](fig1.png)\n\n![Hình 2](missing.png)\n",
+        includes_assets=True,
+    )
+
+    assert [(i.kind, i.target, i.change) for i in written.structure_issues] == [
+        ("image", "missing.png", "added")
+    ]
+
+
+def test_structure_check_ignores_frontmatter_like_the_export(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path, _section("deep-work.a", text=LINKED))
+
+    written = service.write_section_translation(
+        workspace,
+        "deep-work",
+        "deep-work.a",
+        "vi",
+        "---\nsource: <https://example.com/book/ch01.html>\n---\n"
+        "Xem [chương](ch03.html#sec_models) và [hình](#fig_query).",
+    )
+
+    assert written.structure_issues == []
+
+
+def test_structure_check_rebuilds_parsed_code_blocks(tmp_path: Path) -> None:
+    workspace = WorkspacePaths(tmp_path)
+    blocks = [
+        CanonicalBlock(id="b0", type="title", text="A", level=1),
+        CanonicalBlock(id="b1", type="text", text="See [x](a.html)."),
+        CanonicalBlock(id="b2", type="text", text='<div id="app"></div>', metadata={"code": True}),
+    ]
+    write_document(
+        Document(doc_id="deep-work", title="Deep Work", blocks=blocks),
+        workspace.sources_parsed / "deep-work",
+    )
+    text = 'See [x](a.html).\n\n<div id="app"></div>'
+    write_sections(
+        [_section("deep-work.a", text=text, block_ids=["b0", "b1", "b2"])],
+        workspace.sources_sections / "deep-work",
+    )
+
+    written = service.write_section_translation(
+        workspace,
+        "deep-work",
+        "deep-work.a",
+        "vi",
+        'Xem [x](a.html).\n\n```html\n<div id="app"></div>\n```\n',
+    )
+
+    assert written.structure_issues == []
+
+
+def test_absolute_image_path_is_never_a_carried_figure(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path, _section("deep-work.a", text="Body."))
+    images = workspace.sources_parsed / "deep-work" / "images"
+    images.mkdir(parents=True)
+    (images / "fig1.png").write_bytes(b"png")
+    absolute = (images / "fig1.png").resolve()
+
+    written = service.write_section_translation(
+        workspace,
+        "deep-work",
+        "deep-work.a",
+        "vi",
+        f"Nội dung.\n\n![Hình 1](fig1.png)\n\n![Hình 1]({absolute})\n",
+        includes_assets=True,
+    )
+
+    # The relative path resolves and is allowed; the absolute one, though it points
+    # at the same workspace file, is an absolute asset link and is reported.
+    assert [(i.kind, i.target, i.change) for i in written.structure_issues] == [
+        ("image", str(absolute), "added")
+    ]
 
 
 def test_notes_are_stored_beside_the_translation_not_in_it(tmp_path: Path) -> None:

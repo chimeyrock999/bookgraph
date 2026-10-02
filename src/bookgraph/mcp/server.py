@@ -48,6 +48,9 @@ summaries and glosses) are reused by later runs and printed in reading PDFs, so 
 hold book content only. Keep the channels separate:
 - translated headings/prose/tables/figures -> write_section_translation(content=...);
   link each figure/table by its AssetRef.link (relative), never by its absolute path;
+  translate prose and link labels, but keep link destinations, fragment ids, file
+  paths, reference identifiers, HTML anchors and {#id} heading ids byte-for-byte
+  (structure_issues in the write result lists any that changed);
 - QA/checker results, terminology decisions, doubts about the source ->
   write_section_translation(notes=...), stored beside the translation, never exported;
 - MEDIA:/path delivery markers, "saved cache / marked read" progress lines, job status
@@ -461,6 +464,11 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
         under translations/ and not in any directory of your own (such as a
         translation_cache/) — nothing reads them, so the section stays untranslated in
         the export and in batch completion.
+
+        Translate prose and link labels, not structure: keep link destinations and
+        fragment ids, image/file paths, reference-style identifiers, HTML id/name
+        anchors, and {#id} heading ids byte-for-byte. structure_issues in the result
+        lists any that changed; fix and rewrite the translation.
         """
 
         try:

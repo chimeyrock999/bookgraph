@@ -56,7 +56,8 @@ def test_export_html_writes_edition_and_report(tmp_path: Path) -> None:
     assert "(original)" not in html and "sections translated" not in html
     assert payload["sections"][0]["freshness"] == "untracked"
     codes = sorted(w["code"] for w in payload["warnings"])
-    assert codes == ["asset_missing", "translation_untracked"]
+    # The translation adds an image the section does not have and that does not resolve.
+    assert codes == ["asset_missing", "translation_structure_changed", "translation_untracked"]
 
 
 def test_export_show_status_prints_status_into_the_book(tmp_path: Path) -> None:

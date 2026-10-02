@@ -832,14 +832,17 @@ docstrings (`write_section_translation`, `mark_read`) and both skills repeat the
   `untracked` / `missing`, see `artifacts.md`), `path`, `metadata_path`,
   `source_section_hash`, `current_section_hash`, `includes_assets`,
   `section_has_assets` (whether the section owns any figure/table block), `model`,
-  `created_at`, `notes` (the writer's side-channel remarks), and `content` (the body,
-  unless `include_content=False`). A missing
-  translation is a normal result, not an error.
+  `created_at`, `notes` (the writer's side-channel remarks), `content` (the body,
+  unless `include_content=False`), and `structure_issues` (the link destinations,
+  image paths, reference definitions, HTML anchors, and heading ids the body dropped
+  or added relative to the section; see the structure rule in `artifacts.md`). A
+  missing translation is a normal result, not an error.
 - `write_section_translation(doc_id, section_id, lang, content, includes_assets=False,
   model=None, source_section_hash=None, notes=None)` → write
   `translations/<lang>/<doc_id>/<section_id>.md` and its registry sidecar,
   replacing any previous translation; returns the entry (status `fresh`, no
-  `content`). Empty `content` is rejected. When `source_section_hash` is given and
+  `content`, with `structure_issues` for the body just written — the write is kept
+  either way). Empty `content` is rejected. When `source_section_hash` is given and
   differs from the section's current hash the write is refused, so a translation of
   outdated content is never registered as fresh. `content` is the translated book
   content only, with figures/tables linked by their `AssetRef.link`. `notes`
@@ -848,8 +851,8 @@ docstrings (`write_section_translation`, `mark_read`) and both skills repeat the
   body (see *Artifact channels* in `artifacts.md`).
 - `list_section_artifacts(doc_id=None, lang=None, type="translation")` → every
   cached translation (filtered by `doc_id` / `lang`) with its status, including
-  `orphaned` ones whose section no longer exists; no bodies. Only
-  `type="translation"` exists.
+  `orphaned` ones whose section no longer exists; no bodies, but each entry carries
+  its `structure_issues`. Only `type="translation"` exists.
 - `list_documents()` → the workspace's segmented documents, each with `doc_id`,
   `title` (from the parsed `document.json`, falling back to `doc_id`), and
   `section_count`. Lets an agent discover what there is to read before picking a
@@ -931,6 +934,10 @@ Issue codes (`blocking` unless noted):
   the section; re-translate with `write_section_translation`.
 - `translation_untracked` — non-blocking; the body has no registry record, so its
   freshness is unknown.
+- `translation_structure_changed` — a fresh or untracked translation dropped, added,
+  or rewrote a link destination, image path, reference definition, HTML anchor, or
+  heading id of the section; the message lists the changes. Translate labels and
+  prose only and rewrite it (see the structure rule in `artifacts.md`).
 
 Request errors — unknown/invalid `plan_id`, an unsegmented document, an empty
 `section_ids`, a plan that is already complete when `section_ids` is omitted, an
@@ -1128,8 +1135,9 @@ bookgraph export translated-pdf /path/to/workspace ddia --check           # cove
   not installed is an error.
 - `--strict`: exit `1` without writing anything if any asset is missing, remote, or
   unsupported, a translation is `stale` (`translation_stale`), or a registered
-  translation left out its section's figures/tables (`translation_missing_assets`).
-  An `untracked` translation only warns.
+  translation left out its section's figures/tables (`translation_missing_assets`),
+  or a translation changed its section's link targets, anchors, or paths
+  (`translation_structure_changed`). An `untracked` translation only warns.
 - `--show-status`: debug view. Also print status metadata on the reading pages:
   coverage/doc_id/fallback on the title page, TOC status markers (`(original)`,
   `(may be outdated)`, `(not tracked)`, `(skipped)`), the *Untranslated — original

@@ -215,10 +215,10 @@ no models), but the comparison on issue 87 found it not ready to be the default
 (<https://github.com/chimeyrock999/bookgraph/issues/87#issuecomment-5956663497>):
 
 - EPUB: both adapters give the same heading structure and sections, while MinerU costs a
-  1.2 GB extra, and through `mineru-middle-json` loses the internal links, anchors and
-  `<source.epub>!<member>` provenance that exports rely on.
-- DOCX: MinerU's own output keeps merged and nested tables and images, but
-  `mineru-middle-json` drops native table bodies, and MinerU drops footnotes.
+  1.2 GB extra. At the time, `mineru-middle-json` also lost the internal links, anchors
+  and `<source.epub>!<member>` provenance (kept since issue 89).
+- DOCX: MinerU's own output keeps merged and nested tables and images, but MinerU drops
+  footnotes (`mineru-middle-json` also dropped native table bodies before issue 89).
 
 MinerU is used for EPUB/DOCX only when chosen explicitly, through `parse-book` on a
 registered book (see *Explicit MinerU path for EPUB/DOCX* under `parse-book`). The
@@ -1257,7 +1257,9 @@ the export is one document anchored on section ids. When it renders the page, th
 export rewrites each internal-book `<a href>` (a `#fragment`, or a link to a source
 `.html`/`.htm`/`.xhtml` file) to one of its own anchors, in this order:
 
-1. the fragment is an `id` already on the page → that anchor;
+1. the fragment is an `id` already on the page → that anchor; else a block's
+   `metadata.anchor` (MinerU's EPUB path rewrites internal links to these) → the
+   deepest section holding that block;
 2. the file names a section: `ch10.html` (or `chapter-10`, `ch10s02`) → the section
    titled *Chapter 10* (or *10. …*); `app01.html`/`appa.html` → *Appendix A*;
    `part02.html` → *Part II*; any other file → the section with the same title
@@ -1747,10 +1749,15 @@ bookgraph parse-book /path/to/workspace <book_id>
   `<source.epub>!<spine member>` (MinerU's `page_idx` is the spine index), and an image
   block's `metadata.asset_source_member` is the EPUB member with the same bytes. A DOCX
   has no spine: MinerU puts it all on `page_idx` 0, so the block id `p0.b<index>` is its
-  only locator, and its pictures (re-encoded as JPEG) record no member.
+  only locator, and its pictures (re-encoded as JPEG) record no member. Within an EPUB
+  member the block id `p<page_idx>.b<index>` is the only finer locator.
 - **Content.** Native tables keep their HTML (colspan, rowspan, nested tables) as the
-  block text; hyperlinks stay Markdown links; and a block's `anchor` (an EPUB element id,
-  a DOCX bookmark) is kept in `metadata.anchor`. Inline spans join verbatim.
+  block text; hyperlinks stay Markdown links; and a block's `anchor` is kept in
+  `metadata.anchor`. Inline spans join verbatim. For an EPUB the anchor is an id MinerU
+  assigns (`epub-<hash>`) and rewrites the book's internal `#…` links to: a link target
+  inside the parsed document, not the source element's `id`, so it does not locate the
+  block within its member. A DOCX bookmark name is kept as written. Exports resolve a
+  link to a block anchor to the section holding the block.
 - **Heading levels.** For DOCX, MinerU reserves level 1 for the `Title` style and maps
   `Heading N` to level N+1. `mineru-middle-json` shifts DOCX section titles back by one,
   matching MarkItDown (`Title` and `Heading 1` → 1, `Heading 2` → 2), so switching
@@ -1764,8 +1771,6 @@ Known limitations of MinerU 4.0.10 on this path:
   `w:outlineLvl` comes out as body text.
 - EPUB links to an element MinerU emits no anchor for (a `<figure id>`, say) become
   plain text.
-- Exports do not resolve links against `metadata.anchor` yet, so a link to a block
-  anchor is reported as `internal_link_unresolved` and left as written.
 
 ### `bookgraph wiki compile`
 

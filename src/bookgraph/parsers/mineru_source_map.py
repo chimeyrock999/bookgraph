@@ -11,8 +11,13 @@ source, and :mod:`bookgraph.parsers.mineru_middle_v2` reads it to give every blo
 The map is plain JSON::
 
     {"source": "book.epub",
-     "spine": ["OEBPS/text/ch01.xhtml", ...],      # EPUB only; index = page_idx
+     "spine": ["OEBPS/text/ch01.xhtml", null, ...],  # EPUB only; index = page_idx
      "images": {"images/page_0_image_2.png": "OEBPS/images/fig-1.png"}}
+
+The spine keeps one entry per ``itemref``, as MinerU makes one page per
+``itemref`` (an empty page for one whose ``idref`` is not in the manifest, which
+maps to ``null`` here), so ``page_idx`` keeps indexing it after a gap. Hrefs are
+percent-decoded into package member names, as MinerU decodes them.
 
 An image is matched to its member by identical bytes, so an image MinerU re-encoded
 (DOCX pictures come out as JPEG) keeps no member. A DOCX has no spine: MinerU puts
@@ -27,6 +32,7 @@ import posixpath
 import zipfile
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote
 from xml.etree import ElementTree
 
 from bookgraph.utils import MINERU_MIDDLE_JSON_SUFFIX
@@ -79,8 +85,11 @@ def read_source_map(middle_json: Path) -> dict[str, Any] | None:
     return payload if isinstance(payload, dict) else None
 
 
-def _epub_spine(package: zipfile.ZipFile) -> list[str]:
-    """Spine members in reading order, as package paths (``OEBPS/text/ch01.xhtml``)."""
+def _epub_spine(package: zipfile.ZipFile) -> list[str | None]:
+    """Spine members in reading order, as package paths (``OEBPS/text/ch01.xhtml``).
+
+    One entry per ``itemref``; ``None`` for an ``idref`` the manifest does not name.
+    """
 
     container = ElementTree.fromstring(package.read(_CONTAINER))
     rootfile = container.find(f".//{_CONTAINER_NS}rootfile")
@@ -94,11 +103,11 @@ def _epub_spine(package: zipfile.ZipFile) -> list[str]:
         for item in opf.iter(f"{_OPF_NS}item")
         if item.get("id") and item.get("href")
     }
-    spine: list[str] = []
+    spine: list[str | None] = []
     for itemref in opf.iter(f"{_OPF_NS}itemref"):
         href = hrefs.get(itemref.get("idref"))
-        if href:
-            spine.append(posixpath.normpath(posixpath.join(base, href)))
+        path = unquote(href.split("#", 1)[0]) if href else ""
+        spine.append(posixpath.normpath(posixpath.join(base, path)) if path else None)
     return spine
 
 

@@ -48,7 +48,7 @@ from bookgraph.documents import read_document
 from bookgraph.exports.bilingual import block_marker, mark_units
 from bookgraph.exports.edition import TranslatedExport
 from bookgraph.exports.images import AssetCounter, AssetOrigin, ImageEmbedder
-from bookgraph.exports.links import resolve_section_links
+from bookgraph.exports.links import block_anchor_sections, resolve_section_links
 from bookgraph.exports.models import (
     ASSET_MISSING,
     TRANSLATION_EMPTY,
@@ -232,6 +232,7 @@ def build_translated_export(
         assembler.alignments,
         layout=bilingual_layout,
         source_lang=source_lang,
+        block_anchors=block_anchor_sections(outline, assembler.blocks),
     )
     assembler.warnings.extend(link_warnings)
     report = ExportReport.from_sections(

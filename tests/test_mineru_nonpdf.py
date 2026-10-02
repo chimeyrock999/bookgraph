@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -181,3 +182,90 @@ def test_recorded_bundles_parse_every_block(tmp_path: Path, kind: str) -> None:
 
     assert len(document.blocks) == sum(len(page["blocks"]) for page in raw["pages"])
     assert all(block.text for block in document.blocks)
+
+
+def _epub_with_spine_gap(path: Path) -> Path:
+    """A spine ``c1, missing, c3`` whose first href is percent-encoded."""
+
+    opf = (
+        '<package xmlns="http://www.idpf.org/2007/opf" version="3.0"><manifest>'
+        '<item id="c1" href="text/ch%201.xhtml" media-type="application/xhtml+xml"/>'
+        '<item id="c3" href="text/ch3.xhtml" media-type="application/xhtml+xml"/>'
+        '</manifest><spine><itemref idref="c1"/><itemref idref="missing"/>'
+        '<itemref idref="c3"/></spine></package>'
+    )
+    container = (
+        '<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles>'
+        '<rootfile full-path="OEBPS/content.opf"/></rootfiles></container>'
+    )
+    with zipfile.ZipFile(path, "w") as package:
+        package.writestr("META-INF/container.xml", container)
+        package.writestr("OEBPS/content.opf", opf)
+        package.writestr("OEBPS/text/ch 1.xhtml", "<html/>")
+        package.writestr("OEBPS/text/ch3.xhtml", "<html/>")
+    return path
+
+
+def test_spine_keeps_one_entry_per_itemref_and_decodes_hrefs(tmp_path: Path) -> None:
+    source = _epub_with_spine_gap(tmp_path / "gap.epub")
+
+    # MinerU makes one page per itemref (an empty one for an unknown idref) and
+    # percent-decodes hrefs, so page_idx 2 must still be ch3.
+    assert build_source_map(source, None)["spine"] == [
+        "OEBPS/text/ch 1.xhtml",
+        None,
+        "OEBPS/text/ch3.xhtml",
+    ]
+
+
+def test_blocks_after_a_spine_gap_keep_their_own_member(tmp_path: Path) -> None:
+    parsed_dir = tmp_path / "parsed" / "gap"
+    parsed_dir.mkdir(parents=True)
+    source = _epub_with_spine_gap(tmp_path / "gap.epub")
+    write_source_map(build_source_map(source, None), parsed_dir / "gap_source_map.json")
+    pages = [
+        {"page_idx": idx, "blocks": [{"type": "text", "index": 0, "content": [_text(text)]}]}
+        for idx, text in ((0, "Para in ch1"), (2, "Para in ch3"))
+    ]
+    pages.insert(1, {"page_idx": 1, "blocks": []})
+    payload = {
+        "schema": "docvortex.middle",
+        "schema_version": "2.0",
+        "metadata": {"file_suffix": "epub"},
+        "pages": pages,
+    }
+    (parsed_dir / "gap_middle.json").write_text(json.dumps(payload))
+
+    document = MinerUMiddleJsonParser().parse(parsed_dir / "gap_middle.json", parsed_dir)
+
+    assert [(b.text, b.metadata.get("source_locator")) for b in document.blocks] == [
+        ("Para in ch1", "gap.epub!OEBPS/text/ch 1.xhtml"),
+        ("Para in ch3", "gap.epub!OEBPS/text/ch3.xhtml"),
+    ]
+
+
+def test_pdf_image_without_caption_keeps_no_text(tmp_path: Path) -> None:
+    # A PDF image body holds lettering read inside the figure, not a description.
+    image = {
+        "type": "image",
+        "index": 0,
+        "content": [
+            {"type": "image_body", "image_path": "images/cover.jpg", "content": "Compliments of"}
+        ],
+    }
+    payload = {
+        "schema": "docvortex.middle",
+        "schema_version": "2.0",
+        "metadata": {"file_suffix": "pdf"},
+        "pages": [{"page_idx": 0, "blocks": [image]}],
+    }
+    source = tmp_path / "b_middle.json"
+    source.write_text(json.dumps(payload))
+
+    (block,) = MinerUMiddleJsonParser().parse(source, tmp_path).blocks
+
+    assert (block.text, block.asset_path) == ("", "images/cover.jpg")
+
+
+def _text(text: str) -> dict[str, str]:
+    return {"type": "text", "content": text}

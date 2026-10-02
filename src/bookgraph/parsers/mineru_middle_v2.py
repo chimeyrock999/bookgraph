@@ -15,8 +15,10 @@ numbers and margin notes are page furniture, not reading content, and are droppe
 the way 3.x moved them to ``discarded_blocks``.
 
 Inline spans are joined verbatim, as MinerU's own Markdown renderer joins them, and
-hyperlinks stay Markdown links; a block's ``anchor`` (an EPUB element id, a DOCX
-bookmark) is kept in its metadata so export link resolution has targets. A table
+hyperlinks stay Markdown links; a block's ``anchor`` is kept in its metadata so
+internal links have targets. For an EPUB that anchor is an id MinerU assigns
+(``epub-<hash>``, which its internal ``#…`` links are rewritten to), not the source
+element's id; a DOCX bookmark name is kept as written. A table
 MinerU read natively (EPUB/DOCX) has no image, only its HTML, so that HTML is the
 block text and keeps colspan, rowspan and nested tables.
 
@@ -117,7 +119,7 @@ def parse_middle_v2(payload: dict[str, Any], source: Path, parser_name: str) -> 
                     id=f"p{page_idx}.b{block_index}",
                     type=block_type,
                     level=(_title_level(raw_block, file_suffix) if block_type == "title" else None),
-                    text=_block_text(raw_block),
+                    text=_block_text(raw_block) or _uncaptioned_image_text(raw_block, file_suffix),
                     page_idx=page_idx,
                     bbox=tuple(bbox) if isinstance(bbox, list) and len(bbox) == 4 else None,
                     asset_path=asset_path,
@@ -158,7 +160,9 @@ class _Provenance:
         spine = source_map.get("spine")
         images = source_map.get("images")
         self.source = source if isinstance(source, str) else None
-        self.spine = [str(m) for m in spine] if isinstance(spine, list) else None
+        self.spine = (
+            [m if isinstance(m, str) else None for m in spine] if isinstance(spine, list) else None
+        )
         self.images = (
             {str(k): str(v) for k, v in images.items()} if isinstance(images, dict) else {}
         )
@@ -169,8 +173,12 @@ class _Provenance:
         located: dict[str, str | int | float | bool | None] = {}
         if self.source is None:
             return located
-        if self.spine is not None and isinstance(page_idx, int) and 0 <= page_idx < len(self.spine):
-            member = self.spine[page_idx]
+        spine = self.spine or []
+        # An itemref the manifest does not name is a page with no member (``None``).
+        member = (
+            spine[page_idx] if isinstance(page_idx, int) and 0 <= page_idx < len(spine) else None
+        )
+        if member is not None:
             located["source_member"] = member
             located["source_locator"] = f"{self.source}!{member}"
         if asset_path and (asset_member := self.images.get(asset_path)):
@@ -225,8 +233,22 @@ def _visual_text(raw_block: dict[str, Any]) -> str:
     body_text = body_text.strip() if isinstance(body_text, str) else ""
     if body is not None and not body.get("image_path") and raw_block.get("type") == "table":
         return "\n\n".join(part for part in (body_text, notes) if part)
-    # A DOCX picture carries its name as body text: the alt text when there is no caption.
-    return notes or (body_text if raw_block.get("type") == "image" else "")
+    return notes
+
+
+def _uncaptioned_image_text(raw_block: dict[str, Any], file_suffix: str) -> str:
+    """A non-PDF picture's own text (a DOCX picture's name) when it has no caption.
+
+    For a PDF the body text is whatever was read inside the figure (a cover's or a
+    diagram's lettering), not a description of it, so PDFs keep no text here.
+    """
+
+    if file_suffix == "pdf" or raw_block.get("type") != "image":
+        return ""
+    for child in _children(raw_block):
+        if child.get("type") == "image_body" and isinstance(text := child.get("content"), str):
+            return text.strip()
+    return ""
 
 
 def _content_text(items: list[Any]) -> str:

@@ -251,14 +251,19 @@ MinerU runner staging contract (`bookgraph parse-book`):
   `equation` → `equation`; `image`/`table`/`chart` → the same type with
   `asset_path` from the body's `image_path` and text from captions and footnotes;
   a table whose body has no `image_path` (EPUB/DOCX) keeps the body's table HTML as
-  its text, followed by the captions; an image without a caption takes the body text
-  (a DOCX picture's name);
+  its text, followed by the captions; a non-PDF image without a caption takes the body
+  text (a DOCX picture's name), while a PDF image keeps none (its body text is lettering
+  read inside the figure);
 - inline spans are joined verbatim; a `hyperlink` span becomes a Markdown link
   `[label](url)`, `equation_inline` becomes `$…$` and `code_inline` becomes `` `…` ``;
-- a block's `anchor` is kept as `metadata.anchor`;
+- a block's `anchor` is kept as `metadata.anchor`: for an EPUB an id MinerU assigns
+  (`epub-<hash>`) that its internal `#…` links point to, not the source element's `id`;
+  a DOCX bookmark name as written;
 - with a `<doc_id>_source_map.json` next to the middle JSON (non-PDF sources), an EPUB
   block records `metadata.source_member` (the spine member at its `page_idx`) and
-  `metadata.source_locator` (`<source>!<member>`), an image block whose file matched
+  `metadata.source_locator` (`<source>!<member>`; the spine keeps one entry per
+  `itemref`, `null` for an `idref` the manifest lacks, and hrefs are percent-decoded),
+  an image block whose file matched
   records `metadata.asset_source_member`, and `document.metadata.source_name` names
   the source;
 - `header`, `footer`, `page_number`, `aside_text` are page furniture and dropped;

@@ -77,7 +77,9 @@ Optional translation cache tools (when the user wants sections translated):
   Translate content, preserve structural Markdown: translate prose, captions, and
   link labels, but keep link destinations and fragment ids, image and file paths,
   reference-style identifiers, HTML `id`/`name` anchors, and `{#id}` heading ids
-  byte-for-byte. A non-empty `structure_issues` in the result lists what changed;
+  byte-for-byte; never point a link at an export anchor yourself
+  (`export translated-pdf` resolves source destinations to its own section anchors).
+  A non-empty `structure_issues` in the result lists what changed;
   fix and rewrite it (`complete_reading_batch` blocks on
   `translation_structure_changed`).
 - `list_section_artifacts(doc_id=None, lang=None)` — list cached translations and

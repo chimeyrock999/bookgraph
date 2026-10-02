@@ -48,8 +48,10 @@ from bookgraph.books import read_book_bookmarks
 from bookgraph.documents import read_document
 from bookgraph.exports.bilingual import bilingual_section
 from bookgraph.exports.images import AssetCounter, AssetOrigin, ImageEmbedder
+from bookgraph.exports.links import resolve_internal_links
 from bookgraph.exports.models import (
     ASSET_MISSING,
+    INTERNAL_LINK_UNRESOLVED,
     TRANSLATION_EMPTY,
     TRANSLATION_MISSING_ASSETS,
     TRANSLATION_STALE,
@@ -220,6 +222,14 @@ def build_translated_export(
             )
             for node in flatten(outline)
         }
+    bodies, unresolved = resolve_internal_links(
+        {section_id: body for section_id, (_, body) in rendered.items()}, outline
+    )
+    nodes = {node.section.id: node for node in flatten(outline)}
+    for link in unresolved:
+        assembler.link_warning(
+            rendered[link.section_id][0], nodes[link.section_id].section, link.href
+        )
     report = ExportReport.from_sections(
         [entry for entry, _ in rendered.values()],
         mode=mode,
@@ -237,7 +247,6 @@ def build_translated_export(
     # flagged by warnings instead (and ``--strict`` refuses stale ones).
     if fallback == "fail" and report.untranslated:
         raise UntranslatedSectionsError(report)
-    bodies = {section_id: body for section_id, (_, body) in rendered.items()}
     html = document_html(report, outline, bodies, show_status=show_status)
     return TranslatedExport(html=html, report=report)
 
@@ -423,7 +432,8 @@ class _Assembler(ImageEmbedder):
         """Flag a translation whose link destinations/anchors/paths differ from the source.
 
         Export navigation itself anchors on section ids, never on (translated) heading
-        text, but intra-book links and image paths in the body only work as written.
+        text, but intra-book links are resolved from their source destinations
+        (:mod:`.links`), and image paths only work as written.
         """
 
         resolves = local_asset_resolver(
@@ -473,6 +483,27 @@ class _Assembler(ImageEmbedder):
                 "section has figures/tables; they are not in this export",
                 section.id,
             )
+
+    def link_warning(self, entry: ExportSection, section: Section, href: str) -> None:
+        """Report an internal-book link of a section that no export anchor matches.
+
+        It names the file the link was read from: the translation artifact, else where
+        the original was rebuilt from (as for an asset warning).
+        """
+
+        if entry.artifact is not None:
+            source: str | None = entry.artifact
+        elif any(b in self.blocks for b in section.block_ids):
+            source = _relative(self.workspace, self.parsed_dir / "document.json")
+        else:
+            source = _relative(self.workspace, self.manifest)
+        self._warn(
+            INTERNAL_LINK_UNRESOLVED,
+            f"internal link '{href}' matches no section or anchor of this export; left as written",
+            entry.section_id,
+            href,
+            AssetOrigin(source, None),
+        )
 
     def _has_assets(self, section: Section) -> bool:
         """Whether the section owns any figure/table asset block (staged or not)."""

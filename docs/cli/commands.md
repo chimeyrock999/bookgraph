@@ -1107,6 +1107,31 @@ chapters of one book. A section whose bookmark sits directly under a bookmark ti
 as a part is a chapter too. Other sections flow inside their chapter. This matters for PDFs: MinerU marks every title as level
 1, so a heading-segmented PDF has a flat manifest that the outline restores.
 
+**Internal links.** Parsed text and translations keep link destinations as the source
+book wrote them (`[Chapter 10](ch10.html#ch_consistency)`, `[intro](#sec_intro)`), but
+the export is one document anchored on section ids. When it renders the page, the
+export rewrites each internal-book `<a href>` (a `#fragment`, or a link to a source
+`.html`/`.htm`/`.xhtml` file) to one of its own anchors, in this order:
+
+1. the fragment is an `id` already on the page → that anchor;
+2. the file names a section: `ch10.html` (or `chapter-10`, `ch10s02`) → the section
+   titled *Chapter 10* (or *10. …*); `app01.html`/`appa.html` → *Appendix A*;
+   `part02.html` → *Part II*; any other file → the section with the same title
+   words (`preface.html` → *Preface*);
+3. the fragment's words, minus a `sec_`/`ch_`/… prefix and the words of the
+   chapter's own title, name one section of that file's subtree
+   (`ch10.html#sec_consistency_linearizability` → *Linearizability*). A
+   fragment-only link is looked up in the linking section's chapter, then the book;
+4. otherwise a link whose file named a section goes to that section (figure and
+   example fragments such as `ch10.html#fig_x` always do; a fragment-only link has no
+   file to fall back to).
+
+Only the shallowest match counts, and several matches at one depth are ambiguous. An
+unresolved link is left as written and reported as `internal_link_unresolved`.
+External URLs (`https:`, `mailto:`, …), absolute paths, and links to images or other
+files are never rewritten, and neither the parsed document nor the translation
+artifacts change. Both `bilingual` columns link to the right column's anchor.
+
 Two reader-facing modes (`--mode`):
 
 ```text

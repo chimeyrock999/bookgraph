@@ -56,7 +56,7 @@ from bookgraph.quality import (
     section_warnings,
 )
 from bookgraph.sections import read_sections
-from bookgraph.utils import is_url
+from bookgraph.utils import is_url, validate_slug_id
 from bookgraph.workspace import WorkspacePaths
 
 # Image types every supported renderer can draw from a data: URI.
@@ -68,11 +68,14 @@ _EMBEDDABLE_MIME_TYPES = frozenset(
 # inside another attribute's quoted value is never mistaken for the real one.
 _HTML_ATTR = r"""[^\s"'<>/=]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+))?"""
 _HTML_ATTR_RE = re.compile(r"""([^\s"'<>/=]+)(?:\s*=\s*("[^"]*"|'[^']*'|[^\s"'=<>`]+))?""")
+# ``<img`` followed by whitespace, ``/`` or ``>``: not ``\b``, which would also match
+# custom elements such as ``<img-zoom>`` (``\b`` falls between ``g`` and ``-``).
+_IMG_OPEN = r"<img(?=[\s/>])"
 # Alternatives, in order: an HTML comment (left untouched, so a commented-out image is
 # neither embedded nor reported), a well-formed ``<img>`` tag, and a malformed one
 # (reported, so it cannot vanish silently under the CSP).
 _HTML_IMG_SCAN_RE = re.compile(
-    rf"(?P<comment><!--.*?-->)|(?P<img><img\b(?:\s+{_HTML_ATTR})*\s*/?>)|(?P<bad><img\b[^>]*>)",
+    rf"(?P<comment><!--.*?-->)|(?P<img>{_IMG_OPEN}(?:\s+{_HTML_ATTR})*\s*/?>)|(?P<bad>{_IMG_OPEN}[^>]*>)",
     re.IGNORECASE | re.DOTALL,
 )
 
@@ -158,8 +161,17 @@ def build_translated_export(
     and :class:`UntranslatedSectionsError` when ``fallback="fail"`` and any section
     lacks a translation. Missing or unsupported assets never raise: they are
     rendered as visible placeholders and reported in ``report.warnings``.
+
+    ``doc_id`` and ``lang`` are validated as lowercase slugs (as the CLI does), so an
+    API caller gets an error for ``lang="VI"`` instead of an export that silently
+    finds no translations, and neither id can traverse out of the workspace.
     """
 
+    try:
+        validate_slug_id(doc_id, field_name="doc_id")
+        validate_slug_id(lang, field_name="lang")
+    except ValueError as exc:
+        raise ExportError(str(exc)) from exc
     manifest = workspace.sources_sections / doc_id / "sections.jsonl"
     if not manifest.is_file():
         raise ExportError(
@@ -566,9 +578,21 @@ def split_frontmatter(text: str) -> tuple[dict[str, object], str]:
 
 
 def _first_heading_text(tokens: list[Token]) -> str | None:
-    if len(tokens) >= 2 and tokens[0].type == "heading_open" and tokens[1].type == "inline":
-        return tokens[1].content.strip() or None
-    return None
+    """The plain text of a leading heading (``# *Giới thiệu*`` → ``Giới thiệu``).
+
+    Used as a TOC/report title, so Markdown syntax is dropped: only text and code
+    spans are kept, and line breaks become spaces.
+    """
+
+    if len(tokens) < 2 or tokens[0].type != "heading_open" or tokens[1].type != "inline":
+        return None
+    parts = []
+    for child in tokens[1].children or []:
+        if child.type in {"text", "code_inline"}:
+            parts.append(child.content)
+        elif child.type in {"softbreak", "hardbreak"}:
+            parts.append(" ")
+    return " ".join("".join(parts).split()) or None
 
 
 def _shift_headings(tokens: list[Token], level: int) -> None:

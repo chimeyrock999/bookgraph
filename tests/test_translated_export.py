@@ -498,7 +498,9 @@ def test_raw_html_img_scanning_is_attribute_aware(workspace: WorkspacePaths) -> 
         "A <img alt='a src=x' src=\"images/fig1.png\"> decoy.\n\n"
         f"An <img src='{svg}'> inline SVG.\n\n"
         'Old <!-- <img src="old.png"> --> comment.\n\n'
-        '<!--\n<img src="gone-block.png">\n-->\n',
+        '<!--\n<img src="gone-block.png">\n-->\n\n'
+        'Custom <img-zoom src="x"></img-zoom> inline.\n\n'
+        "<img-comparison-slider>\n<p>slider</p>\n</img-comparison-slider>\n",
     )
 
     export = build_translated_export(workspace, DOC, lang="vi", generated_at=GENERATED_AT)
@@ -513,6 +515,25 @@ def test_raw_html_img_scanning_is_attribute_aware(workspace: WorkspacePaths) -> 
     # Commented-out images are left alone and never reported.
     assert '<!-- <img src="old.png"> -->' in html
     assert '<img src="gone-block.png">' in html
+    # Custom elements named ``img-*`` are not images.
+    assert '<img-zoom src="x"></img-zoom>' in html
+    assert "<img-comparison-slider>" in html
     assert [w for w in export.report.warnings if w.section_id == chapter] == []
     assert export.report.sections[0].assets_embedded == 2
     assert export.report.sections[0].assets_missing == 0
+
+
+def test_toc_title_drops_heading_markdown(workspace: WorkspacePaths) -> None:
+    chapter, _, _ = _section_ids(workspace)
+    _translate(workspace, chapter, "# *Giới thiệu* `code` [liên kết](x)\n\nNội dung.\n")
+
+    export = build_translated_export(workspace, DOC, lang="vi", generated_at=GENERATED_AT)
+
+    assert export.report.sections[0].title == "Giới thiệu code liên kết"
+    assert '<a href="#tiny.chapter-one">Giới thiệu code liên kết</a>' in export.html
+
+
+@pytest.mark.parametrize(("doc_id", "lang"), [(DOC, "VI"), (DOC, "../vi"), ("../x", "vi")])
+def test_api_rejects_non_slug_ids(workspace: WorkspacePaths, doc_id: str, lang: str) -> None:
+    with pytest.raises(ExportError, match="must be a lowercase hyphenated slug"):
+        build_translated_export(workspace, doc_id, lang=lang)

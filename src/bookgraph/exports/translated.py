@@ -81,7 +81,11 @@ from bookgraph.quality import (
     section_warnings,
 )
 from bookgraph.sections import read_sections
-from bookgraph.translation_alignment import AlignmentCheck, translation_alignment
+from bookgraph.translation_alignment import (
+    AlignmentCheck,
+    markdown_parser,
+    translation_alignment,
+)
 from bookgraph.translation_assets import check_translation_assets, translation_link_bases
 from bookgraph.translation_structure import (
     check_section_translation,
@@ -281,11 +285,7 @@ class _Assembler(ImageEmbedder):
     alignments: dict[str, AlignmentCheck] = field(default_factory=dict)
     # Rendered originals by section id: a bilingual fallback row renders (and warns) once.
     _originals: dict[str, tuple[str, AssetCounter]] = field(default_factory=dict)
-    _md: MarkdownIt = field(
-        default_factory=lambda: MarkdownIt("commonmark", {"html": True}).enable(
-            ["table", "strikethrough"]
-        )
-    )
+    _md: MarkdownIt = field(default_factory=markdown_parser)
 
     # -- sections -----------------------------------------------------------------
 

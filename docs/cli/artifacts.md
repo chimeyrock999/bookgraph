@@ -660,7 +660,8 @@ final newline), and stores each unit's span of it in the sidecar
   code blocks are passed through untranslated, so leaving them out is not a gap.
 - Merged units (reported, not refused): a unit after the first whose Markdown does not
   start a top-level block of its own — a list-item continuation, an unclosed fence, an
-  HTML block running across the blank line — renders as part of the previous unit
+  HTML block running across the blank line, or a unit that renders no block at all
+  (only link reference definitions) — renders as part of the previous unit
   (`unit_not_a_block`); the bilingual export gives both units, and their source
   blocks, one row.
 - Alignment is provenance, not content: neither `source_section_hash` nor the

@@ -19,8 +19,9 @@ An alignment is checked against the section (:func:`check_alignment`):
   warning only. Headings, figures, tables, equations and code are passed through
   untranslated, so leaving them out is not a gap;
 - a unit whose Markdown does not start a top-level block of its own — a list-item
-  continuation, an unclosed fence, an HTML block running across the blank line —
-  renders as part of the previous unit (``unit_not_a_block``), a warning only: the
+  continuation, an unclosed fence, an HTML block running across the blank line, or
+  a unit that renders no block (only link reference definitions) — renders as part
+  of the previous unit (``unit_not_a_block``), a warning only: the
   bilingual export folds it into the previous unit's row (:func:`unit_blocks`).
 
 The section content hash and staleness rules ignore the alignment: it is provenance,
@@ -52,8 +53,19 @@ UNIT_SEPARATOR = "\n\n"
 _TEXT_BLOCK_TYPES = frozenset({"text", "list", "unknown"})
 # Issues that leave an alignment usable.
 _WARNING_CODES = frozenset({"unaligned_block", "unit_not_a_block"})
-# The export's Markdown dialect, so a unit's blocks are found as the export renders them.
-_MARKDOWN = MarkdownIt("commonmark", {"html": True}).enable(["table", "strikethrough"])
+
+
+def markdown_parser() -> MarkdownIt:
+    """The Markdown dialect translation bodies are rendered in.
+
+    The export builds its renderer from this too, so the write-time
+    ``unit_not_a_block`` check and the bilingual rows agree on unit boundaries.
+    """
+
+    return MarkdownIt("commonmark", {"html": True}).enable(["table", "strikethrough"])
+
+
+_MARKDOWN = markdown_parser()
 
 
 @dataclass(frozen=True)
@@ -202,8 +214,8 @@ def _merged_units(units: Sequence[AlignedUnit], body: str) -> list[TranslationAl
             code="unit_not_a_block",
             unit=index,
             message=f"unit {index} does not start a Markdown block of its own (it continues "
-            "the previous unit's list, fence or HTML block), so it renders with the "
-            "previous unit",
+            "the previous unit's block, or renders no block, e.g. only link reference "
+            "definitions), so it renders with the previous unit",
         )
         for index in range(1, len(units))
         if index not in owned

@@ -6,12 +6,13 @@ import json
 
 import pytest
 
+from bookgraph.exports.translated import _Assembler
 from bookgraph.mcp import reading_batch, service
 from bookgraph.mcp.reading_batch import BatchRequirements
 from bookgraph.mcp.service import ReadingServiceError
 from bookgraph.models import AlignedUnit, Section, TranslationUnit
 from bookgraph.sections import write_sections
-from bookgraph.translation_alignment import check_alignment, join_units
+from bookgraph.translation_alignment import check_alignment, join_units, markdown_parser
 from bookgraph.workspace import WorkspacePaths
 from translated_export_support import DOC, _blocks, _sections
 
@@ -196,3 +197,21 @@ def test_check_alignment_flags_spans_that_do_not_tile_the_body() -> None:
         "bad_range",
         "bad_range",
     ]
+
+
+def test_a_unit_of_only_reference_definitions_is_reported_as_merged(
+    workspace: WorkspacePaths,
+) -> None:
+    written = _write(
+        workspace,
+        _unit("b0", "b1", content="# Chương Một\n\nMở đầu [x]."),
+        _unit("b3", content="[x]: https://example.com"),
+    )
+
+    (issue,) = written.alignment_issues
+    assert (issue.code, issue.unit) == ("unit_not_a_block", 1)
+    assert "renders no block" in issue.message
+
+
+def test_the_export_renders_in_the_alignment_check_dialect() -> None:
+    assert _Assembler.__dataclass_fields__["_md"].default_factory is markdown_parser

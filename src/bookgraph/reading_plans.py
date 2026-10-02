@@ -110,7 +110,8 @@ def chapter_progress(
     by default, or the nearest ancestor-or-self whose heading ``level`` is at most
     ``chapter_level`` (e.g. ``2`` for chapters nested under level-1 parts). Its members
     and boundary come from :func:`~bookgraph.graph.chapter_span`; while a lone root is
-    itself being read, the scope is that one section and the boundary its first child.
+    itself being read — or, with ``chapter_level``, any heading shallower than it, such
+    as a part — the scope is that one section and the boundary its first child.
     """
 
     if chapter_level is not None and chapter_level < 1:

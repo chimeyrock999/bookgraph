@@ -409,9 +409,12 @@ bookgraph reading-plan progress /path/to/workspace <plan_id> --chapter-level 2
   heading (a `# Book Title` above every chapter, common for Markdown/EPUB), that
   lone root is skipped one level down so the scope is the chapter, not the whole
   book. Pass `--chapter-level` explicitly for part/chapter books or deeper wrappers.
-  While that lone root is itself the next unread section (day 1 of a fresh plan),
-  the scope is the root's own section only and the boundary is its first child, so
-  the first tick does not span the whole book.
+  While a wrapper heading is itself the next unread section, the scope is that
+  heading's own section only and the boundary is its first child, so a tick never
+  spans a whole book or part. A wrapper is the lone root by default (day 1 of a
+  fresh plan), or, with `--chapter-level`, any heading shallower than that level
+  (e.g. a part heading with `--chapter-level 2`). A deeper section under a level jump
+  (`part(1) > sec(3)` with `--chapter-level 2`) still belongs to the part's span.
 
 #### Writes
 

@@ -335,3 +335,66 @@ def test_chapter_progress_explicit_level_does_not_skip_the_root() -> None:
 
     assert progress.chapter_id == "book"
     assert progress.next_boundary_id is None
+
+
+# parts above chapters: read with chapter_level=2
+_PARTS_BOOK = [
+    _node("p1", 1),
+    _node("ch1", 2),
+    _node("ch1-a", 3),
+    _node("ch2", 2),
+    _node("p2", 1),
+    _node("ch3", 2),
+]
+
+
+def _parts_plan(*, completed: list[str] | None = None) -> ReadingPlan:
+    return ReadingPlan(
+        plan_id="iceberg",
+        doc_id="iceberg",
+        daily_sections=5,
+        section_ids=[section.id for section in _PARTS_BOOK],
+        completed=completed or [],
+    )
+
+
+def test_chapter_progress_scopes_a_part_heading_being_read_to_itself() -> None:
+    progress = chapter_progress(_parts_plan(), _PARTS_BOOK, chapter_level=2)
+
+    assert progress.chapter_id == "p1"
+    assert progress.next_section_ids == ["p1"]
+    assert progress.next_boundary_id == "ch1"
+
+
+def test_chapter_progress_part_heading_mid_book_does_not_spill() -> None:
+    plan = _parts_plan(completed=["p1", "ch1", "ch1-a", "ch2"])
+
+    progress = chapter_progress(plan, _PARTS_BOOK, chapter_level=2)
+
+    assert progress.next_section_ids == ["p2"]
+    assert progress.next_boundary_id == "ch3"
+
+
+def test_chapter_progress_explicit_level_on_a_rooted_book_day_one() -> None:
+    progress = chapter_progress(_rooted_plan(), _ROOTED_BOOK, chapter_level=2)
+
+    assert progress.next_section_ids == ["book"]
+    assert progress.next_boundary_id == "ch1"
+
+
+def test_chapter_progress_level_jump_keeps_the_part_subtree() -> None:
+    sections = [_node("p1", 1), _node("sec", 3), _node("p2", 1)]
+    plan = ReadingPlan(
+        plan_id="iceberg",
+        doc_id="iceberg",
+        daily_sections=5,
+        section_ids=["p1", "sec", "p2"],
+        completed=["p1"],
+    )
+
+    progress = chapter_progress(plan, sections, chapter_level=2)
+
+    # sec has no level-2 ancestor-or-self, so it is scoped to p1's subtree
+    assert progress.chapter_id == "p1"
+    assert progress.next_section_ids == ["sec"]
+    assert progress.next_boundary_id == "p2"

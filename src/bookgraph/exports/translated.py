@@ -1,11 +1,14 @@
 """Assemble a partially translated book into one reading edition (HTML, then PDF).
 
-The original sections manifest is the skeleton: sections are emitted in
-``sections.jsonl`` reading order, and each one is filled from its translation in the
-translation registry (:mod:`bookgraph.translations`) for the requested language, or —
-per the fallback policy — from the original parsed content, a placeholder, or not at
-all. The export only reads the registry: a translation's freshness (``fresh`` /
-``stale`` / ``untracked``) is reported per section in the report.
+The original sections manifest is the skeleton, arranged into the book's structure
+by :mod:`bookgraph.exports.outline` (the source PDF outline's order and hierarchy when
+there is one, else ``sections.jsonl`` order): child sections render inside their
+chapter, and each chapter opens a new page; :mod:`bookgraph.exports.render` lays the
+book out as HTML. Each section is filled from its translation in the translation
+registry (:mod:`bookgraph.translations`) for the requested language, or — per the
+fallback policy — from the original parsed content, a placeholder, or not at all. The
+export only reads the registry: a translation's freshness (``fresh`` / ``stale`` /
+``untracked``) is reported per section in the report.
 
 The reading pages carry book content only. Status and debug metadata — freshness
 labels, "untranslated" notes, coverage, missing-asset placeholders — go to the report
@@ -30,6 +33,7 @@ from __future__ import annotations
 
 import os
 import time
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from html import escape
@@ -39,6 +43,7 @@ from markdown_it import MarkdownIt
 from markdown_it.token import Token
 
 from bookgraph.assets import asset_reference, resolve_asset_path
+from bookgraph.books import read_book_bookmarks
 from bookgraph.documents import read_document
 from bookgraph.exports.images import AssetCounter, AssetOrigin, ImageEmbedder
 from bookgraph.exports.models import (
@@ -55,6 +60,14 @@ from bookgraph.exports.models import (
     FallbackPolicy,
     SectionSource,
     TranslationFreshness,
+)
+from bookgraph.exports.outline import OutlineNode, build_outline, flatten
+from bookgraph.exports.render import (
+    FRESHNESS_NOTES,
+    SKIPPED_NOTE,
+    UNTRANSLATED_NOTE,
+    document_html,
+    heading,
 )
 from bookgraph.exports.renderers import ExportRenderer
 from bookgraph.models import ASSET_BLOCK_TYPES, CanonicalBlock, Section
@@ -162,6 +175,14 @@ def build_translated_export(
         sections = read_sections(manifest)
     except (OSError, ValueError) as exc:
         raise ExportError(f"Invalid sections manifest: {manifest}: {exc}") from exc
+    counts = Counter(section.id for section in sections)
+    duplicates = sorted(section_id for section_id, count in counts.items() if count > 1)
+    if duplicates:
+        # Section ids are the export's anchors and outline keys.
+        raise ExportError(
+            f"Invalid sections manifest: {manifest}: duplicate section ids: "
+            + ", ".join(duplicates)
+        )
 
     parsed_dir = workspace.sources_parsed / doc_id
     title, blocks = _load_document(parsed_dir, doc_id)
@@ -173,21 +194,28 @@ def build_translated_export(
         show_status=show_status,
     )
 
-    rendered = [
-        assembler.render_section(
-            section,
-            translation_state(workspace, lang, doc_id, section.id, section_content_hash(section)),
+    outline = build_outline(sections, read_book_bookmarks(workspace, doc_id))
+    parents = {
+        child.section.id: node.section.id for node in flatten(outline) for child in node.children
+    }
+    rendered = {
+        node.section.id: assembler.render_section(
+            node,
+            parents.get(node.section.id),
+            translation_state(
+                workspace, lang, doc_id, node.section.id, section_content_hash(node.section)
+            ),
             fallback,
         )
-        for section in sections
-    ]
+        for node in flatten(outline)
+    }
     report = _report(
         doc_id,
         title,
         lang,
         fallback,
         generated_at or default_generated_at(),
-        [entry for entry, _ in rendered],
+        [entry for entry, _ in rendered.values()],
         assembler.warnings,
         show_status,
     )
@@ -197,7 +225,8 @@ def build_translated_export(
     # flagged by warnings instead (and ``--strict`` refuses stale ones).
     if fallback == "fail" and report.untranslated:
         raise UntranslatedSectionsError(report)
-    html = _document_html(report, [body for _, body in rendered])
+    bodies = {section_id: body for section_id, (_, body) in rendered.items()}
+    html = document_html(report, outline, bodies, show_status=show_status)
     return TranslatedExport(html=html, report=report)
 
 
@@ -264,54 +293,60 @@ class _Assembler(ImageEmbedder):
     # -- sections -----------------------------------------------------------------
 
     def render_section(
-        self, section: Section, state: TranslationState, fallback: FallbackPolicy
+        self,
+        node: OutlineNode,
+        parent_id: str | None,
+        state: TranslationState,
+        fallback: FallbackPolicy,
     ) -> tuple[ExportSection, str]:
+        """The section's report entry and its own HTML (heading + body, no children)."""
+
+        section, depth = node.section, node.depth
         counter = AssetCounter()
-        translated = self._translated_body(section, state, counter)
+        translated = self._translated_body(section, depth, state, counter)
         if translated is not None:
             # A body was read, so the status is fresh, stale, or untracked (never
             # missing, and never orphaned: the section exists).
             freshness: TranslationFreshness = (
                 state.status if state.status in ("fresh", "stale") else "untracked"
             )
-            title, heading, body = translated
+            title, heading_html, body = translated
             self._freshness_warnings(section, state, freshness)
             self._quality_warnings(section, source="translated")
             entry = self._entry(
-                section, title, "translated", state.paths.body, counter, freshness=freshness
+                node, parent_id, title, "translated", state.paths.body, counter, freshness
             )
-            note = _FRESHNESS_NOTES.get(freshness, "") if self.show_status else ""
-            return entry, _section_html(section, "translated", heading + note + body)
+            note = FRESHNESS_NOTES.get(freshness, "") if self.show_status else ""
+            return entry, heading_html + note + body
         if fallback == "skip":
-            body = _heading(section.level, section.title)
-            if self.show_status:
-                body += '<p class="placeholder">Not translated yet — omitted from this export.</p>'
-            return self._entry(section, section.title, "skipped", None, counter), (
-                _section_html(section, "skipped", body)
-            )
-        body = _heading(section.level, section.title)
-        if self.show_status:
-            body += '<p class="source-note">Untranslated — original text</p>'
-        body += self._original_body(section, counter)
-        self._quality_warnings(section, source="original")
-        return self._entry(section, section.title, "original", None, counter), (
-            _section_html(section, "original", body)
+            # The reader sees the heading only (the chapter's structure stays whole);
+            # the report — and ``show_status`` — say the content was left out.
+            body = heading(depth, section.title) + (SKIPPED_NOTE if self.show_status else "")
+            return self._entry(node, parent_id, section.title, "skipped", None, counter), body
+        body = (
+            heading(depth, section.title)
+            + (UNTRANSLATED_NOTE if self.show_status else "")
+            + self._original_body(section, depth, counter)
         )
+        self._quality_warnings(section, source="original")
+        return self._entry(node, parent_id, section.title, "original", None, counter), body
 
     def _entry(
         self,
-        section: Section,
+        node: OutlineNode,
+        parent_id: str | None,
         title: str,
         source: SectionSource,
         artifact: Path | None,
         counter: AssetCounter,
-        *,
         freshness: TranslationFreshness | None = None,
     ) -> ExportSection:
         return ExportSection(
-            section_id=section.id,
+            section_id=node.section.id,
             title=title,
-            level=section.level,
+            level=node.section.level,
+            depth=node.depth,
+            parent_id=parent_id,
             source=source,
             artifact=_relative(self.workspace, artifact),
             freshness=freshness,
@@ -320,7 +355,7 @@ class _Assembler(ImageEmbedder):
         )
 
     def _translated_body(
-        self, section: Section, state: TranslationState, counter: AssetCounter
+        self, section: Section, depth: int, state: TranslationState, counter: AssetCounter
     ) -> tuple[str, str, str] | None:
         """Render a registry translation as ``(title, heading_html, body_html)``.
 
@@ -369,21 +404,21 @@ class _Assembler(ImageEmbedder):
 
         tokens = self._md.parse(body)
         heading_title = _first_heading_text(tokens)
-        _shift_headings(tokens, section.level)
+        _shift_headings(tokens, depth)
         self._rewrite_images(
             tokens, section.id, [artifact.parent, *self._parsed_bases()], counter, relative
         )
         fm_title = frontmatter.get("title")
         title = heading_title or (fm_title if isinstance(fm_title, str) and fm_title else None)
         if heading_title is None:
-            heading = _heading(section.level, title or section.title)
+            heading_html = heading(depth, title or section.title)
         else:
             # Render the leading heading on its own so a freshness note can follow it.
             heading_end = next(i for i, t in enumerate(tokens) if t.type == "heading_close") + 1
-            heading = self._md.renderer.render(tokens[:heading_end], self._md.options, {})
+            heading_html = self._md.renderer.render(tokens[:heading_end], self._md.options, {})
             tokens = tokens[heading_end:]
         html = self._md.renderer.render(tokens, self._md.options, {})
-        return title or section.title, heading, html
+        return title or section.title, heading_html, html
 
     def _structure_warnings(self, section: Section, body: str, artifact: Path) -> None:
         """Flag a translation whose link destinations/anchors/paths differ from the source.
@@ -445,7 +480,7 @@ class _Assembler(ImageEmbedder):
 
         return bool(asset_summaries(self.blocks[b] for b in section.block_ids if b in self.blocks))
 
-    def _original_body(self, section: Section, counter: AssetCounter) -> str:
+    def _original_body(self, section: Section, depth: int, counter: AssetCounter) -> str:
         blocks = [self.blocks[b] for b in section.block_ids if b in self.blocks]
         if not blocks:
             source = _relative(self.workspace, self.manifest)
@@ -456,8 +491,8 @@ class _Assembler(ImageEmbedder):
             if block.type == "title":
                 if index == 0 and block.text.strip() == section.title.strip():
                     continue  # the section heading is already rendered
-                level = max(block.level or section.level + 1, section.level + 1)
-                parts.append(_heading(level, block.text))
+                level = max(block.level or depth + 1, depth + 1)
+                parts.append(heading(level, block.text))
             elif block.type in ASSET_BLOCK_TYPES and asset_reference(block):
                 parts.append(self._asset_block(block, section.id, counter, source))
             elif block.type == "equation":
@@ -547,118 +582,6 @@ def _shift_headings(tokens: list[Token], level: int) -> None:
     for token in tokens:
         if token.type in {"heading_open", "heading_close"}:
             token.tag = f"h{max(1, min(int(token.tag[1]) + offset, 6))}"
-
-
-def _heading(level: int, title: str) -> str:
-    tag = f"h{max(1, min(level, 6))}"
-    return f"<{tag}>{escape(title)}</{tag}>"
-
-
-def _section_html(section: Section, source: SectionSource, body: str) -> str:
-    level = max(1, min(section.level, 6))
-    return (
-        f'<section class="section level-{level} source-{source}" id="{escape(section.id)}" '
-        f'data-source="{source}">{body}</section>\n'
-    )
-
-
-_STYLE = """
-@page { size: A4; margin: 22mm 20mm 24mm 20mm;
-  @bottom-center { content: counter(page); font-size: 9pt; color: #666; } }
-html { font-family: "Noto Serif", "Source Serif 4", "DejaVu Serif", "Times New Roman", serif;
-  font-size: 11pt; line-height: 1.5; color: #111; }
-body { margin: 0; }
-h1, h2, h3, h4, h5, h6 { font-family: "Noto Sans", "Source Sans 3", "DejaVu Sans",
-  "Helvetica Neue", Arial, sans-serif; line-height: 1.25; break-after: avoid; }
-.frontmatter { break-after: page; }
-.frontmatter dl { display: grid; grid-template-columns: max-content 1fr; gap: 2pt 12pt; }
-.frontmatter dt { font-weight: bold; }
-.frontmatter dd { margin: 0; }
-.notice { color: #555; font-size: 9.5pt; }
-.toc { break-after: page; }
-.toc ol { list-style: none; padding-left: 0; }
-.toc li { margin: 1pt 0; }
-.toc a { color: inherit; text-decoration: none; }
-.toc .status { color: #888; font-size: 9pt; }
-.section.level-1 { break-before: page; }
-.source-note, .placeholder { color: #8a5a00; font-size: 9pt; font-style: italic; }
-.source-skipped .placeholder { border: 1px dashed #c9a24a; padding: 6pt; }
-figure { margin: 10pt 0; text-align: center; break-inside: avoid; }
-figure img, p img { max-width: 100%; max-height: 220mm; }
-figcaption { font-size: 9pt; color: #444; margin-top: 3pt; }
-.missing-asset { display: inline-block; border: 1px dashed #b00; color: #b00;
-  padding: 4pt 6pt; font-size: 9pt; }
-.equation { font-family: "DejaVu Sans Mono", Menlo, monospace; font-size: 9.5pt;
-  margin: 6pt 0; white-space: pre-wrap; }
-table { border-collapse: collapse; margin: 8pt 0; font-size: 9.5pt; }
-th, td { border: 1px solid #999; padding: 2pt 5pt; vertical-align: top; }
-pre, code { font-family: "DejaVu Sans Mono", Menlo, monospace; font-size: 9pt; }
-pre { white-space: pre-wrap; background: #f5f5f5; padding: 6pt; }
-"""
-
-# Self-contained page: images are data: URIs and nothing else may load or run, so a
-# script or remote reference inside a translation artifact stays inert in any viewer.
-_CSP = "default-src 'none'; img-src data:; style-src 'unsafe-inline'"
-
-_STATUS_LABELS = {"original": "original", "skipped": "skipped"}
-
-# Shown under the heading of a translated section whose freshness is not ``fresh``,
-# like the "Untranslated — original text" label of a fallback section.
-_FRESHNESS_NOTES = {
-    "stale": '<p class="source-note">Translation may be outdated — the original section '
-    "changed after it was translated</p>",
-    "untracked": '<p class="source-note">Translation status unknown — it may be outdated</p>',
-}
-
-# TOC markers for the same states, so the overview shows every non-fresh translation.
-_FRESHNESS_LABELS = {"stale": "may be outdated", "untracked": "not tracked"}
-
-
-def _document_html(report: ExportReport, bodies: list[str]) -> str:
-    percent = f"{report.coverage * 100:.1f}%"
-    details = (
-        (
-            "<dl>"
-            f"<dt>doc_id</dt><dd>{escape(report.doc_id)}</dd>"
-            f"<dt>language</dt><dd>{escape(report.lang)}</dd>"
-            f"<dt>generated</dt><dd>{escape(report.generated_at)}</dd>"
-            f"<dt>coverage</dt><dd>{report.translated_sections}/{report.total_sections} "
-            f"sections translated ({percent})</dd>"
-            f"<dt>fallback</dt><dd>{escape(report.fallback)}</dd>"
-            "</dl>"
-            '<p class="notice">Generated by BookGraph from section-level artifacts. A reading '
-            "edition in progress — not a reproduction of the original page layout.</p>"
-        )
-        if report.show_status
-        else ""
-    )
-    frontmatter = f'<header class="frontmatter"><h1>{escape(report.title)}</h1>{details}</header>\n'
-    toc_items = []
-    for entry in report.sections:
-        indent = (max(1, min(entry.level, 6)) - 1) * 12
-        status = _STATUS_LABELS.get(entry.source)
-        if entry.freshness is not None:
-            status = _FRESHNESS_LABELS.get(entry.freshness, status)
-        if not report.show_status:
-            status = None
-        marker = f' <span class="status">({status})</span>' if status else ""
-        toc_items.append(
-            f'<li style="padding-left: {indent}pt"><a href="#{escape(entry.section_id)}">'
-            f"{escape(entry.title)}</a>{marker}</li>"
-        )
-    toc = '<nav class="toc"><h2>Contents</h2><ol>' + "".join(toc_items) + "</ol></nav>\n"
-    return (
-        "<!DOCTYPE html>\n"
-        f'<html lang="{escape(report.lang)}">\n<head>\n<meta charset="utf-8">\n'
-        f'<meta http-equiv="Content-Security-Policy" content="{_CSP}">\n'
-        f'<meta name="generator" content="bookgraph export translated-pdf">\n'
-        f"<title>{escape(report.title)}</title>\n<style>{_STYLE}</style>\n</head>\n<body>\n"
-        + frontmatter
-        + toc
-        + "<main>\n"
-        + "".join(bodies)
-        + "</main>\n</body>\n</html>\n"
-    )
 
 
 def report_path_for(output: Path) -> Path:

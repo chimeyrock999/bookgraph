@@ -263,7 +263,9 @@ bookgraph segment /path/to/workspace <doc_id> --segmenter token-page --max-token
 Reads `sources/parsed/<doc_id>/document.json` (fails if missing). The `bookmark`
 segmenter also reads `sources/inbox/<doc_id>/book.json` and uses its
 `pdf.bookmarks` array when present; without usable bookmarks it falls back to the
-heading segmenter. The `token-page` segmenter is a deterministic fallback for
+heading segmenter. Bookmark sections come out in page order; bookmarks on the same
+page keep their outline (TOC) order, and each section's `heading_path` is its
+outline ancestry (`["Part I", "Chapter 1", "Storage"]`). The `token-page` segmenter is a deterministic fallback for
 documents with weak/missing headings or bookmarks: it keeps blocks whole,
 chunks by a token budget, and prefers page boundaries when a page break is
 available near the budget.
@@ -1074,10 +1076,36 @@ bookgraph llmwiki serve /path/to/workspace --print
 
 **Status:** Implemented.
 
-Assemble a partially translated book into one reading edition. Sections come out in
-`sections.jsonl` order. A section with a translation artifact for `--lang` renders that
-artifact; any other section follows `--fallback`. This produces a clean reading
-edition. It does not reproduce the publisher's page layout.
+Assemble a partially translated book into one reading edition. A section with a
+translation artifact for `--lang` renders that artifact; any other section follows
+`--fallback`. This produces a clean reading edition. It does not reproduce the
+publisher's page layout.
+
+**Structure.** Sections are arranged into the book's structure:
+
+- When `sources/inbox/<doc_id>/book.json` carries a PDF outline (`pdf.bookmarks`), it
+  is the canonical table of contents. Sections are matched to bookmarks by title
+  (ignoring case, punctuation, and quote style). When both pages are known, the
+  bookmark must point into the section's page span, give or take one page, so a
+  heading the outline does not list never takes a same-titled bookmark from another
+  chapter. A repeated title such as *Conclusion* goes to the bookmark on the nearest
+  page. Matched sections take the
+  bookmark's level as their depth and are put in outline order. A section no bookmark
+  names stays right after the matched section before it, one level deeper.
+- Otherwise, or when no section title matches, `sections.jsonl` order and
+  `Section.level` are kept.
+
+A section renders inside its parent (`<section>` elements nest, and the TOC nests the
+same way), with headings at its depth. A **chapter** starts a new page: every
+top-level section, and each child of a top-level section that is a *part*. A part is
+recognised by its title (*Part I*, *Book 2*, *Volume III*), or by its shape: at least
+two children in the outline (or the manifest, without one), each with children of
+its own, and at most ~300 words of its own. Shape is decided once for the whole book:
+it counts only when most top-level sections that have children share it, and never
+for a section titled as a chapter (*Chapter 3*), so page breaks do not differ between
+chapters of one book. A section whose bookmark sits directly under a bookmark titled
+as a part is a chapter too. Other sections flow inside their chapter. This matters for PDFs: MinerU marks every title as level
+1, so a heading-segmented PDF has a flat manifest that the outline restores.
 
 ```bash
 bookgraph export translated-pdf /path/to/workspace ddia --lang vi
@@ -1124,7 +1152,9 @@ bookgraph export translated-pdf /path/to/workspace ddia --check           # cove
 
 ### Reads
 
-- `sources/sections/<doc_id>/sections.jsonl`: the skeleton and reading order.
+- `sources/sections/<doc_id>/sections.jsonl`: the skeleton.
+- `sources/inbox/<doc_id>/book.json`, when present: its PDF outline sets reading
+  order and hierarchy (see *Structure* above).
 - `sources/parsed/<doc_id>/document.json`, when present. Original sections are
   rebuilt from their `block_ids`, so figures, tables and equations stay next to the
   prose around them in the source. Without it, original sections render

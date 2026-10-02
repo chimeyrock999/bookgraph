@@ -305,11 +305,22 @@ def local_asset_resolver(root: Path, bases: list[Path]) -> Callable[[str], bool]
     """
 
     def resolves(target: str) -> bool:
-        if _ABSOLUTE_RE.match(target):
-            return False
-        return resolve_workspace_link(root, target, bases) is not None
+        return resolve_translation_image(root, target, bases) is not None
 
     return resolves
+
+
+def resolve_translation_image(root: Path, target: str, bases: list[Path]) -> Path | None:
+    """The workspace file a translation's relative image link points at, if any.
+
+    The resolution :func:`local_asset_resolver` judges links by: an absolute path never
+    resolves, a relative one goes through
+    :func:`bookgraph.assets.resolve_workspace_link`.
+    """
+
+    if _ABSOLUTE_RE.match(target):
+        return None
+    return resolve_workspace_link(root, target, bases)
 
 
 def describe_structure_issues(issues: list[TranslationStructureIssue], limit: int = 5) -> str:

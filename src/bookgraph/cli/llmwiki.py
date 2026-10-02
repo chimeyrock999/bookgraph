@@ -23,12 +23,16 @@ def _resolve_workspace(workspace_path: Path) -> WorkspacePaths:
     return WorkspacePaths(workspace)
 
 
-def _run_llmwiki(command: list[str]) -> None:
+def _run_llmwiki(command: list[str], cwd: Path | None = None) -> None:
     """Launch an ``llmwiki`` subcommand, forwarding its exit code.
 
     Shared by ``serve`` and ``bridge --compile`` so a future change (better error,
     timeout, env passthrough) is made once. Fails with an actionable message when
     ``llmwiki`` is not installed rather than a bare ``FileNotFoundError``.
+
+    Only ``llmwiki serve`` accepts ``--root``; every other llmwiki command
+    (``compile``, ``status``, ...) works on the current directory, so callers pass
+    the project root as ``cwd`` instead.
     """
 
     if shutil.which("llmwiki") is None:
@@ -36,7 +40,13 @@ def _run_llmwiki(command: list[str]) -> None:
             "llmwiki is not installed or not on PATH. Install the optional "
             "llm-wiki-compiler tool, or re-run with --print to see the command to run."
         )
-    raise typer.Exit(subprocess.call(command))
+    raise typer.Exit(subprocess.call(command, cwd=cwd))
+
+
+def _shell_command_in(cwd: Path, command: list[str]) -> str:
+    """Render ``command`` run from ``cwd`` as one shell-quoted line for ``--print``."""
+
+    return f"cd {shlex.quote(str(cwd))} && {shlex.join(command)}"
 
 
 @llmwiki_app.command("serve")
@@ -53,8 +63,9 @@ def llmwiki_serve(
     """Launch the optional llmwiki MCP server over the workspace's llmwiki project.
 
     Convenience wrapper that runs ``llmwiki serve --root <workspace>/llmwiki`` —
-    the real ``llm-wiki-compiler`` v1.1 contract, which takes ``--root <project>``
-    and has no positional root argument. The llmwiki project lives in its own
+    the real ``llm-wiki-compiler`` contract, which takes ``--root <project>``
+    and has no positional root argument (``serve`` is the only llmwiki command
+    with ``--root``). The llmwiki project lives in its own
     ``llmwiki/`` subtree (isolated from BookGraph's ``wiki/`` and ``sources/``);
     the compiler ingests the sources staged by ``bookgraph llmwiki bridge`` and
     serves its compiled pages.
@@ -104,7 +115,7 @@ def llmwiki_bridge(
         bool,
         typer.Option(
             "--compile",
-            help="After staging, run 'llmwiki compile --root <workspace>/llmwiki' incrementally.",
+            help="After staging, run 'llmwiki compile' incrementally inside <workspace>/llmwiki.",
         ),
     ] = False,
     print_command: Annotated[
@@ -122,6 +133,9 @@ def llmwiki_bridge(
     full-book ingest. Staging is idempotent: unchanged sections are left untouched
     so llmwiki's incremental compile adds only a daily batch without reprocessing
     the whole book. BookGraph's canonical inputs are only read, never mutated.
+
+    ``llmwiki compile`` has no ``--root`` option (only ``serve`` does), so
+    ``--compile`` runs it with the llmwiki project root as working directory.
     """
 
     # --print only has meaning for the compile step; reject it early rather than
@@ -147,8 +161,7 @@ def llmwiki_bridge(
         plan_path = paths.reading_plans_root / f"{resolved_plan_id}.json"
         if not plan_path.is_file():
             raise typer.BadParameter(
-                f"Reading plan not found: {plan_path}. "
-                "Run 'bookgraph reading-plan create' first."
+                f"Reading plan not found: {plan_path}. Run 'bookgraph reading-plan create' first."
             )
         try:
             plan = read_reading_plan(plan_path)
@@ -163,9 +176,7 @@ def llmwiki_bridge(
         # Preserve reading order (manifest order), staging only sections read so far.
         sections = [section for section in sections if section.id in completed]
         if not sections:
-            typer.echo(
-                f"No sections read yet in plan '{resolved_plan_id}'; nothing to stage."
-            )
+            typer.echo(f"No sections read yet in plan '{resolved_plan_id}'; nothing to stage.")
             return
 
     result = stage_sections(sections, paths.llmwiki_sources)
@@ -177,9 +188,9 @@ def llmwiki_bridge(
     if not compile_wiki:
         return
 
-    compile_command = ["llmwiki", "compile", "--root", str(paths.llmwiki_root)]
+    compile_command = ["llmwiki", "compile"]
     if print_command:
-        typer.echo(shlex.join(compile_command))
+        typer.echo(_shell_command_in(paths.llmwiki_root, compile_command))
         return
 
-    _run_llmwiki(compile_command)
+    _run_llmwiki(compile_command, cwd=paths.llmwiki_root)

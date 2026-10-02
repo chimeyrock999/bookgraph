@@ -830,13 +830,16 @@ docstrings (`write_section_translation`, `mark_read`) and both skills repeat the
 - `get_section_translation(doc_id, section_id, lang, include_content=True)` → the
   section's cached translation and its freshness: `status` (`fresh` / `stale` /
   `untracked` / `missing`, see `artifacts.md`), `path`, `metadata_path`,
-  `source_section_hash`, `current_section_hash`, `includes_assets`,
-  `section_has_assets` (whether the section owns any figure/table block), `model`,
-  `created_at`, `notes` (the writer's side-channel remarks), `content` (the body,
-  unless `include_content=False`), and `structure_issues` (the link destinations,
-  image paths, reference definitions, HTML anchors, and heading ids the body dropped
-  or added relative to the section; see the structure rule in `artifacts.md`). A
-  missing translation is a normal result, not an error.
+  `source_section_hash`, `current_section_hash`, `includes_assets` (verified against
+  the body; `null` for an untracked body), `missing_assets` (the section's staged
+  figures/tables the body does not link, each with `block_id`, `type`, `link`,
+  `reference`, `caption`), `section_has_assets` (whether the section owns any
+  figure/table block), `model`, `created_at`, `notes` (the writer's side-channel
+  remarks), `content` (the body, unless `include_content=False`), and
+  `structure_issues` (the link destinations, image paths, reference definitions, HTML
+  anchors, and heading ids the body dropped or added relative to the section; see the
+  structure rule in `artifacts.md`). A missing translation is a normal result, not an
+  error.
 - `write_section_translation(doc_id, section_id, lang, content, includes_assets=False,
   model=None, source_section_hash=None, notes=None)` → write
   `translations/<lang>/<doc_id>/<section_id>.md` and its registry sidecar,
@@ -845,10 +848,13 @@ docstrings (`write_section_translation`, `mark_read`) and both skills repeat the
   either way). Empty `content` is rejected. When `source_section_hash` is given and
   differs from the section's current hash the write is refused, so a translation of
   outdated content is never registered as fresh. `content` is the translated book
-  content only, with figures/tables linked by their `AssetRef.link`. `notes`
-  (optional) is the side channel for QA/checker results and terminology decisions:
-  stored in the registry sidecar, returned as `notes` by the read tools, never in the
-  body (see *Artifact channels* in `artifacts.md`).
+  content only, with figures/tables linked by their `AssetRef.link`;
+  `includes_assets=True` for a body that does not link every staged figure/table is
+  refused with the missing links (the sidecar stores the claim, the read tools report
+  it verified against the body). `notes` (optional) is the side channel for
+  QA/checker results and terminology decisions: stored in the registry sidecar,
+  returned as `notes` by the read tools, never in the body (see *Artifact channels*
+  in `artifacts.md`).
 - `list_section_artifacts(doc_id=None, lang=None, type="translation")` → every
   cached translation (filtered by `doc_id` / `lang`) with its status, including
   `orphaned` ones whose section no longer exists; no bodies, but each entry carries
@@ -1003,9 +1009,11 @@ bookgraph llmwiki bridge /path/to/workspace <doc_id> --compile --print   # print
 - `--plan <plan_id>`: restrict staging to sections already read in this reading
   plan, so the compiled wiki compounds with reading progress. Omit to stage every
   section of the document.
-- `--compile`: after staging, run `llmwiki compile --root <workspace>/llmwiki`
-  incrementally.
-- `--print`: with `--compile`, print the compile command instead of running it.
+- `--compile`: after staging, run `llmwiki compile` incrementally with
+  `<workspace>/llmwiki` as the working directory. `llmwiki compile` has no
+  `--root` option (only `llmwiki serve` does); it compiles the current directory.
+- `--print`: with `--compile`, print the compile command instead of running it,
+  as a shell-quoted `cd <workspace>/llmwiki && llmwiki compile`.
 
 ### Behavior
 
@@ -1054,7 +1062,9 @@ bookgraph llmwiki serve /path/to/workspace --print
 ### Behavior
 
 - Runs `llmwiki serve --root <workspace>/llmwiki` — the real `llm-wiki-compiler`
-  v1.1 contract (`--root <project>`, no positional root) — forwarding its exit code.
+  contract (`--root <project>`, no positional root) — forwarding its exit code.
+  `serve` is the only llmwiki command that takes `--root`; `compile` and `status`
+  work on the current directory (see `llmwiki bridge --compile`).
 - With `--print`, emits the command with shell-safe quoting instead of running it.
 
 ### Must not do
@@ -1190,7 +1200,8 @@ bookgraph export translated-pdf /path/to/workspace ddia --check           # cove
   not installed is an error.
 - `--strict`: exit `1` without writing anything if any asset is missing, remote, or
   unsupported, a translation is `stale` (`translation_stale`), or a registered
-  translation left out its section's figures/tables (`translation_missing_assets`),
+  translation left out its section's figures/tables (`translation_missing_assets`,
+  checked from the body, not the sidecar's `includes_assets`),
   or a translation changed its section's link targets, anchors, or paths
   (`translation_structure_changed`). An `untracked` translation only warns. In
   `bilingual` mode the left column counts too: a missing original asset of a

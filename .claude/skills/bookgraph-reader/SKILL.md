@@ -104,11 +104,14 @@ chat), reuse the cache instead of retranslating:
 1. `get_section_translation(doc_id, section_id, lang)` — reuse its `content` as-is
    only when `status` is `fresh` **and** (`includes_assets` or not
    `section_has_assets`). A fresh translation with `includes_assets` false on a
-   section that has assets left out figures/tables; mention that or redo it.
+   section that has assets left out figures/tables (`missing_assets` lists them,
+   with the `link` to write); mention that or redo it.
 2. Otherwise (`missing`, `stale`, or `untracked` you don't trust) translate the
    section's real text, then `write_section_translation(doc_id, section_id, lang,
    content, includes_assets=..., source_section_hash=<current_section_hash>,
-   notes=...)` so the next run reuses it.
+   notes=...)` so the next run reuses it. Link each figure/table by its
+   `AssetRef.link`: `includes_assets` is verified against the body, and
+   `includes_assets=True` for a body missing one is refused.
 3. Translate content, preserve structural Markdown: translate prose, captions, and
    link labels, but keep link destinations and fragment ids
    (`(ch03.html#sec_x)`, `(#fig_y)`), image and file paths, reference-style

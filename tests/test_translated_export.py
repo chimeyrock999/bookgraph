@@ -538,7 +538,7 @@ def test_reads_translations_written_through_the_registry(workspace: WorkspacePat
 
 def test_fresh_registry_translation_has_no_freshness_warning(workspace: WorkspacePaths) -> None:
     chapter, _, _ = _section_ids(workspace)
-    _register(workspace, chapter, "# Chương Một\n\nMới.\n")
+    _register(workspace, chapter, "# Chương Một\n\nMới.\n\n![Hình 1](images/fig1.png)\n")
 
     export = build_translated_export(workspace, DOC, lang="vi", generated_at=GENERATED_AT)
 
@@ -551,7 +551,7 @@ def test_stale_translation_renders_flagged_and_counts_as_translated(
     workspace: WorkspacePaths, tmp_path: Path
 ) -> None:
     chapter, second, third = _section_ids(workspace)
-    _register(workspace, chapter, "# Chương Một\n\nBản dịch cũ.\n")
+    _register(workspace, chapter, "# Chương Một\n\nBản dịch cũ.\n\n![Hình 1](images/fig1.png)\n")
     _register(workspace, second, "# Phần Hai\n")
     _register(workspace, third, "# Phần Ba\n")
     _change_section_text(workspace, chapter)
@@ -588,8 +588,8 @@ def test_untracked_translation_renders_with_a_warning(
 ) -> None:
     chapter, _, _ = _section_ids(workspace)
     if edited_after_registration:
-        _register(workspace, chapter, "# Chương Một\n\nBản gốc.\n")
-    _translate(workspace, chapter, "# Chương Một\n\nSửa tay.\n")
+        _register(workspace, chapter, "# Chương Một\n\nBản gốc.\n\n![Hình 1](images/fig1.png)\n")
+    _translate(workspace, chapter, "# Chương Một\n\nSửa tay.\n\n![Hình 1](images/fig1.png)\n")
 
     export = build_translated_export(
         workspace, DOC, lang="vi", fallback="skip", generated_at=GENERATED_AT

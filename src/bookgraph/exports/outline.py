@@ -14,8 +14,11 @@ matches, the manifest order and ``Section.level`` are kept.
 A *chapter* starts a new page: every top-level node, and every child of a top-level
 node that is a *part*. A part is recognised by its title ("Part I", "Book 2",
 "Volume III"), or by its shape: at least two children in the outline (or, without
-one, the manifest), each with children of its own, and little body of its own — a
-part-title page, not a chapter whose sections happen to have subsections. A section
+one, the manifest), each with children of its own, and little body of its own. Shape
+is decided once for the whole book: it counts only when most top-level nodes that
+have children share it, and never for a node titled as a chapter ("Chapter 3"). A
+chapter whose sections happen to have subsections is then not mistaken for a part
+just because its own intro is short. A section
 whose bookmark sits directly under a bookmark titled as a part is a chapter too, even
 when the part itself has no section. Everything else flows inside its chapter.
 """
@@ -37,9 +40,9 @@ _PAGE_TOLERANCE = 1
 # A part-title page carries at most a short introduction.
 _PART_MAX_WORDS = 300
 
-_PART_TITLE = re.compile(
-    r"^(part|book|volume)\s+(\d+|[ivxlcdm]+|one|two|three|four|five|six|seven|eight|nine|ten)\b"
-)
+_NUMERAL = r"(\d+|[ivxlcdm]+|one|two|three|four|five|six|seven|eight|nine|ten)\b"
+_CHAPTER_TITLE = re.compile(r"^chapter\s+" + _NUMERAL)
+_PART_TITLE = re.compile(r"^(part|book|volume)\s+" + _NUMERAL)
 
 
 @dataclass
@@ -88,9 +91,20 @@ def build_outline(sections: list[Section], bookmarks: list[PdfBookmark]) -> list
             roots.append(node)
             root_anchor[id(node)] = anchor
         stack.append(node)
+    shaped = {
+        id(root)
+        for root in roots
+        if _has_part_shape(root, root_anchor[id(root)], outline_children)
+    }
+    # Most top-level nodes with children share the part shape: the book is in parts.
+    book_in_parts = 2 * len(shaped) > sum(1 for root in roots if root.children)
     for root in roots:
         root.chapter = True
-        if _is_part(root, root_anchor[id(root)], outline_children):
+        if _has_part_title(root.section.title) or (
+            book_in_parts
+            and id(root) in shaped
+            and not _CHAPTER_TITLE.match(_normalise(root.section.title))
+        ):
             for child in root.children:
                 child.chapter = True
     return roots
@@ -198,11 +212,9 @@ def _has_part_title(title: str) -> bool:
     return bool(_PART_TITLE.match(_normalise(title)))
 
 
-def _is_part(root: OutlineNode, anchor: int, outline_children: list[list[int]]) -> bool:
-    """Whether ``root`` is a part whose children are chapters (see the module docstring)."""
+def _has_part_shape(root: OutlineNode, anchor: int, outline_children: list[list[int]]) -> bool:
+    """Whether ``root`` is shaped like a part (see the module docstring)."""
 
-    if _has_part_title(root.section.title):
-        return True
     if len(root.section.text.split()) > _PART_MAX_WORDS:
         return False
     if anchor >= 0:

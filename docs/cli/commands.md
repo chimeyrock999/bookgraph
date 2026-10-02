@@ -1062,9 +1062,11 @@ same way), with headings at its depth. A **chapter** starts a new page: every
 top-level section, and each child of a top-level section that is a *part*. A part is
 recognised by its title (*Part I*, *Book 2*, *Volume III*), or by its shape: at least
 two children in the outline (or the manifest, without one), each with children of
-its own, and at most ~300 words of its own (a part-title page, not a chapter whose
-sections have subsections). A section whose bookmark sits directly under a bookmark
-titled as a part is a chapter too. Other sections flow inside their chapter. This matters for PDFs: MinerU marks every title as level
+its own, and at most ~300 words of its own. Shape is decided once for the whole book:
+it counts only when most top-level sections that have children share it, and never
+for a section titled as a chapter (*Chapter 3*), so page breaks do not differ between
+chapters of one book. A section whose bookmark sits directly under a bookmark titled
+as a part is a chapter too. Other sections flow inside their chapter. This matters for PDFs: MinerU marks every title as level
 1, so a heading-segmented PDF has a flat manifest that the outline restores.
 
 ```bash

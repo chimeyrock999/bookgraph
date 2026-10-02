@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from bookgraph.exports.outline import OutlineNode, build_outline, flatten
 from bookgraph.models import Section
 from bookgraph.pdf_metadata import PdfBookmark
@@ -252,3 +254,143 @@ def test_sections_with_subsections_in_a_parts_less_chapter_do_not_open_pages() -
         ("Section 1.1", 2, False),
         ("Section 1.2", 2, False),
     ]
+
+
+def _with_words(section: Section, words: int) -> Section:
+    return section.model_copy(update={"text": "word " * words})
+
+
+@pytest.mark.parametrize(
+    ("first", "second"), [("Chapter 1", "Chapter 2"), ("Storage", "Replication")]
+)
+def test_a_short_chapter_intro_does_not_make_a_chapter_a_part(first: str, second: str) -> None:
+    # No parts; the first chapter's sections all have subsections, the second's do not.
+    # Page breaks must not differ between the two chapters. Titled chapters are caught
+    # by their title; untitled ones by the book-wide shape vote (one of two roots).
+    bookmarks = [
+        PdfBookmark(title=first, page_index=1, level=1),
+        PdfBookmark(title="Section 1.1", page_index=2, level=2),
+        PdfBookmark(title="Section 1.1.1", page_index=3, level=3),
+        PdfBookmark(title="Section 1.2", page_index=4, level=2),
+        PdfBookmark(title="Section 1.2.1", page_index=5, level=3),
+        PdfBookmark(title=second, page_index=6, level=1),
+        PdfBookmark(title="Section 2.1", page_index=7, level=2),
+        PdfBookmark(title="Section 2.1.1", page_index=8, level=3),
+        PdfBookmark(title="Section 2.2", page_index=9, level=2),
+    ]
+    sections = [
+        _with_words(_section(first, page=1), 120),
+        _section("Section 1.1", page=2),
+        _section("Section 1.2", page=4),
+        _with_words(_section(second, page=6), 120),
+        _section("Section 2.1", page=7),
+        _section("Section 2.2", page=9),
+    ]
+
+    chapters = [t for t, _, chapter in _shape(build_outline(sections, bookmarks)) if chapter]
+
+    assert chapters == [first, second]
+
+
+# Two untitled parts, each holding chapters that have sections of their own.
+UNTITLED_PARTS = [
+    PdfBookmark(title="Fundamentals", page_index=1, level=1),
+    PdfBookmark(title="Tables", page_index=2, level=2),
+    PdfBookmark(title="Snapshots", page_index=3, level=3),
+    PdfBookmark(title="Catalogs", page_index=4, level=2),
+    PdfBookmark(title="Namespaces", page_index=5, level=3),
+    PdfBookmark(title="Practice", page_index=6, level=1),
+    PdfBookmark(title="Spark", page_index=7, level=2),
+    PdfBookmark(title="Writes", page_index=8, level=3),
+    PdfBookmark(title="Flink", page_index=9, level=2),
+    PdfBookmark(title="Streaming", page_index=10, level=3),
+]
+
+
+def test_untitled_parts_are_detected_by_their_outline_shape() -> None:
+    # Segmented at level 2: the chapters' sections exist only in the outline.
+    sections = [
+        _section(b.title, page=b.page_index) for b in UNTITLED_PARTS if b.level <= 2
+    ]
+
+    assert _shape(build_outline(sections, UNTITLED_PARTS)) == [
+        ("Fundamentals", 1, True),
+        ("Tables", 2, True),
+        ("Catalogs", 2, True),
+        ("Practice", 1, True),
+        ("Spark", 2, True),
+        ("Flink", 2, True),
+    ]
+
+
+def test_untitled_parts_are_detected_by_their_manifest_shape_without_an_outline() -> None:
+    sections = [_section(b.title, level=b.level) for b in UNTITLED_PARTS]
+
+    chapters = [title for title, _, chapter in _shape(build_outline(sections, [])) if chapter]
+
+    assert chapters == ["Fundamentals", "Tables", "Catalogs", "Practice", "Spark", "Flink"]
+
+
+def test_a_part_shaped_node_with_a_long_body_is_a_chapter() -> None:
+    third_part = [("Operations", 1), ("Compaction", 2), ("Rewrites", 3)]
+    third_part += [("Expiry", 2), ("Snapshots Expiry", 3)]
+    sections = [_section(b.title, level=b.level) for b in UNTITLED_PARTS]
+    sections += [_section(title, level=level) for title, level in third_part]
+    sections[0] = _with_words(sections[0], 400)
+
+    chapters = [title for title, _, chapter in _shape(build_outline(sections, [])) if chapter]
+
+    # Two of three top-level nodes are parts; "Fundamentals" has a chapter's worth of
+    # text, so its sections flow inside it.
+    assert chapters == [
+        "Fundamentals",
+        "Practice",
+        "Spark",
+        "Flink",
+        "Operations",
+        "Compaction",
+        "Expiry",
+    ]
+
+
+@pytest.mark.parametrize(("page", "matched"), [(6, True), (7, True), (8, False)])
+def test_a_bookmark_matches_within_one_page_of_the_section(page: int, matched: bool) -> None:
+    # The bookmark is on page 6; the manifest lists the section before Chapter 1, so
+    # a match moves it into Chapter 1 (outline order) and a miss leaves it first.
+    bookmarks = [
+        PdfBookmark(title="Chapter 1", page_index=5, level=1),
+        PdfBookmark(title="Overview", page_index=6, level=2),
+    ]
+    sections = [_section("Overview", page=page), _section("Chapter 1", page=5)]
+
+    shape = [(title, depth) for title, depth, _ in _shape(build_outline(sections, bookmarks))]
+
+    if matched:
+        assert shape == [("Chapter 1", 1), ("Overview", 2)]
+    else:
+        assert shape == [("Overview", 1), ("Chapter 1", 1)]
+
+
+def test_chapter_titled_nodes_are_never_shape_parts() -> None:
+    # Every chapter's sections have subsections and every intro is short, so the shape
+    # vote alone would call the book "in parts"; the chapter titles say otherwise.
+    bookmarks = []
+    sections = []
+    for number in (1, 2):
+        base = number * 10
+        bookmarks += [
+            PdfBookmark(title=f"Chapter {number}", page_index=base, level=1),
+            PdfBookmark(title=f"Section {number}.1", page_index=base + 1, level=2),
+            PdfBookmark(title=f"Section {number}.1.1", page_index=base + 2, level=3),
+            PdfBookmark(title=f"Section {number}.2", page_index=base + 3, level=2),
+            PdfBookmark(title=f"Section {number}.2.1", page_index=base + 4, level=3),
+        ]
+        sections += [
+            _section(f"Chapter {number}", page=base),
+            _section(f"Section {number}.1", page=base + 1),
+            _section(f"Section {number}.2", page=base + 3),
+        ]
+
+    chapters = [t for t, _, chapter in _shape(build_outline(sections, bookmarks)) if chapter]
+
+    assert chapters == ["Chapter 1", "Chapter 2"]

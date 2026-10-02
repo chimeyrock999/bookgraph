@@ -778,7 +778,7 @@ def test_leaked_job_diagnostics_are_dropped_from_the_page_and_reported(
         workspace,
         chapter,
         "# Chương Một\n\nPhần mở đầu.\n\n"
-        "QA: ✅ thuật ngữ đã kiểm tra.\n"
+        "Missing asset: images/hinh-1.png\n"
         "MEDIA:/Users/me/ws/exports/tiny.vi-progress.pdf\n\n"
         "Đoạn hai.\n\n"
         "✅ Đã lưu cache/enrich và mark read: tiny.chapter-one\n",
@@ -788,11 +788,11 @@ def test_leaked_job_diagnostics_are_dropped_from_the_page_and_reported(
 
     html = export.html
     assert "Phần mở đầu." in html and "Đoạn hai." in html
-    for leak in ("QA:", "MEDIA:", "Đã lưu cache", "mark read"):
+    for leak in ("Missing asset", "MEDIA:", "Đã lưu cache", "mark read"):
         assert leak not in html
     contaminated = [w for w in export.report.warnings if w.code == TRANSLATION_CONTAMINATED]
     assert [w.reference for w in contaminated] == [
-        "QA: ✅ thuật ngữ đã kiểm tra.",
+        "Missing asset: images/hinh-1.png",
         "MEDIA:/Users/me/ws/exports/tiny.vi-progress.pdf",
         "✅ Đã lưu cache/enrich và mark read: tiny.chapter-one",
     ]

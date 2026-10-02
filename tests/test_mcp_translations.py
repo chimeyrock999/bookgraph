@@ -254,3 +254,23 @@ def test_annotate_section_refuses_progress_footers(tmp_path: Path) -> None:
         )
 
     assert not (workspace.annotations_root / "deep-work" / "deep-work.a.json").exists()
+
+
+def test_notes_are_stored_beside_the_translation_not_in_it(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path, _section("deep-work.a"))
+    notes = "QA: ✅ glossary checked; kept 'deep work' untranslated.\nMEDIA:/tmp/review.pdf"
+
+    service.write_section_translation(
+        workspace, "deep-work", "deep-work.a", "vi", "# Bản dịch\n", notes=notes
+    )
+    view = service.get_section_translation(workspace, "deep-work", "deep-work.a", "vi")
+
+    # The side channel is not hygiene-checked: it is where diagnostics belong.
+    assert view.status == "fresh"
+    assert view.notes == notes
+    assert view.content == "# Bản dịch\n"
+    assert view.metadata_path is not None and "glossary checked" in Path(
+        view.metadata_path
+    ).read_text(encoding="utf-8")
+    listed = service.list_section_artifacts(workspace, "deep-work", "vi").artifacts
+    assert [entry.notes for entry in listed] == [notes]

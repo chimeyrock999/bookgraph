@@ -19,14 +19,6 @@ LEAKS = [
     ("_Đã lưu cache và mark read: ddia.ch1_", "progress_footer"),
     ("Saved translation; called mark_read for ddia.ch1.", "progress_footer"),
     ("Marked read: ddia.ch1-intro", "progress_footer"),
-    ("QA: ✅ thuật ngữ khớp glossary.", "qa_note"),
-    ("✅ QA: passed", "qa_note"),
-    ("QA/checker notes: none", "qa_note"),
-    ("**QA note:** the checker found no untranslated sentences.", "qa_note"),
-    ("> Checker: 0 issues", "qa_note"),
-    ("Internal validation notes: headings match the source.", "qa_note"),
-    ("- Ghi chú QA: giữ nguyên thuật ngữ 'replication'.", "qa_note"),
-    ("[QA] figure 1-1 kept as-is", "qa_note"),
     ("Translation status unknown — it may be outdated", "export_status"),
     ("Untranslated — original text", "export_status"),
     ("Missing asset: images/fig1-1.png", "export_status"),
@@ -96,8 +88,16 @@ def test_book_content_is_not_flagged() -> None:
     assert scan_artifact_text(CLEAN_TEXT) == []
 
 
+def test_qa_prose_is_not_guessed_at() -> None:
+    # QA/checker remarks belong in ``write_section_translation(notes=...)``; the
+    # detector does not guess at free-form QA prose, which would refuse real book text.
+    text = "**QA note:** no untranslated sentences.\n✅ QA: passed\n[QA] figure 1-1 kept\n"
+
+    assert scan_artifact_text(text) == []
+
+
 def test_fence_must_close_with_the_same_marker() -> None:
-    text = "~~~\n```\nQA: passed\n~~~\nQA: passed\n"
+    text = "~~~\n```\nMEDIA:/tmp/a.pdf\n~~~\nMEDIA:/tmp/b.pdf\n"
 
     assert [f.line for f in scan_artifact_text(text)] == [5]
 
@@ -105,24 +105,26 @@ def test_fence_must_close_with_the_same_marker() -> None:
 def test_strip_drops_operational_lines_and_keeps_links() -> None:
     text = (
         "# Chương 1\n\nĐoạn văn.\n\n![Hình](/abs/fig.png)\n\n"
-        "QA: ok\nĐã lưu cache/enrich và mark read: ddia.ch1\nMEDIA:/tmp/x.pdf\n"
+        "Missing asset: x.png\nĐã lưu cache/enrich và mark read: ddia.ch1\nMEDIA:/tmp/x.pdf\n"
     )
 
     stripped, dropped = strip_operational_lines(text)
 
     assert stripped == "# Chương 1\n\nĐoạn văn.\n\n![Hình](/abs/fig.png)\n\n"
-    assert [f.code for f in dropped] == ["qa_note", "progress_footer", "media_marker"]
+    assert [f.code for f in dropped] == ["export_status", "progress_footer", "media_marker"]
     assert strip_operational_lines(CLEAN_TEXT) == (CLEAN_TEXT, [])
 
 
 def test_ensure_clean_lists_findings_in_the_error() -> None:
     with pytest.raises(ArtifactHygieneError) as excinfo:
-        ensure_clean_artifact("Nội dung.\nQA: ok\nQA: passed\nQA: ✅\nMEDIA:/x\n", "translation")
+        ensure_clean_artifact(
+            "Nội dung.\nMEDIA:/a\nMEDIA:/b\n(untracked)\nMissing asset: x\n", "translation"
+        )
 
     assert len(excinfo.value.findings) == 4
     message = str(excinfo.value)
     assert message.startswith("translation contains operational text")
-    assert "line 2 (qa_note): QA: ok" in message
+    assert "line 2 (media_marker): MEDIA:/a" in message
     assert "and 1 more" in message
 
 
@@ -135,7 +137,7 @@ def test_annotation_build_refuses_diagnostics_before_collapsing_lines() -> None:
         build_annotation(
             "ddia",
             "ddia.ch1",
-            [AnnotatedConcept(slug="", title="Replication", gloss="QA: verified")],
+            [AnnotatedConcept(slug="", title="Replication", gloss="Missing asset: f1.png")],
         )
 
     clean = build_annotation("ddia", "ddia.ch1", None, summary="Chương giới thiệu độ tin cậy.")
@@ -161,7 +163,9 @@ def test_collapsed_mode_finds_line_start_leaks_mid_text() -> None:
 
     assert scan_artifact_text(summary) == []  # the line-start rules see one line
     assert [f.code for f in scan_artifact_text(summary, collapsed=True)] == ["media_marker"]
-    assert [f.code for f in scan_artifact_text("Tóm tắt. QA: ✅ ok", collapsed=True)] == ["qa_note"]
+    assert [f.code for f in scan_artifact_text("Tóm tắt. Renderer warning: x", collapsed=True)] == [
+        "export_warning"
+    ]
     assert scan_artifact_text("The original edition (original)", collapsed=True) == []
 
 
@@ -169,10 +173,10 @@ def test_stored_collapsed_summary_is_contaminated() -> None:
     annotation = SectionAnnotation(
         doc_id="ddia",
         section_id="ddia.ch1",
-        summary="Explains the write-ahead log. QA: checked against source",
+        summary="Explains the write-ahead log. MEDIA:/Users/me/out.pdf",
     )
 
-    assert [f.code for f in annotation_hygiene_findings(annotation)] == ["qa_note"]
+    assert [f.code for f in annotation_hygiene_findings(annotation)] == ["media_marker"]
 
 
 def test_indented_line_inside_a_paragraph_is_prose() -> None:
@@ -180,3 +184,10 @@ def test_indented_line_inside_a_paragraph_is_prose() -> None:
     assert [f.code for f in scan_artifact_text("Đoạn văn\n    MEDIA:/tmp/x.pdf\n")] == [
         "media_marker"
     ]
+
+
+def test_fence_with_an_info_string_does_not_close_the_block() -> None:
+    # Inside a four-backtick block, a "````python" line opens nothing and closes nothing.
+    text = "````\n````python\nMEDIA:/tmp/in-code.pdf\n````\nMEDIA:/tmp/prose.pdf\n"
+
+    assert [f.line for f in scan_artifact_text(text)] == [5]

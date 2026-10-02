@@ -20,8 +20,9 @@ convention into a registry a workflow can query:
 The body file is the deliverable. A write removes any previous sidecar, then writes the
 body, then the new sidecar, so a crash (or a racing writer) mid-write leaves at worst an
 ``untracked`` body — never a sidecar vouching for a body it does not describe; the body
-hash check backs this up. A body carrying job diagnostics (delivery markers, QA
-notes, progress footers) is refused at write time. See ``docs/cli/artifacts.md``.
+hash check backs this up. A body carrying job diagnostics (delivery markers, progress
+footers) is refused at write time; remarks about a translation go in the sidecar's
+``notes``. See ``docs/cli/artifacts.md``.
 """
 
 from __future__ import annotations
@@ -131,6 +132,7 @@ def write_translation(
     includes_assets: bool = False,
     model: str | None = None,
     created_at: str | None = None,
+    notes: str | None = None,
 ) -> SectionArtifact:
     """Persist a translation body and register it against the section's current content.
 
@@ -138,9 +140,11 @@ def write_translation(
     cache, and the newest translation of the current content is the one to keep.
 
     The body must be publication-clean book content: a delivery marker, progress
-    footer, QA note, export status label, or absolute asset link raises
+    footer, export status label, or absolute asset link raises
     :class:`~bookgraph.artifact_hygiene.ArtifactHygieneError` before anything is
-    written (see :mod:`bookgraph.artifact_hygiene`).
+    written (see :mod:`bookgraph.artifact_hygiene`). Anything about the translation
+    that is not book content (QA results, terminology notes) goes in ``notes``, which
+    is stored in the sidecar only and is not checked.
     """
 
     ensure_clean_artifact(content, "translation")
@@ -156,6 +160,7 @@ def write_translation(
         includes_assets=includes_assets,
         model=model,
         created_at=created_at,
+        notes=notes or None,
     )
     # Drop the old sidecar, then body, then the new sidecar (the commit record): between
     # the renames the body is untracked, never described by a previous write's sidecar.

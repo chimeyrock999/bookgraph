@@ -194,8 +194,8 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
         (require_assets); the cached translation for translation_lang exists and is not
         stale in the translation registry; and each artifacts path template exists ({doc_id},
         {section_id}, {plan_id} expand). The annotation and the translation must also
-        be clean of job diagnostics (MEDIA: markers, cache/mark-read footers, QA notes,
-        export labels, absolute asset paths); set clean_artifacts=True to hold
+        be clean of job diagnostics (MEDIA: markers, cache/mark-read footers, export
+        labels, absolute asset paths); set clean_artifacts=True to hold
         Markdown/text artifacts (e.g. a cache) to the same rule — leave it off for
         run/QA logs, which legitimately contain such lines. If any
         blocking issue is found, nothing is written: committed=false and issues lists
@@ -378,8 +378,8 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
         (null) to leave the section's auto concepts untouched (e.g. a summary-only
         annotation); pass [] to prune the section's concepts; pass a list to replace
         them with the agent's authoritative set. Summary and glosses are book
-        explanation only: progress footers, QA/checker notes, MEDIA: markers, export
-        labels and absolute asset paths are refused.
+        explanation only: progress footers, MEDIA: markers, export labels and absolute
+        asset paths are refused.
         """
 
         try:
@@ -420,6 +420,7 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
         includes_assets: bool = False,
         model: str | None = None,
         source_section_hash: str | None = None,
+        notes: str | None = None,
     ) -> SectionArtifactView:
         """Cache a section translation (Markdown) and register it as fresh.
 
@@ -427,10 +428,12 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
         the section content it was made from, replacing any earlier translation. Set
         includes_assets=True when the translation carries the section's figures/
         tables. Pass source_section_hash (the current_section_hash you saw) to refuse
-        the write if the section changed while you were translating. content must be
-        the translated book content only — no MEDIA: delivery markers, cache/mark-read
-        footers, QA/checker notes, export status labels, or absolute asset paths (link
-        parsed assets relatively); such a write is refused.
+        the write if the section changed while you were translating. content is the
+        translated book content only. Put QA/checker results, terminology decisions and
+        any other remarks in notes (stored beside the translation, never in it); keep
+        MEDIA: markers and progress lines for your chat reply. A content carrying
+        MEDIA: markers, cache/mark-read footers, export status labels, or absolute asset
+        paths (link parsed assets relatively) is refused.
         """
 
         try:
@@ -443,6 +446,7 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
                 includes_assets,
                 model,
                 source_section_hash,
+                notes,
             )
         except ReadingServiceError as exc:
             raise ToolError(str(exc)) from exc

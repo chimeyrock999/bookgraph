@@ -77,8 +77,8 @@ annotations/<doc_id>/<section_id>.json
 - `summary`: the agent's explanation of the section. May be empty. Surfaced immediately
   by `get_context`.
 - `summary` and every `gloss` are book explanation only: a write carrying job
-  diagnostics (a `MEDIA:` marker, a cache/mark-read footer, a QA/checker note, an
-  export label, an absolute asset link) is **rejected**, and a stored annotation that carries them blocks
+  diagnostics (a `MEDIA:` marker, a cache/mark-read footer, an export label, an
+  absolute asset link) is **rejected**, and a stored annotation that carries them blocks
   `complete_reading_batch` (`annotation_contaminated`). See *Artifact hygiene* in
   `artifacts.md`.
 - `model`: optional identifier of the model that produced the annotation.

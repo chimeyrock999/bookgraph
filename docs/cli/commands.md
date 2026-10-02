@@ -804,17 +804,20 @@ telling the user to `uv sync --extra mcp`.
   `untracked` / `missing`, see `artifacts.md`), `path`, `metadata_path`,
   `source_section_hash`, `current_section_hash`, `includes_assets`,
   `section_has_assets` (whether the section owns any figure/table block), `model`,
-  `created_at`, and `content` (the body, unless `include_content=False`). A missing
+  `created_at`, `notes` (the writer's side-channel remarks), and `content` (the body,
+  unless `include_content=False`). A missing
   translation is a normal result, not an error.
 - `write_section_translation(doc_id, section_id, lang, content, includes_assets=False,
-  model=None, source_section_hash=None)` → write
+  model=None, source_section_hash=None, notes=None)` → write
   `translations/<lang>/<doc_id>/<section_id>.md` and its registry sidecar,
   replacing any previous translation; returns the entry (status `fresh`, no
   `content`). Empty `content` is rejected. When `source_section_hash` is given and
   differs from the section's current hash the write is refused, so a translation of
   outdated content is never registered as fresh. `content` must be the translated
-  book content only: a body carrying a `MEDIA:` marker, a cache/mark-read footer, a
-  QA/checker note, an export status label, or an absolute asset link is refused (see
+  book content only: a body carrying a `MEDIA:` marker, a cache/mark-read footer, an
+  export status label, or an absolute asset link is refused. `notes` (optional) is
+  the side channel for QA/checker results and terminology decisions: stored in the
+  registry sidecar, returned as `notes` by the read tools, never in the body (see
   *Artifact hygiene* in `artifacts.md`).
 - `list_section_artifacts(doc_id=None, lang=None, type="translation")` → every
   cached translation (filtered by `doc_id` / `lang`) with its status, including
@@ -904,7 +907,7 @@ Issue codes (`blocking` unless noted):
   freshness is unknown.
 - `translation_contaminated`, `annotation_contaminated`, `artifact_contaminated` —
   the translation body, the annotation's summary/glosses, or (with
-  `clean_artifacts`) a required text artifact carries job diagnostics (`MEDIA:` markers, progress footers, QA notes,
+  `clean_artifacts`) a required text artifact carries job diagnostics (`MEDIA:` markers, progress footers,
   export labels, absolute asset links; see *Artifact hygiene* in `artifacts.md`).
   The message names the first offending lines; rewrite the artifact clean.
 
@@ -1105,7 +1108,7 @@ bookgraph export translated-pdf /path/to/workspace ddia --check           # cove
   decides the section's `fresh` / `stale` / `untracked` status (the sidecar is never
   rendered). Stale and untracked translations render with a warning (and a visible
   note under `--show-status`); see `artifacts.md`. Job diagnostics in a body
-  (`MEDIA:` markers, progress footers, QA notes) are dropped from the page and
+  (`MEDIA:` markers, progress footers, export labels) are dropped from the page and
   reported as `translation_contaminated`. `translation_cache/` is not read.
 
 ### Asset handling

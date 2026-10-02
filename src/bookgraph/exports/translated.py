@@ -11,7 +11,7 @@ The reading pages carry book content only. Status and debug metadata — freshne
 labels, "untranslated" notes, coverage, missing-asset placeholders — go to the report
 JSON, and are printed on the pages only with ``show_status`` (``--show-status``). Job
 diagnostics that leaked into a translation body (``MEDIA:`` markers, progress footers,
-QA notes; see :mod:`bookgraph.artifact_hygiene`) are dropped from the page and
+export labels; see :mod:`bookgraph.artifact_hygiene`) are dropped from the page and
 reported as ``translation_contaminated``.
 
 Original sections are rebuilt from their parsed ``document.json`` blocks (via

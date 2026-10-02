@@ -2,20 +2,20 @@
 
 Reading/translation jobs produce two kinds of text: the **artifact** (a translated
 section, an annotation summary — book content, reused by later jobs and exported to
-readers) and **diagnostics** (delivery markers, progress footers, QA/checker notes,
-export status labels). Diagnostics belong in the chat reply, the job log, or a
-report JSON; once they land in an artifact they get cached, re-served, and printed in
-a reading PDF. This module recognises them so writers can refuse them, the reading
-batch boundary can block on them, and the export can strip them:
+readers) and **diagnostics** (delivery markers, progress footers, QA results,
+export status labels). The root fix is giving diagnostics their own channel: the
+``notes`` field of ``write_section_translation`` for QA/terminology remarks, the chat
+reply for ``MEDIA:`` and progress lines, the report JSON for export status — and the
+``bookgraph-reader`` skill tells agents to use them. This module is only the safety
+net behind that: a deliberately small set of rules for text that is never book
+content, so writers can refuse it, the reading batch boundary can block on it, and
+the export can strip it. Free-form QA prose is not guessed at — a rule loose enough
+to catch it also refuses real book text.
 
 - ``media_marker`` — a ``MEDIA:/path`` delivery marker (only valid in a chat reply);
   upper-case ``MEDIA:`` followed by a local path, so ``Media: print and radio`` is prose.
 - ``progress_footer`` — a cache/enrich/mark-read progress line (``Đã lưu cache/enrich
   và mark read: ...``).
-- ``qa_note`` — a QA/checker note in the forms jobs leave behind: a qualified label
-  (``QA note:``, ``QA/checker notes:``, ``Validation notes:``, ``Ghi chú QA:``), a
-  ``[QA]`` tag, or a bare ``QA:`` / ``Checker:`` followed by a verdict (``passed``,
-  ``✅``, ``0 issues``). A glossary line such as ``QA: quality assurance`` is prose.
 - ``export_status`` — an export status/freshness label or placeholder: ``(untracked)``
   alone on its line (a heading such as ``The Iliad (original)`` is prose),
   ``Translation status unknown``, ``Missing asset: ...``.
@@ -43,10 +43,6 @@ from dataclasses import dataclass
 _LINE_START = r"^\W*"
 _COLLAPSED_START = r"(?:^|(?<=\s))\W*"
 _ABSOLUTE = r"(?:/(?!/)|~/|file:|[a-z]:[\\/])"
-_QA_VERDICT = (
-    r"(?:✅|❌|☑|✔|pass(?:ed)?\b|ok\b|fail(?:ed)?\b|clean\b|checked\b|verified\b"
-    r"|no\s+issues?\b|\d+\s+(?:issues?|errors?|findings?)\b|đạt\b|không\s+có\s+lỗi)"
-)
 
 # (code, pattern, case_sensitive, line_only). ``line_only`` rules only make sense on a
 # real line (a label alone on it, a reference definition) and are skipped in
@@ -57,17 +53,6 @@ _RULES: tuple[tuple[str, str, bool, bool], ...] = (
         "progress_footer",
         r"đã\s+lưu\s+cache|\bda\s+luu\s+cache\b|\bcache\s*/\s*enrich\b|\bmark_read\b"
         r"|\bmark(?:ed)?\s+(?:as\s+)?read\s*:",
-        False,
-        False,
-    ),
-    (
-        "qa_note",
-        r"{s}(?:qa|qc|checker)(?:\s*/\s*checker)?\s+(?:note|notes|check|checks|result"
-        r"|results|report|summary)[\])*_]*\s*:"
-        r"|{s}(?:internal[\s-]+)?validation\s+(?:note|notes|result|results|report)[*_]*\s*:"
-        r"|{s}(?:ghi\s+chú|kiểm\s+tra|nhận\s+xét)\s+qa\b"
-        r"|{s}\[(?:qa|qc|checker)\]"
-        r"|{s}(?:qa|qc|checker)(?:\s*/\s*checker)?[*_]*\s*:[*_]*\s*" + _QA_VERDICT,
         False,
         False,
     ),
@@ -128,7 +113,7 @@ _COLLAPSED_RULES = _compile(collapsed=True)
 # Codes whose whole line is diagnostics, safe to drop from a rendered export. An
 # absolute asset link is not: the image it points at may be real content.
 OPERATIONAL_CODES: frozenset[str] = frozenset(
-    {"media_marker", "progress_footer", "qa_note", "export_status", "export_warning"}
+    {"media_marker", "progress_footer", "export_status", "export_warning"}
 )
 
 _FENCE_RE = re.compile(r"^\s{0,3}(`{3,}|~{3,})")
@@ -187,7 +172,15 @@ def scan_artifact_text(text: str, *, collapsed: bool = False) -> list[HygieneFin
     for number, line in enumerate(text.splitlines(), start=1):
         opener = _FENCE_RE.match(line)
         if fence is not None:
-            if opener and opener.group(1)[0] == fence[0] and len(opener.group(1)) >= len(fence):
+            # A closing fence is fence characters only (no info string), of the same
+            # kind and at least as long as the opener (CommonMark).
+            closer = line.strip()
+            if (
+                opener
+                and closer == opener.group(1)
+                and closer[0] == fence[0]
+                and len(closer) >= len(fence)
+            ):
                 fence = None
             continue
         if opener:

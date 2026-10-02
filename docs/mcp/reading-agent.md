@@ -125,12 +125,21 @@ A self-serve agent drives an entire session with these tools alone:
      source_section_hash=<current_section_hash>)`.
      `list_section_artifacts(doc_id, lang)` lists every cached translation with its
      status, so a job can redo the `stale` ones after a re-segment.
-   - **Keep artifacts publication-clean.** A translation body, annotation summary or
-     gloss is book content only. `MEDIA:/path` markers, `Đã lưu cache/enrich và mark
-     read: …` footers, QA/checker notes, export status labels, and absolute asset
-     paths go in your chat reply or job log — the write tools refuse them, and
-     `complete_reading_batch` blocks on them (`*_contaminated`). Link figures
-     relatively (`images/fig1.png`); `MEDIA:` is for the final chat reply only.
+   - **Keep artifacts publication-clean — use the right channel.** A translation
+     body, annotation summary or gloss is book content only:
+     - QA/checker results and terminology decisions → `write_section_translation(...,
+       notes="...")` (stored in the registry sidecar, returned by
+       `get_section_translation`, never exported);
+     - `MEDIA:/path` markers, `Đã lưu cache/enrich và mark read: …` and other
+       progress lines → your final chat reply;
+     - export coverage/freshness/missing assets → the export's `.report.json`.
+
+     Write translations only through `write_section_translation`, never by creating
+     files under `translations/`, and link figures relatively (`images/fig1.png`).
+     As a safety net the write tools refuse `MEDIA:` markers, cache/mark-read
+     footers, export labels and absolute asset paths, and `complete_reading_batch`
+     blocks on them (`*_contaminated`). The `bookgraph-reader` skill
+     (`.claude/skills/bookgraph-reader/SKILL.md`) spells out this workflow.
    - `mark_read(plan_id)` — mark the section read (defaults to the next unread) and
      persist progress. It checks nothing: when the batch involved translation or
      annotation, advance with `complete_reading_batch` instead (see below), which runs

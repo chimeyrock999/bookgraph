@@ -567,6 +567,9 @@ the `.json` sidecar beside it is the registry record, mirroring
   writer, a manual edit) no longer matches and reads as `untracked`.
 - `includes_assets`: whether the writer carried the section's figures/tables into
   the translation (declared by the writer, not inferred).
+- `notes` (optional): the writer's free-text side channel — QA/checker results,
+  terminology decisions, job remarks. Stored only here, never in the body; returned by
+  `get_section_translation` / `list_section_artifacts`; not hygiene-checked.
 
 Freshness is **derived, never stored**: each read recomputes the section's current
 hash and compares it with the sidecar.
@@ -597,18 +600,25 @@ model calls), so `index build`, `segment`, and `wiki` never delete it.
 A translation body (and an annotation's `summary`/`gloss`) is **publication-clean
 book content**: it is reused by later jobs and printed in reading PDFs. Job
 diagnostics belong in the chat reply, the job log, or a report JSON — never in the
-artifact. `bookgraph.artifact_hygiene` recognises them line by line, in prose only:
+artifact, and each has its own channel: QA/checker results and terminology
+decisions go in the sidecar's `notes` (`write_section_translation(..., notes=...)`),
+`MEDIA:` markers and progress lines in the agent's chat reply, export status in the
+export report. The `bookgraph-reader` skills tell agents to use them.
+
+As a safety net behind those channels, `bookgraph.artifact_hygiene` recognises a
+deliberately small set of lines that are never book content, in prose only:
 fenced and indented code blocks and inline code spans are skipped, so a code listing
 quoting `WARNING: …` or a mention of `` `mark_read` `` is content. The rules are kept
 narrow — a false positive refuses a faithful translation — so look-alike book text
-(`Media: print and radio`, `Self-check: …`, `QA: quality assurance`, a heading
-`The Iliad (original)`, a site link `[docs](/docs/intro)`) is not flagged:
+(`Media: print and radio`, a heading `The Iliad (original)`, a site link
+`[docs](/docs/intro)`) is not flagged. Free-form QA prose is not guessed at: any rule
+loose enough to catch it also refuses real text (`QA: quality assurance`,
+`Self-check: …`); it belongs in `notes`.
 
 | Code | Example |
 | --- | --- |
 | `media_marker` | `MEDIA:/Users/me/exports/ddia.vi-progress.pdf` — upper-case `MEDIA:` followed by a local path; a chat delivery marker, valid only in the final reply. |
 | `progress_footer` | `Đã lưu cache/enrich và mark read: ddia.ch1`, `called mark_read`, `Marked read: …` |
-| `qa_note` | a qualified label (`**QA note:** …`, `QA/checker notes: …`, `Validation notes: …`, `Ghi chú QA: …`), a `[QA]` tag, or a bare `QA:` / `Checker:` followed by a verdict (`QA: passed`, `✅ QA: ok`, `Checker: 0 issues`) |
 | `export_status` | `Translation status unknown`, `Untranslated — original text`, `Missing asset: …`, or `(original)` / `(tracked)` / `(untracked)` / `(may be outdated)` alone on its line |
 | `export_warning` | an export warning code (`asset_missing`, `translation_stale`, …) or `Renderer warning: …` |
 | `absolute_asset_link` | an image pointing at an absolute local path: `![…](/Users/…/fig1.png)`, `file:` or `C:\` targets, `<img src="/…">`, or a reference definition of an image file (`[fig]: /Users/…/fig1.png`). Link parsed assets relatively (e.g. `images/fig1.png`). Plain links and protocol-relative `//host/…` URLs are not assets. |
@@ -621,7 +631,7 @@ Enforcement:
 - `complete_reading_batch` / `validate_reading_batch` block on a body written by path
   convention or a stored annotation that carries them (`translation_contaminated`,
   `annotation_contaminated`). A stored summary/gloss is one line, so it is scanned in
-  *collapsed* mode: the line-start rules (`MEDIA:`, `QA: passed`) also match
+  *collapsed* mode: the line-start rules (`MEDIA:`, `Renderer warning:`) also match
   mid-text. Required `.md`/`.markdown`/`.txt` `artifacts` are checked only with
   `clean_artifacts=true` (`artifact_contaminated`), since a run/QA log legitimately
   carries such lines.

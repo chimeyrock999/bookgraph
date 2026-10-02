@@ -71,7 +71,9 @@ Optional translation cache tools (when the user wants sections translated):
   `stale`/`missing`, or a fresh prose-only translation of a section with
   figures/tables, means translate again.
 - `write_section_translation(doc_id, section_id, lang, content, includes_assets=...,
-  source_section_hash=<current_section_hash>)` — cache a new translation.
+  source_section_hash=<current_section_hash>, notes=...)` — cache a new
+  translation. `content` is book content only; QA/checker results and terminology
+  decisions go in `notes` (see *Artifact channels* below).
 - `list_section_artifacts(doc_id=None, lang=None)` — list cached translations and
   their freshness.
 
@@ -129,6 +131,32 @@ Optional translation cache tools (when the user wants sections translated):
 - Only `create_plan`, `mark_read`, and `complete_reading_batch` write reading
   progress; `annotate_section` and `write_section_translation` write their
   artifacts. Treat all other tools as read-only.
+
+## Artifact channels
+
+A cached translation is reused by later runs and printed in the reading PDF, so it
+holds **book content only**. Keep the channels separate:
+
+- translated headings/prose/tables/figures → `content` of `write_section_translation`;
+- QA/checker results, terminology decisions, doubts about the source → `notes` of
+  `write_section_translation` (stored beside the translation, never exported);
+- `MEDIA:/path` delivery markers, "Đã lưu cache/enrich và mark read: …", progress and
+  job status → the final chat reply only;
+- export coverage/freshness/missing assets → the export's `.report.json`.
+
+Rules:
+
+- Write translations only through `write_section_translation`; never create or edit
+  files under `translations/` directly, and never paste the chat reply into `content`.
+- Link figures relatively to the parsed assets (`images/fig1-1.png`), never by
+  absolute path.
+- Never copy export labels (`(original)`, `(untracked)`, "Translation status
+  unknown", "Missing asset: …") into a translation.
+- The write tools refuse `MEDIA:` markers, cache/mark-read footers, export labels and
+  absolute asset paths in `content` or an annotation summary/gloss. If refused, move
+  those lines to `notes` or the chat reply and retry; do not reword them to pass.
+- After translating, advance with `complete_reading_batch(plan_id,
+  translation_lang=...)`, which blocks on a contaminated translation.
 
 ## Client-specific packaging
 

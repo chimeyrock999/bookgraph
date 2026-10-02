@@ -107,10 +107,40 @@ chat), reuse the cache instead of retranslating:
    section that has assets left out figures/tables; mention that or redo it.
 2. Otherwise (`missing`, `stale`, or `untracked` you don't trust) translate the
    section's real text, then `write_section_translation(doc_id, section_id, lang,
-   content, includes_assets=..., source_section_hash=<current_section_hash>)` so
-   the next run reuses it.
+   content, includes_assets=..., source_section_hash=<current_section_hash>,
+   notes=...)` so the next run reuses it.
 3. `list_section_artifacts(doc_id, lang)` shows every cached translation and which
    are `stale` after a re-segment.
+
+### Three channels — never mix them
+
+A cached translation is reused by later runs and printed in the reading PDF, so it
+must hold **book content only**. Everything else has its own place:
+
+| What | Where it goes |
+| --- | --- |
+| The translated section: headings, prose, tables, figures | `content` of `write_section_translation` |
+| QA/checker results, terminology decisions, "kept X untranslated", doubts about the source | `notes` of `write_section_translation` (stored beside the translation, returned by `get_section_translation`, never exported) |
+| `MEDIA:/path` delivery markers, "Đã lưu cache/enrich và mark read: …", progress, job status | your **final chat reply** only |
+| Coverage, freshness, missing assets of an export | the export's `.report.json` / CLI output — read it, don't copy it into a translation |
+
+Rules:
+
+- Write translations **only** through `write_section_translation`. Never create or
+  edit files under `translations/` directly, and never paste your chat reply (or a
+  part of it) into `content`.
+- Link figures **relatively** to the parsed assets (`images/fig1-1.png`), never by
+  absolute path; `MEDIA:` belongs to the chat reply, not to `content`.
+- Don't translate export output back into the cache: labels such as `(original)`,
+  `(untracked)`, *Translation status unknown* or *Missing asset: …* are BookGraph
+  status, not book text.
+- The write tools refuse a `content` (or annotation summary/gloss) carrying
+  `MEDIA:` markers, cache/mark-read footers, export labels, or absolute asset paths.
+  If a write is refused, move those lines to `notes` or the chat reply and retry —
+  don't reword them to slip past the check.
+- After translating, advance with `complete_reading_batch(plan_id,
+  translation_lang=..., ...)`, not plain `mark_read`: it verifies the cached
+  translation (and blocks on a contaminated one) before marking the batch read.
 
 ## Behavior
 

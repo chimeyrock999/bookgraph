@@ -1429,6 +1429,7 @@ class SectionArtifactView(BaseModel):
     section_has_assets: bool = False
     model: str | None = None
     created_at: str | None = None
+    notes: str | None = None
     content: str | None = None
 
 
@@ -1471,6 +1472,7 @@ def _artifact_view(
         section_has_assets=_section_has_assets(workspace, section) if section else False,
         model=artifact.model if artifact else None,
         created_at=artifact.created_at if artifact else None,
+        notes=artifact.notes if artifact else None,
         content=content,
     )
 
@@ -1514,6 +1516,7 @@ def write_section_translation(
     includes_assets: bool = False,
     model: str | None = None,
     source_section_hash: str | None = None,
+    notes: str | None = None,
 ) -> SectionArtifactView:
     """Cache a section translation and register it against the section's content.
 
@@ -1524,9 +1527,11 @@ def write_section_translation(
     the translation.
 
     ``content`` must be the translated book content only: a write carrying a
-    ``MEDIA:`` delivery marker, a cache/mark-read progress footer, a QA/checker note,
-    an export status label, or an absolute asset link is refused (link parsed assets
-    relatively; keep diagnostics in the reply or job log).
+    ``MEDIA:`` delivery marker, a cache/mark-read progress footer, an export status
+    label, or an absolute asset link is refused (link parsed assets relatively).
+    Everything else the job wants to record about the translation — QA/checker results,
+    terminology decisions — goes in ``notes``: stored in the registry sidecar, returned
+    by ``get_section_translation``, never part of the body or the export.
     """
 
     resolved_doc_id = _validate_id(doc_id, "doc_id")
@@ -1550,6 +1555,7 @@ def write_section_translation(
             includes_assets=includes_assets,
             model=model,
             created_at=datetime.now(UTC).isoformat(),
+            notes=notes,
         )
     except ArtifactHygieneError as exc:
         raise ReadingServiceError(str(exc)) from exc

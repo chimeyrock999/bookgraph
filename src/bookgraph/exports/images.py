@@ -28,6 +28,8 @@ from bookgraph.exports.models import (
     ASSET_REMOTE,
     ASSET_UNSUPPORTED,
     ExportWarning,
+    WarningColumn,
+    WarningOrigin,
 )
 from bookgraph.utils import is_url
 from bookgraph.workspace import WorkspacePaths
@@ -59,11 +61,13 @@ class AssetCounter:
 @dataclass(frozen=True)
 class AssetOrigin:
     """Where an asset reference was read from, for its warning: a workspace-relative
-    file (translation artifact, ``document.json`` or ``sections.jsonl``) and, for a
-    reference inside a parsed block, that block's id."""
+    file (translation artifact, ``document.json`` or ``sections.jsonl``), for a
+    reference inside a parsed block that block's id, and whether the file is the
+    translation or the original source."""
 
     source_path: str | None
     block_id: str | None = None
+    content: WarningOrigin = "source"
 
 
 @dataclass(kw_only=True)
@@ -71,13 +75,15 @@ class ImageEmbedder:
     """Image embedding and warning collection for one export run.
 
     A base class: the export assembler adds the section rendering on top and shares
-    ``warnings`` with it.
+    ``warnings`` with it. ``column`` is the rendering being assembled, recorded on
+    every warning raised meanwhile.
     """
 
     workspace: WorkspacePaths
     parsed_dir: Path
     show_status: bool = False
     warnings: list[ExportWarning] = field(default_factory=list)
+    column: WarningColumn = "mixed"
     _data_uris: dict[Path, str | None] = field(default_factory=dict)
 
     def _parsed_bases(self) -> list[Path]:
@@ -91,6 +97,7 @@ class ImageEmbedder:
         counter: AssetCounter,
         source: str | None,
         block_id: str | None = None,
+        content: WarningOrigin = "source",
     ) -> None:
         """Embed every image as a data: URI, or drop it (a placeholder when debugging).
 
@@ -101,7 +108,7 @@ class ImageEmbedder:
         the reader sees the caption that follows it and no empty gap.
         """
 
-        origin = AssetOrigin(source, block_id)
+        origin = AssetOrigin(source, block_id, content)
         for position, token in enumerate(tokens):
             if token.type == "html_block":
                 missing_before = counter.missing
@@ -246,7 +253,11 @@ class ImageEmbedder:
         section_id: str,
         reference: str | None = None,
         origin: AssetOrigin | None = None,
+        *,
+        content: WarningOrigin | None = None,
     ) -> None:
+        """Record a warning; ``content`` defaults to the asset origin's, else ``source``."""
+
         self.warnings.append(
             ExportWarning(
                 code=code,
@@ -255,6 +266,8 @@ class ImageEmbedder:
                 reference=reference,
                 source_path=origin.source_path if origin else None,
                 block_id=origin.block_id if origin else None,
+                column=self.column,
+                origin=content or (origin.content if origin else "source"),
             )
         )
 

@@ -80,6 +80,7 @@ from bookgraph.quality import (
     section_warnings,
 )
 from bookgraph.sections import read_sections
+from bookgraph.translation_assets import check_translation_assets, translation_link_bases
 from bookgraph.translation_structure import (
     check_section_translation,
     describe_structure_issues,
@@ -322,12 +323,19 @@ class _Assembler(ImageEmbedder):
         """The bilingual left column under its source title, with its asset counts.
 
         It takes the outline depth, like the mixed column, so both headings match.
+        Warnings raised here are tagged ``column="original"``. Every mixed rendering is
+        built first, so a fallback row's original (cached, warned once) is already
+        tagged ``mixed``: only problems ``--mode translated`` would not show get here.
         """
 
         section, counter = node.section, AssetCounter()
-        body = heading(node.depth, section.title) + self._original_body(
-            section, node.depth, counter
-        )
+        self.column = "original"
+        try:
+            body = heading(node.depth, section.title) + self._original_body(
+                section, node.depth, counter
+            )
+        finally:
+            self.column = "mixed"
         return body, counter.embedded, counter.missing
 
     def _entry(
@@ -379,6 +387,7 @@ class _Assembler(ImageEmbedder):
                     f"translation artifact {relative} is unreadable ({reason}); "
                     "using the fallback policy instead",
                     section.id,
+                    content="translation",
                 )
             return None
         try:
@@ -389,6 +398,7 @@ class _Assembler(ImageEmbedder):
                 f"translation artifact {relative} is unreadable ({exc}); "
                 "using the fallback policy instead",
                 section.id,
+                content="translation",
             )
             return None
         frontmatter, body = split_frontmatter(raw)
@@ -397,15 +407,22 @@ class _Assembler(ImageEmbedder):
                 TRANSLATION_EMPTY,
                 f"translation artifact {relative} is empty; using the fallback policy instead",
                 section.id,
+                content="translation",
             )
             return None
         self._structure_warnings(section, body, artifact)
+        self._asset_warnings(section, body, state)
 
         tokens = self._md.parse(body)
         heading_title = _first_heading_text(tokens)
         _shift_headings(tokens, depth)
         self._rewrite_images(
-            tokens, section.id, [artifact.parent, *self._parsed_bases()], counter, relative
+            tokens,
+            section.id,
+            self._translation_bases(artifact),
+            counter,
+            relative,
+            content="translation",
         )
         fm_title = frontmatter.get("title")
         title = heading_title or (fm_title if isinstance(fm_title, str) and fm_title else None)
@@ -426,9 +443,7 @@ class _Assembler(ImageEmbedder):
         text, but intra-book links and image paths in the body only work as written.
         """
 
-        resolves = local_asset_resolver(
-            self.workspace.root, [artifact.parent, *self._parsed_bases()]
-        )
+        resolves = local_asset_resolver(self.workspace.root, self._translation_bases(artifact))
         issues = check_section_translation(
             section, body, blocks=self.blocks, asset_resolves=resolves
         )
@@ -438,6 +453,7 @@ class _Assembler(ImageEmbedder):
                 f"translation {_relative(self.workspace, artifact)} changed structural "
                 f"Markdown of its section: {describe_structure_issues(issues)}",
                 section.id,
+                content="translation",
             )
 
     def _freshness_warnings(
@@ -450,6 +466,7 @@ class _Assembler(ImageEmbedder):
                 f"translation {relative} was made from an older version of the section; "
                 "rendered with a 'may be outdated' note",
                 section.id,
+                content="translation",
             )
         elif freshness == "untracked":
             self._warn(
@@ -458,26 +475,55 @@ class _Assembler(ImageEmbedder):
                 "registration), so its freshness is unknown; register it with "
                 "write_section_translation",
                 section.id,
+                content="translation",
             )
-        # The registry's reuse rule: a translation is complete only when it carried the
-        # section's figures/tables, or the section has none. Untracked bodies have no
-        # ``includes_assets`` record to check.
+
+    def _translation_bases(self, artifact: Path) -> list[Path]:
+        return translation_link_bases(self.workspace.root, self.parsed_dir, artifact.parent)
+
+    def _asset_warnings(self, section: Section, body: str, state: TranslationState) -> None:
+        """Flag a translation that left out its section's figures/tables.
+
+        The registry's reuse rule: a translation is complete only when it carried the
+        section's figures/tables, or the section has none. The sidecar's
+        ``includes_assets`` is not trusted for that: every staged asset must be linked
+        from the body, whatever the sidecar says (and for an untracked body too). The
+        claim only stands for assets whose file was never staged, which no body links;
+        an untracked body has no claim, so those are not held against it.
+        """
+
+        check = check_translation_assets(
+            section,
+            body,
+            blocks=self.blocks,
+            root=self.workspace.root,
+            parsed_dir=self.parsed_dir,
+            body_dir=state.paths.body.parent,
+        )
+        relative = _relative(self.workspace, state.paths.body)
+        document = _relative(self.workspace, self.parsed_dir / "document.json")
+        for asset in check.missing:
+            self._warn(
+                TRANSLATION_MISSING_ASSETS,
+                f"translation {relative} does not link the section's {asset.type} "
+                f"{asset.block_id} ({asset.link}); it is not in the translated text",
+                section.id,
+                asset.link,
+                AssetOrigin(document, asset.block_id),
+                content="translation",
+            )
         if (
-            state.artifact is not None
-            and not state.artifact.includes_assets
-            and self._has_assets(section)
+            not check.missing
+            and state.artifact is not None
+            and not check.includes_assets(state.artifact.includes_assets)
         ):
             self._warn(
                 TRANSLATION_MISSING_ASSETS,
                 f"translation {relative} is prose-only (includes_assets=false) but the "
-                "section has figures/tables; they are not in this export",
+                "section has figures/tables; they are not in the translated text",
                 section.id,
+                content="translation",
             )
-
-    def _has_assets(self, section: Section) -> bool:
-        """Whether the section owns any figure/table asset block (staged or not)."""
-
-        return bool(asset_summaries(self.blocks[b] for b in section.block_ids if b in self.blocks))
 
     def _original_body(self, section: Section, depth: int, counter: AssetCounter) -> str:
         # Warnings (with their source file/block origin) are raised on the first render.
@@ -616,8 +662,8 @@ def write_translated_export(
 
     if strict and export.report.strict_warnings:
         raise ExportError(
-            f"{len(export.report.strict_warnings)} problem(s) in strict mode: "
-            + "; ".join(w.message for w in export.report.strict_warnings)
+            f"{export.report.strict_summary()}: "
+            + "; ".join(w.describe() for w in export.report.strict_warnings)
         )
     output.parent.mkdir(parents=True, exist_ok=True)
     partial = output.with_name(f".{output.name}.partial")

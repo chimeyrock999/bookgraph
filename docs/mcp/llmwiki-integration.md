@@ -65,9 +65,15 @@ Properties of the bridge:
 - **Provenance preserved** — each staged file's frontmatter records `bookgraph_doc_id` and `bookgraph_section_id`.
 - **Canonical state untouched** — the bridge only *writes* derived files into the isolated `llmwiki/` subtree; it never mutates BookGraph's canonical inputs and never touches BookGraph's own `wiki/` or `sources/` trees.
 
+`--compile` runs `llmwiki compile` with the `llmwiki/` project root as its working directory: `llmwiki compile` (like every llmwiki command except `serve`) has no `--root` option and compiles the current directory. `--print` emits the equivalent shell-quoted command:
+
+```bash
+cd /path/to/workspace/llmwiki && llmwiki compile
+```
+
 ## Serving the compiled llmwiki project
 
-The llmwiki project root is the workspace's `llmwiki/` subtree. Serve it with the real `llm-wiki-compiler` v1.1 contract — `llmwiki serve --root <project>` (there is **no** positional root argument):
+The llmwiki project root is the workspace's `llmwiki/` subtree. Serve it with the real `llm-wiki-compiler` contract — `llmwiki serve --root <project>` (there is **no** positional root argument; `serve` is the only llmwiki command that takes `--root`):
 
 ```bash
 bookgraph llmwiki serve /path/to/workspace          # runs `llmwiki serve --root /path/to/workspace/llmwiki`

@@ -42,7 +42,7 @@ def _print_report(report: ExportReport) -> None:
         f"({report.coverage * 100:.1f}%)"
     )
     for warning in report.warnings:
-        line = f"warning: {warning.code}: {warning.section_id}: {warning.message}"
+        line = f"warning: {warning.code}: {warning.section_id}: {warning.describe()}"
         if warning.source_path:
             line += f" (in {warning.source_path})"
         typer.echo(line)
@@ -95,7 +95,8 @@ def export_translated_pdf(
             help="Fail instead of exporting when an asset is missing, a translation is "
             "stale, a translation left out the section's figures/tables, or a translation "
             "changed its section's link targets, anchors, or paths. In bilingual mode this "
-            "includes original-column assets of translated sections.",
+            "includes original-column assets of translated sections, reported apart as "
+            "'[original column]' source-asset problems.",
         ),
     ] = False,
     show_status: Annotated[
@@ -169,10 +170,7 @@ def export_translated_pdf(
         typer.echo("export: (check only, not written)")
         # A preflight must fail exactly when the real export would be refused.
         if strict and export.report.strict_warnings:
-            typer.echo(
-                f"error: {len(export.report.strict_warnings)} problem(s) in strict mode",
-                err=True,
-            )
+            typer.echo(f"error: {export.report.strict_summary()}", err=True)
             raise typer.Exit(code=1)
         return
 

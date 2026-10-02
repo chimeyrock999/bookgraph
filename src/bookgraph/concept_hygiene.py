@@ -148,19 +148,21 @@ class ReviewItem(BaseModel):
 
 
 def _stem(token: str) -> str:
-    """A tiny plural folder: ``snapshots``→``snapshot``, ``indexes``→``index``.
+    """A tiny plural folder used as a comparison key (not a display form).
 
-    Only sibilant plurals drop ``-es`` (``classes``, ``indexes``, ``batches``,
-    ``hashes``); any other ``-ses`` word just drops the ``s``
-    (``databases``→``database``).
+    ``-ies`` becomes ``-y``. A trailing ``s`` is dropped (except after ``ss``/``us``/
+    ``is``). Then a trailing ``e`` after a sibilant (``se``/``xe``/``ze``/``che``/
+    ``she``) is dropped, so singular and plural meet on one key however English spells
+    the plural: ``cache``/``caches`` → ``cach``, ``batch``/``batches`` → ``batch``,
+    ``database``/``databases`` → ``databas``, ``status``/``statuses`` → ``status``.
     """
 
     if len(token) > 4 and token.endswith("ies"):
         return token[:-3] + "y"
-    if len(token) > 4 and token.endswith(("sses", "xes", "ches", "shes")):
-        return token[:-2]
     if len(token) > 3 and token.endswith("s") and not token.endswith(("ss", "us", "is")):
-        return token[:-1]
+        token = token[:-1]
+    if len(token) > 3 and token.endswith(("se", "xe", "ze", "che", "she")):
+        token = token[:-1]
     return token
 
 
@@ -197,7 +199,7 @@ class _Profile:
         """
 
         keys = {f"t:{stem}" for stem in self.stem_set}
-        keys.add(f"a:{self.initials if len(self.stems) > 1 else self.node.slug}")
+        keys.add(f"a:{self.initials if len(self.stems) > 1 else self.stems[0]}")
         keys.add(f"p:{self.node.slug[:3]}")
         keys.add(f"s:{self.node.slug[-3:]}")
         return keys

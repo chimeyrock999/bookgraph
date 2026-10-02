@@ -59,6 +59,8 @@ def test_suggests_acronyms_subsumed_phrases_and_spelling_variants() -> None:
         [
             _node("merge-on-read", mention_count=4),
             _node("mor"),
+            _node("access-control-lists", mention_count=2),
+            _node("acls"),
             _node("metadata-file", mention_count=3),
             _node("latest-metadata-file-pointer"),
             _node("partition-evolution", mention_count=2),
@@ -67,6 +69,7 @@ def test_suggests_acronyms_subsumed_phrases_and_spelling_variants() -> None:
     )
 
     assert ("mor", "merge-on-read", "acronym") in pairs
+    assert ("acls", "access-control-lists", "acronym") in pairs  # plural acronym
     assert (
         "latest-metadata-file-pointer",
         "metadata-file",
@@ -83,8 +86,21 @@ def test_ses_plurals_fold_to_their_singular() -> None:
             _node("distributed-databases"),
             _node("class", mention_count=2),
             _node("classes"),
+            _node("cache", mention_count=2),
+            _node("caches"),
+            _node("batch", mention_count=2),
+            _node("batches"),
+            _node("status", mention_count=2),
+            _node("statuses"),
         ]
     )
+
+    for singular in ("cache", "batch", "status"):
+        assert (
+            f"{singular}{'s' if singular == 'cache' else 'es'}",
+            singular,
+            "inflection or word-order variant",
+        ) in pairs
 
     assert ("databases", "database", "inflection or word-order variant") in pairs
     assert ("classes", "class", "inflection or word-order variant") in pairs
@@ -92,12 +108,18 @@ def test_ses_plurals_fold_to_their_singular() -> None:
     # check now fires, but a lone word inside a phrase is the head-noun case, so it is
     # scored below the default threshold rather than suggested.
     scored = suggest_merges(
-        [_node("database", mention_count=3), _node("distributed-databases")],
+        [
+            _node("database", mention_count=3),
+            _node("distributed-databases"),
+            _node("cache", mention_count=3),
+            _node("distributed-caches"),
+        ],
         ConceptRegistry(),
         threshold=0.0,
     )
-    assert [(s.alias, s.canonical, s.score) for s in scored] == [
-        ("distributed-databases", "database", 0.4)
+    assert sorted((s.alias, s.canonical, s.score) for s in scored) == [
+        ("distributed-caches", "cache", 0.4),
+        ("distributed-databases", "database", 0.4),
     ]
 
 

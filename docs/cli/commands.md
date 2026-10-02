@@ -199,6 +199,28 @@ Current auto-routing:
 
 Reason for raw PDF failure: the MinerU adapter consumes MinerU `*_middle.json`; it does not invoke MinerU from PDF. `bookgraph parse-book` owns raw PDF execution.
 
+Routing is deterministic: it depends only on the source name, never on which extras
+are installed, so the same file picks the same adapter on every machine. The adapter
+used is printed as `parser: <name>` and recorded in `document.json` as
+`metadata.parser`.
+
+#### Non-PDF default: MarkItDown
+
+EPUB, DOCX and the other Office/HTML/text types route to `markitdown`, also when the
+`mineru` extra is installed. MinerU 4 can parse these formats too (`flash` tier only,
+no models), but the comparison on issue 87 found it not ready to be the default
+(<https://github.com/chimeyrock999/bookgraph/issues/87#issuecomment-5956663497>):
+
+- EPUB: both adapters give the same heading structure and sections, while MinerU costs a
+  1.2 GB extra, and through `mineru-middle-json` loses the internal links, anchors and
+  `<source.epub>!<member>` provenance that exports rely on.
+- DOCX: MinerU's own output keeps merged and nested tables and images, but
+  `mineru-middle-json` drops native table bodies, and MinerU drops footnotes.
+
+An explicit MinerU path for non-PDF sources is follow-up work (issue 89). Until then,
+`--parser mineru-middle-json` accepts only MinerU `*_middle.json` output and
+`parse-book` runs MinerU on raw PDFs only.
+
 `mineru-middle-json` reads MinerU 4's `docvortex.middle` schema 2.x, and still reads
 MinerU 3.x `pdf_info` middle JSON staged before the MinerU 4 migration. An unknown
 `docvortex.middle` major version fails instead of parsing to an empty document.

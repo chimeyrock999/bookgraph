@@ -23,9 +23,11 @@ class ParserConfig:
 @dataclass(frozen=True)
 class MinerUConfig:
     runner: str = "mineru"
-    command: str = "mineru"
+    command: str = "mineru-kit"
     profile: str = "balanced"
-    method: str | None = None
+    tier: str | None = None
+    ocr_mode: str | None = None
+    # Removed in MinerU 4; still read so a stale config fails with a migration hint.
     backend: str | None = None
     effort: str | None = None
     formula: bool | None = None
@@ -83,9 +85,12 @@ def load_config(workspace: WorkspacePaths) -> BookGraphConfig:
         ),
         mineru=MinerUConfig(
             runner=_string_at(payload, ["mineru", "runner"], "mineru"),
-            command=_string_at(payload, ["mineru", "command"], "mineru"),
+            command=_string_at(payload, ["mineru", "command"], "mineru-kit"),
             profile=_string_at(payload, ["mineru", "profile"], "balanced"),
-            method=_optional_string_at(payload, ["mineru", "method"]),
+            tier=_optional_string_at(payload, ["mineru", "tier"]),
+            # ``method`` is the 3.x name of the same auto|txt|ocr switch.
+            ocr_mode=_optional_string_at(payload, ["mineru", "ocr_mode"])
+            or _optional_string_at(payload, ["mineru", "method"]),
             backend=_optional_string_at(payload, ["mineru", "backend"]),
             effort=_optional_string_at(payload, ["mineru", "effort"]),
             formula=_optional_bool_at(payload, ["mineru", "formula"]),

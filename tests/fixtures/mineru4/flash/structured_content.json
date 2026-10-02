@@ -1,0 +1,214 @@
+{
+  "pages": [
+    {
+      "page_idx": 0,
+      "blocks": [
+        {
+          "type": "header",
+          "bbox": [
+            0.121,
+            0.039,
+            0.268,
+            0.05
+          ],
+          "content": "Designing Data Systems"
+        },
+        {
+          "type": "text",
+          "bbox": [
+            0.121,
+            0.107,
+            0.526,
+            0.181
+          ],
+          "content": "Designing Data Systems A short book about reliable data systems."
+        },
+        {
+          "type": "page_number",
+          "bbox": [
+            0.504,
+            0.94,
+            0.513,
+            0.952
+          ],
+          "content": "1"
+        }
+      ]
+    },
+    {
+      "page_idx": 1,
+      "blocks": [
+        {
+          "type": "header",
+          "bbox": [
+            0.121,
+            0.039,
+            0.268,
+            0.05
+          ],
+          "content": "Designing Data Systems"
+        },
+        {
+          "type": "paragraph_title",
+          "bbox": [
+            0.121,
+            0.111,
+            0.412,
+            0.135
+          ],
+          "level": 2,
+          "content": "Chapter 1 Replication"
+        },
+        {
+          "type": "paragraph_title",
+          "bbox": [
+            0.121,
+            0.163,
+            0.398,
+            0.182
+          ],
+          "level": 2,
+          "content": "1.1 Leaders and Followers"
+        },
+        {
+          "type": "text",
+          "bbox": [
+            0.121,
+            0.202,
+            0.648,
+            0.24
+          ],
+          "content": "Replication keeps copies of the same data on several machines. A leader accepts writes and followers apply the change log."
+        },
+        {
+          "type": "image",
+          "bbox": [
+            0.121,
+            0.273,
+            0.592,
+            0.439
+          ],
+          "content": "",
+          "captions": [
+            {
+              "bbox": [
+                0.121,
+                0.454,
+                0.38,
+                0.465
+              ],
+              "content": "Figure 1-1. A leader and two followers."
+            }
+          ],
+          "footnotes": [],
+          "image_source": "images/page_1_image_4.jpg"
+        },
+        {
+          "type": "page_number",
+          "bbox": [
+            0.504,
+            0.94,
+            0.513,
+            0.952
+          ],
+          "content": "2"
+        }
+      ]
+    },
+    {
+      "page_idx": 2,
+      "blocks": [
+        {
+          "type": "header",
+          "bbox": [
+            0.121,
+            0.039,
+            0.268,
+            0.05
+          ],
+          "content": "Designing Data Systems"
+        },
+        {
+          "type": "paragraph_title",
+          "bbox": [
+            0.121,
+            0.111,
+            0.368,
+            0.135
+          ],
+          "level": 2,
+          "content": "Chapter 2 Storage"
+        },
+        {
+          "type": "paragraph_title",
+          "bbox": [
+            0.121,
+            0.163,
+            0.407,
+            0.182
+          ],
+          "level": 2,
+          "content": "2.1 Log-Structured Engines"
+        },
+        {
+          "type": "text",
+          "bbox": [
+            0.121,
+            0.202,
+            0.627,
+            0.24
+          ],
+          "content": "Storage engines append records to a log and compact it later. Indexes speed up reads at the cost of slower writes."
+        },
+        {
+          "type": "page_number",
+          "bbox": [
+            0.504,
+            0.94,
+            0.513,
+            0.952
+          ],
+          "content": "3"
+        }
+      ]
+    }
+  ],
+  "metadata": {
+    "file_suffix": "pdf",
+    "producer": {
+      "name": "mineru",
+      "version": "4.0.10"
+    },
+    "document": {
+      "page_count": 3,
+      "page_count_kind": "physical"
+    }
+  },
+  "extensions": {
+    "mineru": {
+      "tier": "flash",
+      "parse_mode": "txt"
+    },
+    "docvortex_layout": {
+      "version": 1,
+      "pages": [
+        {
+          "page_idx": 0,
+          "width_pt": 595.0,
+          "height_pt": 842.0
+        },
+        {
+          "page_idx": 1,
+          "width_pt": 595.0,
+          "height_pt": 842.0
+        },
+        {
+          "page_idx": 2,
+          "width_pt": 595.0,
+          "height_pt": 842.0
+        }
+      ]
+    }
+  },
+  "is_full_document": true
+}

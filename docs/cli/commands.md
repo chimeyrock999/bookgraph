@@ -197,7 +197,11 @@ Current auto-routing:
 | Office/HTML/text extensions supported in routing | `markitdown` |
 | raw `.pdf` | fail unless `--parser` is explicit |
 
-Reason for raw PDF failure: the current MinerU adapter consumes MinerU `*_middle.json`; it does not invoke MinerU from PDF. A future parser-runner command should own raw PDF execution.
+Reason for raw PDF failure: the MinerU adapter consumes MinerU `*_middle.json`; it does not invoke MinerU from PDF. `bookgraph parse-book` owns raw PDF execution.
+
+`mineru-middle-json` reads MinerU 4's `docvortex.middle` schema 2.x, and still reads
+MinerU 3.x `pdf_info` middle JSON staged before the MinerU 4 migration. An unknown
+`docvortex.middle` major version fails instead of parsing to an empty document.
 
 ### Writes
 
@@ -830,13 +834,16 @@ docstrings (`write_section_translation`, `mark_read`) and both skills repeat the
 - `get_section_translation(doc_id, section_id, lang, include_content=True)` → the
   section's cached translation and its freshness: `status` (`fresh` / `stale` /
   `untracked` / `missing`, see `artifacts.md`), `path`, `metadata_path`,
-  `source_section_hash`, `current_section_hash`, `includes_assets`,
-  `section_has_assets` (whether the section owns any figure/table block), `model`,
-  `created_at`, `notes` (the writer's side-channel remarks), `content` (the body,
-  unless `include_content=False`), and `structure_issues` (the link destinations,
-  image paths, reference definitions, HTML anchors, and heading ids the body dropped
-  or added relative to the section; see the structure rule in `artifacts.md`). A
-  missing translation is a normal result, not an error.
+  `source_section_hash`, `current_section_hash`, `includes_assets` (verified against
+  the body; `null` for an untracked body), `missing_assets` (the section's staged
+  figures/tables the body does not link, each with `block_id`, `type`, `link`,
+  `reference`, `caption`), `section_has_assets` (whether the section owns any
+  figure/table block), `model`, `created_at`, `notes` (the writer's side-channel
+  remarks), `content` (the body, unless `include_content=False`), and
+  `structure_issues` (the link destinations, image paths, reference definitions, HTML
+  anchors, and heading ids the body dropped or added relative to the section; see the
+  structure rule in `artifacts.md`). A missing translation is a normal result, not an
+  error.
 - `write_section_translation(doc_id, section_id, lang, content, includes_assets=False,
   model=None, source_section_hash=None, notes=None)` → write
   `translations/<lang>/<doc_id>/<section_id>.md` and its registry sidecar,
@@ -845,10 +852,13 @@ docstrings (`write_section_translation`, `mark_read`) and both skills repeat the
   either way). Empty `content` is rejected. When `source_section_hash` is given and
   differs from the section's current hash the write is refused, so a translation of
   outdated content is never registered as fresh. `content` is the translated book
-  content only, with figures/tables linked by their `AssetRef.link`. `notes`
-  (optional) is the side channel for QA/checker results and terminology decisions:
-  stored in the registry sidecar, returned as `notes` by the read tools, never in the
-  body (see *Artifact channels* in `artifacts.md`).
+  content only, with figures/tables linked by their `AssetRef.link`;
+  `includes_assets=True` for a body that does not link every staged figure/table is
+  refused with the missing links (the sidecar stores the claim, the read tools report
+  it verified against the body). `notes` (optional) is the side channel for
+  QA/checker results and terminology decisions: stored in the registry sidecar,
+  returned as `notes` by the read tools, never in the body (see *Artifact channels*
+  in `artifacts.md`).
 - `list_section_artifacts(doc_id=None, lang=None, type="translation")` → every
   cached translation (filtered by `doc_id` / `lang`) with its status, including
   `orphaned` ones whose section no longer exists; no bodies, but each entry carries
@@ -982,8 +992,8 @@ is only ever matched against loaded plan/section data, never used as a raw path.
 **Status:** Implemented.
 
 Stages BookGraph sections into the workspace's isolated `llmwiki/` project so a
-compiled llmwiki project can be built and served. Each section becomes its own
-bounded `llmwiki/sources/<section_id>.md` file carrying BookGraph provenance
+compiled llmwiki project can be built, served and browsed. Each section becomes its own
+bounded `llmwiki/sources/<doc_id>/<section_id>.md` file carrying BookGraph provenance
 (`bookgraph_doc_id`, `bookgraph_section_id`) — a large book is never routed
 through one truncating full-book ingest. The `llmwiki/` subtree is isolated from
 BookGraph's own `wiki/` and `sources/` trees. See
@@ -994,7 +1004,12 @@ bookgraph llmwiki bridge /path/to/workspace <doc_id>                     # stage
 bookgraph llmwiki bridge /path/to/workspace <doc_id> --plan <plan_id>    # only sections read so far
 bookgraph llmwiki bridge /path/to/workspace <doc_id> --compile           # stage, then `llmwiki compile`
 bookgraph llmwiki bridge /path/to/workspace <doc_id> --compile --print   # print the compile command
+bookgraph llmwiki bridge /path/to/workspace <doc_id> --compile --review --lang vi \
+  --instructions editorial.md --concurrency 3                            # llmwiki 1.4 compile options
 ```
+
+Requires `llm-wiki-compiler` >= 1.4.0 for `--compile` (see
+`docs/mcp/llmwiki-integration.md` for why).
 
 ### Inputs
 
@@ -1003,14 +1018,36 @@ bookgraph llmwiki bridge /path/to/workspace <doc_id> --compile --print   # print
 - `--plan <plan_id>`: restrict staging to sections already read in this reading
   plan, so the compiled wiki compounds with reading progress. Omit to stage every
   section of the document.
-- `--compile`: after staging, run `llmwiki compile --root <workspace>/llmwiki`
-  incrementally.
-- `--print`: with `--compile`, print the compile command instead of running it.
+- `--compile`: after staging, run `llmwiki compile` incrementally with
+  `<workspace>/llmwiki` as the working directory. `llmwiki compile` has no
+  `--root` option (only `llmwiki serve` does); it compiles the current directory.
+- `--print`: with `--compile`, print the compile command instead of running it,
+  as a shell-quoted `cd <workspace>/llmwiki && llmwiki compile`.
+- `--review`: with `--compile`, pass `--review` so generated pages become review
+  candidates under `llmwiki/.llmwiki/candidates/` (approve with
+  `llmwiki review approve <id>`, or browse them in `bookgraph llmwiki view`).
+- `--lang <code>`: with `--compile`, target language of the generated wiki pages
+  (e.g. `vi` for a Vietnamese wiki of an English book).
+- `--instructions <file>`: with `--compile`, a UTF-8 editorial instructions file
+  (max 64 KiB) appended to llmwiki's built-in prompt. The path is resolved against
+  the caller's working directory and passed to llmwiki as an absolute path.
+- `--concurrency <n>`: with `--compile`, max concurrent LLM calls (`n >= 1`).
 
 ### Behavior
 
-- Reads the canonical sections manifest and writes one staged
-  `llmwiki/sources/<section_id>.md` per selected section.
+- Reads the canonical sections manifest and writes one staged source file per
+  selected section, always as a regular file (llmwiki >= 1.3 skips symlinked
+  sources).
+- **Layout**: when the bridge creates the llmwiki project (no `llmwiki/sources/`
+  and no `llmwiki/.llmwiki/config.json` yet), it writes
+  `{"version": 1, "sources": {"recursive": true}}` to `.llmwiki/config.json` and
+  stages `llmwiki/sources/<doc_id>/<section_id>.md`, so the viewer's Sources
+  screen lists each section as `<doc_id>/<section_id>.md` and a book's sections
+  sort together. An existing `config.json` is never rewritten;
+  sources are nested only if it already sets `sources.recursive: true`. A project
+  staged flat (`llmwiki/sources/<section_id>.md`) before this layout keeps the flat
+  layout, so re-running the bridge never leaves a second copy of every section for
+  llmwiki to compile. The `layout:` output line says which one was used.
 - **Idempotent**: an unchanged section is left untouched on disk (stable mtime), so
   llmwiki's incremental compile skips it and a daily batch is added without
   reprocessing the whole book. Reports `staged` / `unchanged` counts.
@@ -1027,7 +1064,9 @@ bookgraph llmwiki bridge /path/to/workspace <doc_id> --compile --print   # print
 - Missing sections manifest → an actionable message pointing at `bookgraph segment`.
 - `--plan` for a plan that does not exist / is for a different document → an
   actionable message.
-- `--print` without `--compile` → rejected (the flag only applies to the compile step).
+- `--print`, `--review`, `--lang`, `--instructions` or `--concurrency` without
+  `--compile` → rejected before staging (they only apply to the compile step).
+- `--instructions` pointing at a missing file → rejected before staging.
 - `--compile` with `llmwiki` not installed (without `--print`) → an actionable message.
 
 ## `bookgraph llmwiki serve`
@@ -1054,7 +1093,10 @@ bookgraph llmwiki serve /path/to/workspace --print
 ### Behavior
 
 - Runs `llmwiki serve --root <workspace>/llmwiki` — the real `llm-wiki-compiler`
-  v1.1 contract (`--root <project>`, no positional root) — forwarding its exit code.
+  contract (`--root <project>`, no positional root) — forwarding its exit code.
+  `serve` is the only llmwiki command that takes `--root`; `compile`, `status` and
+  `view` work on the current directory (see `llmwiki bridge --compile` and
+  `llmwiki view`).
 - With `--print`, emits the command with shell-safe quoting instead of running it.
 
 ### Must not do
@@ -1071,6 +1113,51 @@ bookgraph llmwiki serve /path/to/workspace --print
   → an actionable message pointing at `bookgraph llmwiki bridge … --compile`.
 - `llmwiki` not installed / not on PATH (without `--print`) → an actionable message
   telling the user to install `llm-wiki-compiler` or re-run with `--print`.
+
+## `bookgraph llmwiki view`
+
+**Status:** Implemented.
+
+Opens the workspace's compiled llmwiki project in llmwiki's local, read-only web
+viewer (`llmwiki view`, `llm-wiki-compiler` >= 1.4.0). This is BookGraph's wiki
+UI: compiled concept pages with citation chips back to source line ranges,
+sources listed as `<doc_id>/<section_id>.md`, the concept graph, health/citation checks, the
+`--review` queue and full-text search. The reading loop stays in BookGraph MCP.
+See `docs/mcp/llmwiki-integration.md`.
+
+```bash
+bookgraph llmwiki view /path/to/workspace                 # print the URL and keep serving
+bookgraph llmwiki view /path/to/workspace --open          # also open the browser
+bookgraph llmwiki view /path/to/workspace --port 8123
+bookgraph llmwiki view /path/to/workspace --print         # print the command only
+```
+
+### Inputs
+
+- `workspace_path`: workspace/output root. Must already exist.
+- `--open`: open the viewer in the default browser after startup.
+- `--port <n>`: port to bind (`1`–`65535`; default: an OS-assigned port).
+- `--print`: print the resolved command and exit without launching anything (does
+  not require a compiled project).
+
+### Behavior
+
+- Runs `llmwiki view [--port <n>] [--open]` with `<workspace>/llmwiki` as the
+  working directory — `llmwiki view` has no `--root` option and serves the current
+  directory — forwarding its exit code. The viewer binds to `127.0.0.1` only.
+- With `--print`, emits the shell-quoted `cd <workspace>/llmwiki && llmwiki view …`.
+
+### Must not do
+
+- Must not compile, stage sources, or write anything; the viewer is read-only.
+- Must not read or mutate BookGraph's canonical inputs.
+
+### Errors
+
+- Missing workspace directory → `Workspace not found: … Run 'bookgraph init' first.`
+- Project not compiled yet (`llmwiki/.llmwiki/state.json` missing, without `--print`)
+  → an actionable message pointing at `bookgraph llmwiki bridge … --compile`.
+- `llmwiki` not installed / not on PATH (without `--print`) → an actionable message.
 
 ## `bookgraph export translated-pdf`
 
@@ -1106,6 +1193,43 @@ for a section titled as a chapter (*Chapter 3*), so page breaks do not differ be
 chapters of one book. A section whose bookmark sits directly under a bookmark titled
 as a part is a chapter too. Other sections flow inside their chapter. This matters for PDFs: MinerU marks every title as level
 1, so a heading-segmented PDF has a flat manifest that the outline restores.
+
+**Internal links.** Parsed text and translations keep link destinations as the source
+book wrote them (`[Chapter 10](ch10.html#ch_consistency)`, `[intro](#sec_intro)`), but
+the export is one document anchored on section ids. When it renders the page, the
+export rewrites each internal-book `<a href>` (a `#fragment`, or a link to a source
+`.html`/`.htm`/`.xhtml` file) to one of its own anchors, in this order:
+
+1. the fragment is an `id` already on the page → that anchor;
+2. the file names a section: `ch10.html` (or `chapter-10`, `ch10s02`) → the section
+   titled *Chapter 10* (or *10. …*); `app01.html`/`appa.html` → *Appendix A*;
+   `part02.html` → *Part II*; any other file → the section with the same title
+   words (`preface.html` → *Preface*);
+3. the fragment's words, minus a `sec_`/`ch_`/… prefix and the words of the
+   chapter's own title, name one section of that file
+   (`ch10.html#sec_consistency_linearizability` → *Linearizability*). A title with
+   exactly those words wins over titles that only contain them, at any depth
+   (`#sec_indexes` → *Indexes*, not *Transactions and Indexes*). When nothing
+   matches, the first word is retried without, as a per-chapter id slug
+   (`ch03.html#sec_datamodels_normalization` → *Normalization, Denormalization, and
+   Joins*). A file holds its section's subtree or, in a flat outline (MarkItDown puts
+   a chapter title and its sections at one level), the sections after it up to the
+   next *Chapter N* / *Appendix X* / *Part N* (a head with no such title, like a leaf
+   *Preface*, also stops at a same-depth section that has subsections). A
+   fragment-only link is looked up in the linking section's file, then the book;
+4. otherwise a link whose file named a section goes to that section (figure and
+   example fragments such as `ch10.html#fig_x` always do; a fragment-only link has no
+   file to fall back to).
+
+Only the shallowest match counts, and several matches at one depth are ambiguous. An
+unresolved link is left as written and reported as `internal_link_unresolved`.
+Steps 2 and 3 are heuristics over titles: a fragment that abbreviates its section's
+title can match another title that has the abbreviation
+(`ch08.html#sec_transactions_2pc` → *2PL is not 2PC*, not *Two-Phase Commit*), and
+such a wrong target is not reported. A missed link is.
+External URLs (`https:`, `mailto:`, …), absolute paths, and links to images or other
+files are never rewritten, and neither the parsed document nor the translation
+artifacts change. Both `bilingual` columns link to the right column's anchor.
 
 Two reader-facing modes (`--mode`):
 
@@ -1163,13 +1287,17 @@ bookgraph export translated-pdf /path/to/workspace ddia --check           # cove
   not installed is an error.
 - `--strict`: exit `1` without writing anything if any asset is missing, remote, or
   unsupported, a translation is `stale` (`translation_stale`), or a registered
-  translation left out its section's figures/tables (`translation_missing_assets`),
+  translation left out its section's figures/tables (`translation_missing_assets`,
+  checked from the body, not the sidecar's `includes_assets`),
   or a translation changed its section's link targets, anchors, or paths
   (`translation_structure_changed`). An `untracked` translation only warns. In
   `bilingual` mode the left column counts too: a missing original asset of a
   **translated** section is refused, even though `translated` mode never shows it.
   The same workspace can therefore pass `--strict` in `translated` mode and fail it
-  in `bilingual` mode.
+  in `bilingual` mode. Those problems are source assets, not translation problems:
+  their warnings carry `"column": "original"` in the report and print as
+  `[original column] …`, and the strict error counts them apart. Run
+  `--mode translated --strict` to check the reading edition alone.
 - `--show-status`: debug view. Also print status metadata on the reading pages:
   coverage/doc_id/mode/fallback on the title page, TOC status markers (`(original)`,
   `(may be outdated)`, `(not tracked)`, `(skipped)`), the *Untranslated — original
@@ -1235,6 +1363,8 @@ All images are embedded as `data:` URIs, so the output is self-contained.
 - `doc_id`, `lang`, `mode`, `fallback`, and `coverage: <translated>/<total> (<pct>%)`.
 - One `warning: <code>: <section_id>: <message>` line per warning, followed by
   ` (in <source_path>)` when the warning names the file carrying the reference.
+  In `bilingual` mode the message is prefixed with `[original column] ` when the
+  warning's `column` is `original`.
 - `renderer`, `export`, and `report` paths. With `--check` it prints
   `export: (check only, not written)` instead.
 
@@ -1336,16 +1466,16 @@ middle JSON into the canonical `document.json`.
 
 ```bash
 bookgraph parse-book /path/to/workspace <book_id>
-# Fast local text extraction for digital PDFs / weak GPU / Apple Silicon / CPU
+# Born-digital PDF: native text layer, no models (flash tier)
 bookgraph parse-book /path/to/workspace <book_id> --profile fast-text
 # Explicit knobs (each overrides the profile)
 bookgraph parse-book /path/to/workspace <book_id> \
-  --backend pipeline --method txt --no-formula --no-table --no-image-analysis
-# Accurate local GPU/VLM profile for machines with enough VRAM
-bookgraph parse-book /path/to/workspace <book_id> --profile local-gpu --effort high
-# Remote GPU / service-backed backend
+  --tier basic --ocr-mode txt --no-image-analysis
+# Local VLM for machines with enough GPU memory
+bookgraph parse-book /path/to/workspace <book_id> --profile local-gpu
+# Remote MinerU V1 parse service (API key from MINERU_API_KEY)
 bookgraph parse-book /path/to/workspace <book_id> \
-  --backend hybrid-http-client --url http://gpu-box:30000
+  --profile remote-gpu --url http://gpu-box:8000
 # Page range (0-based) and timeout
 bookgraph parse-book /path/to/workspace <book_id> --start-page 0 --end-page 63
 bookgraph parse-book /path/to/workspace <book_id> --timeout-seconds 3600
@@ -1355,48 +1485,50 @@ bookgraph parse-book /path/to/workspace <book_id> --parser mineru-middle-json --
 Options:
 
 - `--runner`: raw-source runner. Default: `[mineru].runner` (`mineru`).
-- `--runner-command`: executable name. Default: `[mineru].command` (`mineru`).
-- `--profile` / `--mineru-profile`: named MinerU profile picking hardware/quality
-  defaults. One of `fast-text | balanced | accurate | local-gpu | remote-gpu`.
+- `--runner-command`: MinerU 4 executable. Default: `[mineru].command` (`mineru-kit`).
+- `--profile` / `--mineru-profile`: named MinerU profile picking a tier for the
+  hardware. One of `fast-text | balanced | accurate | local-gpu | remote-gpu`.
   Default: `[mineru].profile` (`balanced`). Explicit knobs below override it.
-- `--method/-m` / `--mineru-method`: MinerU method `auto | txt | ocr`. Default: profile / `[mineru].method`.
-- `--backend/-b` / `--mineru-backend`: MinerU backend
-  `pipeline | vlm-engine | hybrid-engine | vlm-http-client | hybrid-http-client`. Default: profile / `[mineru].backend`.
-- `--effort` / `--mineru-effort`: `medium | high`. Default: profile / `[mineru].effort`.
-- `--formula/--no-formula`, `--table/--no-table`, `--image-analysis/--no-image-analysis`:
-  toggle MinerU feature passes. Default: profile / `[mineru].*`.
-- `--url/-u` / `--mineru-url`: remote GPU server URL, required by the `*-http-client` backends. Default: `[mineru].url`.
-- `--start-page/-s`, `--end-page/-e`: 0-based page range. Default: `[mineru].start_page` / `end_page`.
+- `--tier` / `--mineru-tier`: MinerU 4 tier `flash | basic | standard | advanced`. Default: profile / `[mineru].tier`.
+- `--ocr-mode` (aliases `--method/-m`, `--mineru-method`): `auto | txt | ocr`. Default: profile / `[mineru].ocr_mode` (or the 3.x key `[mineru].method`).
+- `--image-analysis/--no-image-analysis`: `--no-image-analysis` passes `--disable-image-analysis`. Default: profile / `[mineru].image_analysis`.
+- `--url/-u` / `--mineru-url`: remote MinerU V1 parse service, passed as `--remote-url`; required by `remote-gpu`. The API key comes from `MINERU_API_KEY`. Only the tier and page range reach the remote service, so `--ocr-mode` other than `auto` or `--no-image-analysis` together with a URL is rejected, and argv carries neither flag. Default: `[mineru].url`.
+- `--start-page/-s`, `--end-page/-e`: 0-based inclusive page range, passed to MinerU as its 1-based `--pages` (`--start-page 4` alone is `5-r1`). Default: `[mineru].start_page` / `end_page`.
 - `--timeout-seconds`: subprocess timeout. Default: config; pass `0` for no timeout.
 - `--parser/-p`: parser after runner output is staged. Default: `[parsers].default_pdf` (`mineru-middle-json`).
 
 Precedence is CLI flag > workspace config (`[mineru]`) > profile default. The resolved
-profile and the exact MinerU argv are recorded in the run log (the `$ mineru …` line).
+profile and the exact MinerU argv are recorded in the run log (the
+`$ mineru-kit parse <pdf> --output …/_mineru/result.zip --format zip --tier …` line).
 
 `--parser` is validated against the parser plugin registry; typoed plugin names fail before the runner is invoked.
-A `*-http-client` backend without a `--url` is rejected before MinerU is invoked.
+`remote-gpu` without a `--url` is rejected before MinerU is invoked.
+
+MinerU 3.x knobs fail before MinerU is invoked, with the replacement in the error:
+`--backend/-b` (and `[mineru].backend`) names the tier that replaced the backend
+(`pipeline` → `basic`; `vlm-engine`, `hybrid-engine`, `*-http-client` → `standard`,
+the last with `--url`); `--effort`, `--formula/--no-formula` and `--table/--no-table`
+are decided by the tier. These flags are hidden from `--help`. A `command = "mineru"`
+config fails with a pointer to `mineru-kit`.
 
 **Choosing a profile:**
 
 | Situation | Profile | Why |
 | --- | --- | --- |
-| Text-heavy digital book; reading sections / search matter more than layout | `fast-text` | `pipeline` + `txt`, table/formula/image off — skips the slow layout/VLM/OCR passes. |
-| Default, mixed content | `balanced` | MinerU's stock medium-effort path (unchanged behavior). |
-| Scanned / image-heavy PDF needing good tables & layout | `accurate` | Hybrid/VLM at `--effort high`. |
-| Local machine with enough CUDA/VRAM | `local-gpu` | Pure local `vlm-engine` backend, high effort. |
-| External GPU server | `remote-gpu` (+ `--url`) | `hybrid-http-client` offloads to the server. |
-| Apple Silicon / CPU | `fast-text` | No CUDA-like speed is promised; prefer the fast text path unless accuracy needs VLM. |
+| Born-digital book; reading sections / search matter more than layout | `fast-text` | `flash` + `txt`, image analysis off — the PDF text layer, no models. Nothing from scanned pages. |
+| Default, mixed or scanned content on any machine | `balanced` | `basic`: small ONNX models on CPU, OCR when a page needs it. |
+| Hard layout, tables, figures; best quality | `accurate` | `advanced`, the VLM at its highest effort. |
+| Local machine with enough GPU memory | `local-gpu` | `standard`, local VLM (`mineru-torch` for Torch on GPU). |
+| External GPU server | `remote-gpu` (+ `--url`) | `standard` on a remote MinerU V1 parse service. |
 
 Workspace defaults live under `[mineru]` in `bookgraph.toml`:
 
 ```toml
 [mineru]
 profile = "balanced"
-# method = "auto"
-# backend = "pipeline"
-# effort = "high"
-# formula = true
-# table = true
+# command = "mineru-kit"
+# tier = "basic"
+# ocr_mode = "auto"
 # image_analysis = true
 # url = ""
 # start_page = 0
@@ -1404,13 +1536,13 @@ profile = "balanced"
 # timeout_seconds = 3600
 ```
 
-Writes:
+Writes (staged from the `mineru-kit --format zip` bundle):
 
 ```text
 sources/parsed/<book_id>/
   document.json
-  <book_id>_middle.json
-  optional <book_id>.md / *_layout.pdf / *_span.pdf / *_content_list.json / images/
+  <book_id>_middle.json       # MinerU 4 middle JSON (docvortex.middle 2.x)
+  optional <book_id>.md / <book_id>_structured_content.json / <book_id>_model_output.json / images/
 ```
 
 Dry run still writes a placeholder request artifact under:

@@ -152,16 +152,15 @@ default_office = "markitdown"
 default_markdown = "markdown"
 
 [mineru]
-# Profile picks hardware/quality defaults; explicit knobs below override it.
-# Profiles: fast-text | balanced | accurate | local-gpu | remote-gpu
+# Profile picks a MinerU 4 tier; explicit knobs below override it.
+# Profiles: fast-text (flash) | balanced (basic) | accurate (advanced)
+#           | local-gpu (standard) | remote-gpu (standard + url)
 profile = "balanced"
-# method = "auto"        # auto | txt | ocr
-# backend = "pipeline"   # pipeline | vlm-engine | hybrid-engine | *-http-client
-# effort = "high"        # medium | high
-# formula = true
-# table = true
+# command = "mineru-kit"
+# tier = "basic"         # flash | basic | standard | advanced
+# ocr_mode = "auto"      # auto | txt | ocr
 # image_analysis = true
-# url = ""               # remote GPU server URL for the *-http-client backends
+# url = ""               # remote MinerU V1 parse service; API key from MINERU_API_KEY
 # start_page = 0         # 0-based first page
 # end_page = 0           # 0-based last page
 # timeout_seconds = 3600 # 0 disables the timeout

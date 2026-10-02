@@ -121,9 +121,11 @@ A self-serve agent drives an entire session with these tools alone:
    - Translating for delivery? `get_section_translation(doc_id, section_id, lang)`
      first: reuse `content` only when `status` is `fresh` **and** (`includes_assets`
      or not `section_has_assets`) — `fresh` alone does not mean figures/tables were
-     carried over; otherwise translate the section
-     and cache it with `write_section_translation(..., content, includes_assets=...,
-     source_section_hash=<current_section_hash>)`. Translate prose and link labels,
+     carried over (`missing_assets` lists the figures/tables to add); otherwise
+     translate the section and cache it with `write_section_translation(..., content,
+     includes_assets=..., source_section_hash=<current_section_hash>)`, linking each
+     figure/table by its `AssetRef.link` — `includes_assets` is checked against those
+     links, and a claim the body does not back is refused. Translate prose and link labels,
      not structure: link destinations, fragment ids, image/file paths, reference
      identifiers, HTML anchors, and `{#id}` heading ids stay byte-for-byte; the write
      result's `structure_issues` lists any that changed.

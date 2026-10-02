@@ -13,14 +13,8 @@ from __future__ import annotations
 import re
 from html import escape
 
-from bookgraph.exports.html_attrs import HTML_ATTR, HTML_ATTR_RE
+from bookgraph.exports.html_attrs import HTML_ATTR_RE, HTML_START_TAG_RE
 from bookgraph.exports.models import ExportReport, ExportSection
-
-# Any start tag, with HTML comments matched first so a commented-out tag is left alone.
-_HTML_START_TAG_RE = re.compile(
-    rf"(?P<comment><!--.*?-->)|<(?P<name>[A-Za-z][\w:-]*)(?P<attrs>(?:\s+{HTML_ATTR})*)\s*(?P<end>/?>)",
-    re.DOTALL,
-)
 
 # Added to the page style in bilingual mode: two columns need a landscape page and a
 # smaller type size.
@@ -108,7 +102,7 @@ def strip_anchor_ids(html: str) -> str:
         )
         return f"<{tag}{attrs}{match.group('end')}"
 
-    return _HTML_START_TAG_RE.sub(replace, html)
+    return HTML_START_TAG_RE.sub(replace, html)
 
 
 def _row(original: str, mixed: str, lang: str) -> str:

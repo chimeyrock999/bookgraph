@@ -1,11 +1,11 @@
 """Named MinerU performance/quality profiles and knob resolution.
 
-MinerU exposes a spread of backend/method/effort/feature knobs whose right
-setting depends on the hardware and the document. Rather than make every caller
-reason about those knobs, BookGraph offers a handful of named *profiles* that
-pick sensible defaults, and lets explicit overrides win on top. This module owns
-the profile table and the pure resolution logic so it can be unit-tested without
-spawning MinerU.
+MinerU 4 selects parse quality with a *tier* (``flash | basic | standard |
+advanced``) plus an OCR mode, instead of the 3.x backend/method/effort/feature
+knobs. BookGraph keeps a handful of named *profiles* that name a hardware intent
+and map onto tiers, and lets explicit overrides win on top. This module owns the
+profile table, the pure resolution logic, and the guard that turns removed 3.x
+knobs into a clear error, so all of it can be unit-tested without spawning MinerU.
 """
 
 from __future__ import annotations
@@ -15,13 +15,19 @@ from typing import TypeVar
 
 DEFAULT_PROFILE = "balanced"
 
-# MinerU CLI enums. Kept here (the lowest layer that knows the knobs) so both the
+# MinerU 4 CLI enums. Kept here (the lowest layer that knows the knobs) so both the
 # resolver and the CLI validate against one source of truth.
-VALID_METHODS = frozenset({"auto", "txt", "ocr"})
-VALID_BACKENDS = frozenset(
-    {"pipeline", "vlm-engine", "hybrid-engine", "vlm-http-client", "hybrid-http-client"}
-)
-VALID_EFFORTS = frozenset({"medium", "high"})
+VALID_TIERS = frozenset({"flash", "basic", "standard", "advanced"})
+VALID_OCR_MODES = frozenset({"auto", "txt", "ocr"})
+
+# 3.x backend names, kept only to point users at the tier that replaced them.
+LEGACY_BACKEND_TIERS: dict[str, str] = {
+    "pipeline": "basic",
+    "vlm-engine": "standard",
+    "hybrid-engine": "standard",
+    "vlm-http-client": "standard",
+    "hybrid-http-client": "standard",
+}
 
 _T = TypeVar("_T")
 
@@ -41,15 +47,16 @@ class UnknownMinerUProfileError(ValueError):
     """Raised when a caller asks for a profile that is not defined."""
 
 
+class RemovedMinerUOptionError(ValueError):
+    """Raised when a caller sets a 3.x knob that MinerU 4 no longer has."""
+
+
 @dataclass(frozen=True)
 class MinerUOptions:
     """Fully resolved MinerU knobs ready to hand to :class:`MinerURunner`."""
 
-    backend: str | None
-    method: str
-    effort: str | None
-    formula: bool | None
-    table: bool | None
+    tier: str
+    ocr_mode: str
     image_analysis: bool | None
     url: str | None
     start_page: int | None
@@ -60,58 +67,26 @@ class MinerUOptions:
 class _ProfileDefaults:
     """Per-profile defaults; ``None`` means "leave MinerU's own default"."""
 
-    backend: str | None = None
-    method: str = "auto"
-    effort: str | None = None
-    formula: bool | None = None
-    table: bool | None = None
+    tier: str
+    ocr_mode: str = "auto"
     image_analysis: bool | None = None
+    needs_url: bool = False
 
 
-# Profiles name a hardware/quality intent. ``balanced`` is deliberately all-None
-# so it reproduces MinerU's stock argv (``-m auto`` only) and keeps the historical
-# default behavior unchanged.
+# Profiles name a hardware/quality intent. ``basic`` (small ONNX models on CPU) is
+# the default because it keeps the 3.x ``pipeline`` property that matters most: it
+# runs anywhere, scanned pages included. ``flash`` reads only the PDF text layer.
 PROFILES: dict[str, _ProfileDefaults] = {
-    # Digital/text-heavy PDFs on weak GPU / Apple Silicon / CPU: skip the heavy
-    # layout/table/formula/image passes and take the fast text path.
-    "fast-text": _ProfileDefaults(
-        backend="pipeline",
-        method="txt",
-        effort="medium",
-        formula=False,
-        table=False,
-        image_analysis=False,
-    ),
-    # Current/default medium-effort path.
-    "balanced": _ProfileDefaults(),
-    # High-effort hybrid/VLM for the best layout/table/image handling.
-    "accurate": _ProfileDefaults(
-        backend="hybrid-engine",
-        method="auto",
-        effort="high",
-        formula=True,
-        table=True,
-        image_analysis=True,
-    ),
-    # Pure local VLM backend for machines with enough CUDA/VRAM. Distinct from
-    # `accurate` (hybrid-engine): this drives the VLM engine directly.
-    "local-gpu": _ProfileDefaults(
-        backend="vlm-engine",
-        method="auto",
-        effort="high",
-        formula=True,
-        table=True,
-        image_analysis=True,
-    ),
-    # External GPU server over the http-client backend; pair with a URL.
-    "remote-gpu": _ProfileDefaults(
-        backend="hybrid-http-client",
-        method="auto",
-        effort="medium",
-        formula=True,
-        table=True,
-        image_analysis=True,
-    ),
+    # Born-digital PDFs on any machine: native text layer, no models at all.
+    "fast-text": _ProfileDefaults(tier="flash", ocr_mode="txt", image_analysis=False),
+    # Default: small models on CPU, OCR when a page needs it.
+    "balanced": _ProfileDefaults(tier="basic"),
+    # Best layout/table/image quality from the largest VLM tier.
+    "accurate": _ProfileDefaults(tier="advanced", image_analysis=True),
+    # Local VLM for machines with enough GPU memory.
+    "local-gpu": _ProfileDefaults(tier="standard", image_analysis=True),
+    # A MinerU V1 parse service elsewhere does the work; pair with a URL.
+    "remote-gpu": _ProfileDefaults(tier="standard", image_analysis=True, needs_url=True),
 }
 
 
@@ -121,14 +96,53 @@ def available_profiles() -> list[str]:
     return sorted(PROFILES)
 
 
-def resolve_mineru_options(
-    profile: str | None,
+def profile_needs_url(profile: str | None) -> bool:
+    defaults = PROFILES.get(profile or DEFAULT_PROFILE)
+    return defaults is not None and defaults.needs_url
+
+
+def reject_removed_options(
     *,
     backend: str | None = None,
-    method: str | None = None,
     effort: str | None = None,
     formula: bool | None = None,
     table: bool | None = None,
+) -> None:
+    """Fail with a migration hint when a removed MinerU 3.x knob is set.
+
+    MinerU 4 has no backends, effort levels, or per-feature formula/table switches:
+    the tier decides them. Silently dropping the knob would change what a user
+    asked for, so it is refused with the tier to use instead.
+    """
+
+    if backend is not None:
+        tier = LEGACY_BACKEND_TIERS.get(backend)
+        hint = f" Use --tier {tier}" if tier else " Use --tier"
+        remote = (
+            " with --url for a remote MinerU V1 service" if backend.endswith("http-client") else ""
+        )
+        raise RemovedMinerUOptionError(
+            f"MinerU backend '{backend}' was removed in MinerU 4.{hint}{remote} "
+            f"(tiers: {', '.join(sorted(VALID_TIERS))})."
+        )
+    if effort is not None:
+        raise RemovedMinerUOptionError(
+            f"MinerU effort '{effort}' was removed in MinerU 4; the tier sets it "
+            "(basic=medium, standard=high, advanced=xhigh). Use --tier."
+        )
+    for name, value in (("formula", formula), ("table", table)):
+        if value is not None:
+            raise RemovedMinerUOptionError(
+                f"MinerU {name} toggle was removed in MinerU 4; the tier decides "
+                f"{name} parsing. Drop --{name}/--no-{name} or [mineru].{name}."
+            )
+
+
+def resolve_mineru_options(
+    profile: str | None,
+    *,
+    tier: str | None = None,
+    ocr_mode: str | None = None,
     image_analysis: bool | None = None,
     url: str | None = None,
     start_page: int | None = None,
@@ -150,14 +164,12 @@ def resolve_mineru_options(
             f"Unknown MinerU profile: {key}. Available: {available}"
         ) from exc
 
-    resolved_method = first_set(method, defaults.method)
-    assert resolved_method is not None  # profile method is always concrete
+    resolved_tier = first_set(tier, defaults.tier)
+    resolved_ocr_mode = first_set(ocr_mode, defaults.ocr_mode)
+    assert resolved_tier is not None and resolved_ocr_mode is not None
     return MinerUOptions(
-        backend=first_set(backend, defaults.backend),
-        method=resolved_method,
-        effort=first_set(effort, defaults.effort),
-        formula=first_set(formula, defaults.formula),
-        table=first_set(table, defaults.table),
+        tier=resolved_tier,
+        ocr_mode=resolved_ocr_mode,
         image_analysis=first_set(image_analysis, defaults.image_analysis),
         url=url,
         start_page=start_page,

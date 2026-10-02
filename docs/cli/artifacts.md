@@ -185,18 +185,41 @@ Allowed examples:
 ```text
 sources/parsed/<doc_id>/<doc_id>.md                  # staged markdown from MarkItDown or MinerU
 sources/parsed/<doc_id>/assets/...                   # extracted images/assets
-sources/parsed/<doc_id>/<doc_id>_middle.json         # staged MinerU middle JSON
-sources/parsed/<doc_id>/<doc_id>_layout.pdf          # MinerU layout debug PDF
-sources/parsed/<doc_id>/<doc_id>_span.pdf            # MinerU span debug PDF
-sources/parsed/<doc_id>/<doc_id>_content_list.json   # MinerU content-list JSON
-sources/parsed/<doc_id>/images/...                   # MinerU extracted images
+sources/parsed/<doc_id>/<doc_id>_middle.json              # staged MinerU 4 middle JSON
+sources/parsed/<doc_id>/<doc_id>_structured_content.json  # MinerU 4 structured content
+sources/parsed/<doc_id>/<doc_id>_model_output.json        # MinerU 4 raw model output
+sources/parsed/<doc_id>/images/...                        # MinerU extracted images
 ```
 
-MinerU runner staging contract, once wired by a future backend command:
+MinerU runner staging contract (`bookgraph parse-book`):
 
-- `MinerURunner.run(original_pdf, sources/parsed/<doc_id>)` invokes the MinerU CLI.
-- It stages artifacts flat under `sources/parsed/<doc_id>/` using `<doc_id>` as the filename stem.
+- `MinerURunner.run(original_pdf, sources/parsed/<doc_id>)` runs
+  `mineru-kit parse <pdf> --output <work>/result.zip --format zip --tier <tier> --ocr-mode <mode>`
+  in a temporary `sources/parsed/<doc_id>/_mineru/` work dir, removed afterwards.
+- It stages the bundle's members flat under `sources/parsed/<doc_id>/` using
+  `<doc_id>` as the filename stem: `middle_json.json` → `<doc_id>_middle.json`,
+  `markdown.md` → `<doc_id>.md`, `structured_content.json` →
+  `<doc_id>_structured_content.json`, `model_output.json` →
+  `<doc_id>_model_output.json`, and `images/` as is (Markdown and middle JSON
+  reference images as `images/<file>`).
+- A bundle without `middle_json.json` fails the run. MinerU 3.x side artifacts
+  (`<doc_id>_layout.pdf`, `<doc_id>_span.pdf`, `<doc_id>_content_list.json`) are no
+  longer produced; a successful MinerU 4 run removes the ones an earlier 3.x run
+  left in `sources/parsed/<doc_id>/`.
 - It does not produce `document.json`; `mineru-middle-json` remains the parser that turns `<doc_id>_middle.json` into canonical blocks.
+
+`mineru-middle-json` block mapping for MinerU 4 (`docvortex.middle` 2.x):
+
+- block ids are `p<page_idx>.b<index>` with MinerU's page-local block `index`, so
+  they line up with MinerU's `page:{page}/block:{index}` locators;
+- `doc_title` → `title` level 1, `paragraph_title` → `title` with MinerU's level (2–6);
+- `text`, `ref_text`, `page_footnote`, `code`, `index` → `text`; `list` → `list`;
+  `equation` → `equation`; `image`/`table`/`chart` → the same type with
+  `asset_path` from the body's `image_path` and text from captions and footnotes;
+- `header`, `footer`, `page_number`, `aside_text` are page furniture and dropped;
+- each block's `metadata.mineru_type` keeps the MinerU type, and
+  `document.metadata` records `mineru_schema`, `mineru_version` and `mineru_tier`.
+- `bbox` is MinerU 4's page-normalized `[x0, y0, x1, y1]` (0–1), not PDF points.
 
 If a parser writes side artifacts, it should reference them from `document.metadata` when useful.
 
@@ -220,9 +243,14 @@ Common schema:
   "book_id": "deep-work",
   "runner": {
     "name": "mineru",
-    "command": "mineru",
-    "method": "auto",
-    "backend": null,
+    "command": "mineru-kit",
+    "profile": "balanced",
+    "tier": "basic",
+    "ocr_mode": "auto",
+    "image_analysis": null,
+    "url": null,
+    "start_page": null,
+    "end_page": null,
     "timeout_seconds": 3600
   },
   "parser": "mineru-middle-json",
@@ -256,7 +284,9 @@ mirroring `bookgraph.models.Section`:
 
 - `id`: `<doc_id>.<slug>` derived from the section title. Doubles as the
   `<section_id>.md` filename, so it must be unique within a document; the writer
-  refuses duplicate ids rather than overwriting.
+  refuses duplicate ids rather than overwriting. The slug is capped at 80
+  characters on a `-` boundary (a heading can be a whole misclassified code or TOC
+  line); the `-2`, `-3`, … collision suffix keeps capped slugs unique.
 - `doc_id`: parent document id; matches the `sources/parsed/<doc_id>/` folder.
 - `heading_path`: heading ancestry from the document root to this section.
 - `page_start` / `page_end`: page span if known from paged parser output.
@@ -580,8 +610,16 @@ the `.json` sidecar beside it is the registry record, mirroring
 - `content_hash`: `sha256:` over the body's UTF-8 bytes at write time. It binds the
   sidecar to the body it describes: a body overwritten afterwards (a path-convention
   writer, a manual edit) no longer matches and reads as `untracked`.
-- `includes_assets`: whether the writer carried the section's figures/tables into
-  the translation (declared by the writer, not inferred).
+- `includes_assets`: the writer's claim that the translation carries the section's
+  figures/tables, checked against the body by `write_section_translation`: every
+  **staged** asset block of the section (one whose file resolves, i.e. one
+  `get_section` returns as an `AssetRef`) must be linked by a Markdown image or
+  `<img src>` that resolves to the same file (its `AssetRef.link`, or a
+  workspace-relative path), and claiming `true` for a body that leaves one out is
+  refused. Readers never trust the stored claim alone: the read tools and the export
+  re-check the body against the section's current assets, and the claim only stands
+  for asset blocks whose file was never staged (now or after a later re-parse), which
+  no body can link.
 - `notes` (optional): the writer's free-text side channel — QA/checker results,
   terminology decisions, job remarks. Stored only here, never in the body; returned by
   `get_section_translation` / `list_section_artifacts`.
@@ -600,7 +638,10 @@ hash and compares it with the sidecar.
 **Reuse rule.** `fresh` means the translation matches the section's current *text*;
 the hash does not cover assets, so a re-parse that newly stages a figure leaves a
 prose-only translation `fresh`. Reuse a translation as-is only when `status` is
-`fresh` **and** (`includes_assets` or not `section_has_assets`).
+`fresh` **and** (`includes_assets` or not `section_has_assets`). The read tools report
+`includes_assets` re-verified against the body (false whenever `missing_assets` lists
+a staged figure/table the body does not link), so that re-parse makes the translation
+incomplete without changing its `status`.
 
 **Structure rule: translate content, preserve structural Markdown.** A translation
 translates prose, captions, and link labels, but keeps every structural target of the
@@ -625,6 +666,10 @@ counts as resolving, even when it points at a workspace file: the reading-agent
 contract links each carried figure/table by its relative `AssetRef.link`, never by its
 absolute `AssetRef.path`, so adding an absolute image link is reported. Heading *text* may be translated: export navigation anchors
 on section ids, never on heading text.
+Keep source destinations even though they do not navigate inside an assembled
+export: `export translated-pdf` resolves them to its own anchors when it renders the
+page (see *Internal links* in `commands.md`), so a translation that rewrites
+`ch10.html#ch_consistency` to an export section id is a structure change.
 
 What is compared:
 
@@ -701,10 +746,13 @@ debug view) the page also shows it: a *Translation may be outdated* /
 Stale and untracked translations count as translated, so `--fallback fail` accepts
 them. `--strict` refuses `translation_stale` (known outdated) but not
 `translation_untracked` (freshness unknown, e.g. a hand-written body), matching
-reading-batch completion. Completeness follows the registry's reuse rule: a
-registered translation with `includes_assets: false` of a section that has
-figures/tables is rendered but flagged `translation_missing_assets`, which `--strict`
-also refuses.
+reading-batch completion. Completeness follows the registry's reuse rule, verified
+from the body rather than the sidecar: a rendered translation (registered or
+untracked) that does not link one of its section's staged figures/tables gets one
+`translation_missing_assets` warning per asset, whatever its sidecar's
+`includes_assets` says; a registered one with `includes_assets: false` of a section
+whose assets were never staged is flagged too. Both are rendered, and `--strict`
+refuses them.
 
 `translation_cache/<doc_id>/<section_id>.<lang>.md` is **not read**. It was an
 export-only fallback that no BookGraph command ever wrote, so there is no migration:
@@ -755,7 +803,7 @@ is written beside the export:
   "warnings": [
     {"code": "asset_missing", "message": "…", "section_id": "ddia.scalability",
      "reference": "t1.png", "source_path": "translations/vi/ddia/ddia.scalability.md",
-     "block_id": null}
+     "block_id": null, "column": "mixed", "origin": "translation"}
   ],
   "renderer": "playwright",
   "output": "/path/to/workspace/exports/ddia.vi-progress.pdf",
@@ -785,6 +833,16 @@ is written beside the export:
   translation artifact, `sources/parsed/<doc_id>/document.json` for an original
   section (with the parsed `block_id`), or `sections.jsonl` when the document has no
   parsed blocks.
+- Every warning names its `column` and `origin`. `column` is `mixed` for the
+  reading edition (the whole page in `translated` mode, the right column in
+  `bilingual` mode), or `original` for a problem that only the `bilingual` left
+  column shows: an original asset of a translated (or `--fallback skip`) section,
+  which `--mode translated` never renders. An untranslated row shown with
+  `--fallback original` has its original in both columns, so its asset warnings
+  are `mixed`. `origin` is `translation` when the problem is in the translation
+  artifact (its body, image links, or registry record), or `source` when it is in
+  the original source (`document.json` / `sections.jsonl`) or its ingest quality.
+  The CLI prints `original` warnings as `[original column] …`.
 - The report is where status/debug metadata lives: the reading pages carry the title,
   the table of contents, and book content only. `show_status` records whether the
   export was made with `--show-status`, which also prints coverage, freshness and
@@ -798,15 +856,30 @@ is written beside the export:
     export (its caption and surrounding prose are). `--strict` refuses these.
   - `translation_stale`: the source section changed after the translation was
     registered. Rendered (with a note under `--show-status`); `--strict` refuses it.
-  - `translation_missing_assets`: a registered prose-only translation
-    (`includes_assets: false`) of a section that has figures/tables. `--strict`
-    refuses it.
+  - `translation_missing_assets`: a translation left out a figure/table of its
+    section. Per staged asset the body does not link: `reference` is the asset's
+    `AssetRef.link` (what to add), `block_id` its parsed block, `source_path` the
+    parsed `document.json` (where the block lives), and `origin` is `translation`.
+    A registered prose-only translation (`includes_assets: false`) of a section
+    whose assets were never staged gets one warning with no `reference`. Both are
+    `column: mixed` (they are about the translated side; for a staged asset the
+    bilingual original column still shows the figure). `--strict` refuses it.
   - `translation_untracked`: no valid registry record, or the body was edited after
     registration. Rendered (with a note under `--show-status`); never refused.
   - `translation_structure_changed`: the rendered translation dropped, added, or
     rewrote a link destination, image path, reference definition, HTML anchor, or
     heading id of its section (see the structure rule above). Rendered as written;
     `--strict` refuses it.
+  - `internal_link_unresolved`: an internal-book link (a `#fragment`, or a link to a
+    source `.html`/`.htm`/`.xhtml` file) of a rendered section matches no section or
+    anchor of the export, so it is left as written. `reference` is the destination and
+    `source_path` the file it was read from (as for an asset warning). Reported once
+    per section and destination, in reading order. In `bilingual` mode each column is
+    resolved on its own: a link in both columns is reported once, from the right
+    column's file (`column: mixed`), and a link only in the left column names the
+    original's file (`column: original`). `origin` is `translation` for a link read
+    from the artifact, `source` otherwise. A diagnostic only: `--strict` does not
+    refuse it yet.
   - `translation_empty`, `translation_unreadable`: the section falls back.
   - `asset_captions_only` / `asset_text_sparse`: ingest quality warnings, passed
     through for rendered sections whose source prose is mostly captions.

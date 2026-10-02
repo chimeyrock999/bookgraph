@@ -6,6 +6,7 @@ from typing import Any, cast
 
 from bookgraph.models import ASSET_BLOCK_TYPES, BlockType, CanonicalBlock, Document
 from bookgraph.parsers.errors import UnsupportedSourceError
+from bookgraph.parsers.mineru_middle_v2 import MIDDLE_V2_SCHEMA, is_middle_v2, parse_middle_v2
 from bookgraph.ports import DocumentParser
 from bookgraph.utils import doc_id_from_path
 
@@ -14,15 +15,23 @@ class MinerUMiddleJsonParser(DocumentParser):
     """Adapter for MinerU *_middle.json outputs.
 
     This parser intentionally consumes MinerU's structured output instead of
-    invoking MinerU. A runner plugin can be added later for the heavy external
-    process.
+    invoking MinerU; :class:`bookgraph.parsers.mineru_runner.MinerURunner` owns the
+    heavy external process. It reads MinerU 4's ``docvortex.middle`` 2.x contract,
+    and still reads the 3.x ``pdf_info`` shape so middle JSON staged before the
+    MinerU 4 migration keeps parsing.
     """
 
     name = "mineru-middle-json"
 
     def parse(self, source: Path, output_dir: Path) -> Document:
         del output_dir  # MinerU side artifacts are produced before this parser runs.
-        pdf_info = _require_pdf_info(source, self.name)
+        payload = _load_json(source, self.name)
+        if is_middle_v2(payload):
+            try:
+                return parse_middle_v2(payload, source, self.name)
+            except ValueError as exc:
+                raise UnsupportedSourceError(str(exc)) from exc
+        pdf_info = _require_pdf_info(payload, source, self.name)
 
         blocks: list[CanonicalBlock] = []
         for page in pdf_info:
@@ -54,25 +63,28 @@ class MinerUMiddleJsonParser(DocumentParser):
         )
 
 
-def _require_pdf_info(source: Path, parser_name: str) -> list[Any]:
+def _load_json(source: Path, parser_name: str) -> Any:
+    try:
+        return json.loads(source.read_text())
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise UnsupportedSourceError(
+            f"{source.name}: {parser_name} needs valid JSON: {exc}"
+        ) from exc
+
+
+def _require_pdf_info(payload: Any, source: Path, parser_name: str) -> list[Any]:
     """Fail loudly when the input is not MinerU middle JSON.
 
     Without this check a stray ``.json`` file parses into an empty document and
     the whole pipeline reports success on nothing.
     """
 
-    try:
-        payload = json.loads(source.read_text())
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise UnsupportedSourceError(
-            f"{source.name}: {parser_name} needs valid JSON: {exc}"
-        ) from exc
-
     pdf_info = payload.get("pdf_info") if isinstance(payload, dict) else None
     if not isinstance(pdf_info, list):
         raise UnsupportedSourceError(
             f"{source.name}: not MinerU middle JSON - {parser_name} requires a "
-            "'pdf_info' list. Run MinerU on the source first."
+            f"'{MIDDLE_V2_SCHEMA}' payload (MinerU 4) or a 'pdf_info' list (MinerU 3). "
+            "Run MinerU on the source first."
         )
     return pdf_info
 

@@ -69,15 +69,19 @@ Optional translation cache tools (when the user wants sections translated):
 - `get_section_translation(doc_id, section_id, lang)` — reuse `content` only when
   `status` is `fresh` and (`includes_assets` or not `section_has_assets`);
   `stale`/`missing`, or a fresh prose-only translation of a section with
-  figures/tables, means translate again.
+  figures/tables (listed in `missing_assets`), means translate again.
 - `write_section_translation(doc_id, section_id, lang, content, includes_assets=...,
   source_section_hash=<current_section_hash>, notes=...)` — cache a new
-  translation. `content` is book content only; QA/checker results and terminology
-  decisions go in `notes` (see *Artifact channels* below).
+  translation. Link each figure/table by its `AssetRef.link`; `includes_assets` is
+  verified against the body and a claim it does not back is refused. `content` is
+  book content only; QA/checker results and terminology decisions go in `notes` (see
+  *Artifact channels* below).
   Translate content, preserve structural Markdown: translate prose, captions, and
   link labels, but keep link destinations and fragment ids, image and file paths,
   reference-style identifiers, HTML `id`/`name` anchors, and `{#id}` heading ids
-  byte-for-byte. A non-empty `structure_issues` in the result lists what changed;
+  byte-for-byte; never point a link at an export anchor yourself
+  (`export translated-pdf` resolves source destinations to its own section anchors).
+  A non-empty `structure_issues` in the result lists what changed;
   fix and rewrite it (`complete_reading_batch` blocks on
   `translation_structure_changed`).
 - `list_section_artifacts(doc_id=None, lang=None)` — list cached translations and

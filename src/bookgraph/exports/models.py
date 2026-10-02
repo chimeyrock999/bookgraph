@@ -29,11 +29,21 @@ SectionSource = Literal["translated", "original", "skipped"]
 # ``untracked`` (no valid registry record — freshness unknown).
 TranslationFreshness = Literal["fresh", "stale", "untracked"]
 
+# Which rendering a warning belongs to: ``mixed`` is the reading edition (the whole page
+# in ``translated`` mode, the right column in ``bilingual`` mode); ``original`` is the
+# bilingual left column only, so ``--mode translated`` never reports it.
+WarningColumn = Literal["mixed", "original"]
+
+# What content a warning is about: the translation artifact, or the original source
+# (parsed document / sections manifest) rendered as a fallback or as the left column.
+WarningOrigin = Literal["translation", "source"]
+
 # Export warning codes. Quality warnings from :mod:`bookgraph.quality` (e.g.
 # ``asset_captions_only``) are passed through with their own codes.
 ASSET_MISSING = "asset_missing"
 ASSET_REMOTE = "asset_remote"
 ASSET_UNSUPPORTED = "asset_unsupported"
+INTERNAL_LINK_UNRESOLVED = "internal_link_unresolved"
 TRANSLATION_EMPTY = "translation_empty"
 TRANSLATION_MISSING_ASSETS = "translation_missing_assets"
 TRANSLATION_STALE = "translation_stale"
@@ -47,7 +57,8 @@ ASSET_WARNING_CODES: frozenset[str] = frozenset({ASSET_MISSING, ASSET_REMOTE, AS
 # ``--strict`` refuses to write an export carrying any of these: a missing asset, or a
 # translation known to be outdated, to have left out the section's figures/tables, or to
 # have changed a link destination / anchor / path of its source section.
-# ``translation_untracked`` only warns — its freshness is unknown, not known-bad.
+# ``translation_untracked`` only warns — its freshness is unknown, not known-bad, and so
+# does ``internal_link_unresolved`` until source-anchor mapping covers more books.
 STRICT_WARNING_CODES: frozenset[str] = ASSET_WARNING_CODES | {
     TRANSLATION_MISSING_ASSETS,
     TRANSLATION_STALE,
@@ -63,6 +74,9 @@ class ExportWarning(BaseModel):
     ``source_path`` is the workspace-relative file that carries that reference — the
     translation artifact, or the parsed ``document.json`` for an original section —
     and ``block_id`` the parsed block when the reference came from one.
+    ``column`` says which rendering the problem is in (an ``original`` one exists only
+    in ``bilingual`` mode) and ``origin`` whether it comes from the translation or the
+    original source.
     """
 
     code: str
@@ -71,6 +85,15 @@ class ExportWarning(BaseModel):
     reference: str | None = None
     source_path: str | None = None
     block_id: str | None = None
+    column: WarningColumn = "mixed"
+    origin: WarningOrigin = "source"
+
+    def describe(self) -> str:
+        """The message, tagged when only the bilingual original column shows the problem."""
+
+        if self.column == "original":
+            return f"[original column] {self.message}"
+        return self.message
 
 
 class ExportSection(BaseModel):
@@ -182,3 +205,20 @@ class ExportReport(BaseModel):
     @property
     def strict_warnings(self) -> list[ExportWarning]:
         return [warning for warning in self.warnings if warning.code in STRICT_WARNING_CODES]
+
+    def strict_summary(self) -> str:
+        """Why ``--strict`` refuses this export: the count, split by column when needed.
+
+        Problems of the bilingual original column are counted apart: they are source
+        assets, not translation problems, and ``--mode translated`` does not render them.
+        """
+
+        problems = self.strict_warnings
+        summary = f"{len(problems)} problem(s) in strict mode"
+        original = sum(1 for warning in problems if warning.column == "original")
+        if original:
+            summary += (
+                f" ({original} in the bilingual original column: source assets that "
+                "--mode translated does not render)"
+            )
+        return summary

@@ -269,13 +269,17 @@ class _Resolver:
     def _home(self, section_id: str) -> OutlineNode | None:
         """The source file a section was read from, as the node that opens its span.
 
-        Its chapter, when the chapter has sections nested in it. In a flat outline
-        (MarkItDown puts a chapter title and its sections at one level) it is the
-        nearest *Chapter N* / *Appendix X* / *Part N* at or before the section.
+        Its chapter, when that is a *Chapter N* / *Appendix X* / *Part N* with its
+        sections nested in it. Otherwise — in a flat outline MarkItDown puts a chapter
+        title and its top sections at one level, so a section's root may be a section
+        with subsections of its own — it is the nearest such title at or before the
+        section whose span holds it, else the section's root.
         """
 
         chapter = self._chapter.get(section_id)
-        if chapter is None or chapter.children:
+        if chapter is None or (
+            chapter.children and _DIVISION_TITLE.match(chapter.section.title.strip().lower())
+        ):
             return chapter
         for node in reversed(self._nodes[: self._order[section_id] + 1]):
             if _DIVISION_TITLE.match(node.section.title.strip().lower()):

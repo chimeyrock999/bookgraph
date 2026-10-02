@@ -307,11 +307,13 @@ def test_flat_outline_scopes_a_file_to_its_reading_span_and_skips_chapter_slugs(
         _node("c1", "Chapter 1. Trade-Offs in Data Systems Architecture"),
         _node("ov", "Operational Versus Analytical Systems", 1, _node("dw", "Data Warehousing", 2)),
         _node("dv", "Distributed Versus Single-Node Systems"),
+        _node("t1", "Terminology"),
         _node("c3", "Chapter 3. Data Models and Query Languages"),
         _node("rd", "Relational Versus Document Models", 1, _node("om", "Object Mapping", 2)),
         _node("nd", "Normalization, Denormalization, and Joins"),
         _node("c10", "Chapter 10. Consistency and Consensus"),
         _node("li", "Linearizability", 1, _node("wl", "What Makes a System Linearizable?", 2)),
+        _node("t10", "Terminology"),
         _node("pr", "Preface"),
         _node("ws", "Who Should Read This Book?"),
         _node("gl", "Glossary Terms", 1, _node("gt", "Distributed Terms", 2)),
@@ -332,7 +334,11 @@ def test_flat_outline_scopes_a_file_to_its_reading_span_and_skips_chapter_slugs(
     # From chapter 10, a fragment naming a chapter 3 section is found book-wide.
     assert target("#sec_datamodels_normalization", "li") == "#nd"
     assert target("#sec_nothing_here", "li") == "#sec_nothing_here"
-    # A fragment-only link from a section with subsections still searches its chapter.
+    # A fragment-only link from a section with subsections, or from one of those
+    # subsections, searches its own chapter: *Terminology* is in chapters 1 and 10.
+    assert target("#sec_introduction_terminology", "dw") == "#t1"
+    assert target("#sec_introduction_terminology", "ov") == "#t1"
+    assert target("#sec_consistency_terminology", "wl") == "#t10"
     assert target("#sec_introduction_distributed", "dw") == "#dv"
     # A leaf head without a division title stops at a same-depth node with sections:
     # preface.html holds its own sections, not the next untitled chapter's.

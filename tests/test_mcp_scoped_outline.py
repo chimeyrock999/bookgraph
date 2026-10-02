@@ -329,10 +329,14 @@ def test_get_chapter_outline_keeps_the_lone_root_while_it_is_being_read(
 
     chapter = service.get_chapter_outline(workspace, "bk")
 
-    # The root is the scope, and the default depth keeps it to the root + chapters.
+    # While the lone root is itself being read, the chapter is that root's own
+    # section only (the shared chapter_span rule), not the whole book.
     assert chapter.chapter is not None and chapter.chapter.id == "bk.book"
-    assert [node.id for node in chapter.nodes] == ["bk.book", "bk.ch-1", "bk.ch-2"]
-    assert chapter.truncated is True
+    assert [node.id for node in chapter.nodes] == ["bk.book"]
+    assert chapter.truncated is False
+    assert (chapter.completed, chapter.remaining, chapter.total) == (0, 1, 1)
+    # child_ids still point at the chapters, so a client can drill in.
+    assert chapter.nodes[0].child_ids == ["bk.ch-1", "bk.ch-2"]
 
 
 def test_get_chapter_outline_chapter_level_picks_nested_chapters(tmp_path: Path) -> None:

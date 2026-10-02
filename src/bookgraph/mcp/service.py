@@ -24,7 +24,7 @@ from bookgraph.annotations import (
 )
 from bookgraph.assets import asset_reference, resolve_asset_path
 from bookgraph.documents import read_document
-from bookgraph.graph import SectionGraph, SectionNode, build_section_graph, resolve_chapter
+from bookgraph.graph import SectionGraph, SectionNode, build_section_graph, chapter_span
 from bookgraph.index import default_index_backend, tokenize
 from bookgraph.models import (
     ASSET_BLOCK_TYPES,
@@ -227,7 +227,7 @@ class ChapterOutline(BaseModel):
     """The outline of the chapter a reading plan is currently in.
 
     The chapter is the scope ancestor of ``current_section_id`` (the plan's next unread
-    section) — see :func:`bookgraph.graph.resolve_chapter`. ``completed`` /
+    section) — see :func:`bookgraph.graph.chapter_span`. ``completed`` /
     ``remaining`` / ``total`` count the plan's sections in the chapter's whole subtree,
     by membership (unaffected by ``max_depth``); ``plan_completed`` / ``plan_total`` are
     plan-wide. When the plan is ``done`` there is no current section, so ``chapter`` is
@@ -884,7 +884,7 @@ def get_chapter_outline(
     """Return the outline of the chapter a reading plan is currently in.
 
     The chapter is the scope ancestor of the plan's next unread section, resolved by the
-    shared :func:`~bookgraph.graph.resolve_chapter` (so it always matches
+    shared :func:`~bookgraph.graph.chapter_span` (so it always matches
     ``get_plan_progress``): the outermost ancestor by default, skipping a lone book-title
     root; pass ``chapter_level`` when chapters sit under parts. Its subtree comes back
     with a per-node ``read`` flag plus chapter and plan progress counts. ``max_depth``
@@ -910,17 +910,20 @@ def get_chapter_outline(
 
     current_id = pack.sections[0]
     graph = _load_graph(workspace, plan.doc_id)
-    by_id = {node.id: node for node in graph.nodes}
-    current = by_id.get(current_id)
-    if current is None:
+    if all(node.id != current_id for node in graph.nodes):
         raise SectionNotFoundError(
             f"Reading plan '{plan_id}' references unknown section '{current_id}' "
             f"in document '{plan.doc_id}'."
         )
-    chapter = resolve_chapter(graph.nodes, current.id, chapter_level=chapter_level)
-    nodes, truncated = _scoped_nodes(graph, chapter.id, max_depth)
-    subtree = {node.id for node in _scoped_nodes(graph, chapter.id, None)[0]}
-    in_chapter = [section_id for section_id in plan.section_ids if section_id in subtree]
+    span = chapter_span(graph.nodes, current_id, chapter_level=chapter_level)
+    chapter = span.chapter
+    # The span's members, not the raw subtree, bound the chapter — while a lone
+    # book-title root is itself being read, the span is that root alone.
+    members = set(span.member_ids)
+    full = [node for node in _scoped_nodes(graph, chapter.id, None)[0] if node.id in members]
+    nodes = [node for node in _scoped_nodes(graph, chapter.id, max_depth)[0] if node.id in members]
+    truncated = len(nodes) < len(full)
+    in_chapter = [section_id for section_id in plan.section_ids if section_id in members]
     result.completed = sum(1 for section_id in in_chapter if section_id in completed)
     result.total = len(in_chapter)
     result.remaining = result.total - result.completed

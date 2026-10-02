@@ -630,10 +630,11 @@ telling the user to `uv sync --extra mcp`.
 - `get_chapter_outline(plan_id, max_depth=2, chapter_level=None)` → the outline
   of the chapter a reading plan is currently in (`current_section_id` = the
   next unread section).
-  - The chapter comes from the shared `graph.resolve_chapter`, so it always
+  - The chapter comes from the shared `graph.chapter_span`, so it always
     matches `get_plan_progress`. By default it is that section's outermost
     ancestor-or-self, except that a lone top-level root (one `# Book Title`
-    heading above every chapter) is skipped one level down. With
+    heading above every chapter) is skipped one level down. While that root is
+    itself the section being read, the chapter is the root's own section only. With
     `chapter_level`, it is the nearest ancestor-or-self whose heading `level` is
     at most `chapter_level` (e.g. `2` for chapters under level-1 parts).
   - Each subtree node carries a `read` flag.

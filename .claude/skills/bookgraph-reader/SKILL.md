@@ -112,6 +112,16 @@ chat), reuse the cache instead of retranslating:
    notes=...)` so the next run reuses it. Link each figure/table by its
    `AssetRef.link`: `includes_assets` is verified against the body, and
    `includes_assets=True` for a body missing one is refused.
+   Prefer a **block-aligned** write: `get_section(doc_id, section_id,
+   include_blocks=True)` lists the source blocks (`id`, `type`, `text`); pass
+   `units=[{source_block_ids: ["b12"], content: "<translated paragraph>"}, ...]`
+   instead of `content`, one unit per paragraph in reading order. Several ids in one
+   unit merge paragraphs; the same id in consecutive units splits one. Headings,
+   figures and code may share a unit with their prose or be left out. The bilingual
+   export then interleaves paragraph by paragraph. Foreign ids or units out of order
+   are refused; `alignment_issues` lists text blocks you left untranslated and units
+   that do not start a Markdown block of their own (start each unit with a new
+   paragraph, list, heading or fence — not a list-item continuation).
 3. Translate content, preserve structural Markdown: translate prose, captions, and
    link labels, but keep link destinations and fragment ids
    (`(ch03.html#sec_x)`, `(#fig_y)`), image and file paths, reference-style
@@ -130,7 +140,7 @@ must hold **book content only**. Everything else has its own place:
 
 | What | Where it goes |
 | --- | --- |
-| The translated section: headings, prose, tables, figures | `content` of `write_section_translation` |
+| The translated section: headings, prose, tables, figures | `units` (block-aligned, preferred) or `content` of `write_section_translation` |
 | QA/checker results, terminology decisions, "kept X untranslated", doubts about the source | `notes` of `write_section_translation` (stored beside the translation, returned by `get_section_translation`, never exported) |
 | `MEDIA:/path` delivery markers, "Đã lưu cache/enrich và mark read: …", progress, job status | your **final chat reply** only |
 | Coverage, freshness, missing assets of an export | the export's `.report.json` / CLI output — read it, don't copy it into a translation |

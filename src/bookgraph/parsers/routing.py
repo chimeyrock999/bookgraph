@@ -48,6 +48,11 @@ def select_parser_name(source: Path) -> str:
     sources, Markdown is parsed directly, and everything else goes through
     MarkItDown.
 
+    The choice depends only on the source name, never on installed extras, so a
+    file routes the same way on every machine. MinerU 4 can also parse EPUB and
+    Office files, but MarkItDown stays their default until the MinerU adapter keeps
+    their tables, links, anchors and provenance (see ``docs/cli/commands.md``).
+
     Two source types are refused on purpose rather than guessed:
 
     - a raw ``.pdf``, because the MinerU adapter consumes MinerU's
@@ -88,7 +93,5 @@ class ParserRouter:
     def parser_name_for(self, source: Path) -> str:
         return select_parser_name(source)
 
-    def parser_for(
-        self, source: Path, parsers: PluginRegistry[DocumentParser]
-    ) -> DocumentParser:
+    def parser_for(self, source: Path, parsers: PluginRegistry[DocumentParser]) -> DocumentParser:
         return parsers.get(self.parser_name_for(source))

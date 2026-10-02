@@ -18,6 +18,7 @@ from bookgraph.parsers.routing import (
         ("ddia_middle.json", "mineru-middle-json"),
         ("notes.md", "markdown"),
         ("notes.markdown", "markdown"),
+        ("ddia.epub", "markitdown"),
         ("Report Q3.DOCX", "markitdown"),
         ("deck.pptx", "markitdown"),
         ("sheet.xlsx", "markitdown"),
@@ -27,6 +28,17 @@ from bookgraph.parsers.routing import (
 )
 def test_select_parser_name_routes_source_by_file_type(filename: str, expected: str) -> None:
     assert select_parser_name(Path(filename)) == expected
+
+
+@pytest.mark.parametrize("filename", ["ddia.epub", "report.docx", "deck.pptx", "page.html"])
+def test_non_pdf_routing_ignores_whether_mineru_is_installed(
+    filename: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # MinerU 4 can parse these formats too, but MarkItDown stays the default so routing
+    # never depends on whether the heavy ``mineru`` extra is on this machine.
+    monkeypatch.setattr("shutil.which", lambda name, *args, **kwargs: f"/usr/bin/{name}")
+
+    assert select_parser_name(Path(filename)) == "markitdown"
 
 
 def test_select_parser_name_requires_an_explicit_choice_for_pdf() -> None:

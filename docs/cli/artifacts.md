@@ -169,6 +169,31 @@ Current behavior:
 | `markitdown` | `sources/parsed/<doc_id>/<doc_id>.md` | original `.docx`/`.pptx`/… |
 | `mineru-middle-json` | the `*_middle.json` file | same `*_middle.json` file |
 
+### MarkItDown conversion rules
+
+The `markitdown` adapter fixes what MarkItDown loses on the way to Markdown, so the
+staged Markdown and the blocks stay faithful to the source:
+
+- **Images.** MarkItDown writes no image files. EPUB `<img>` references are matched to
+  zip members. DOCX/PPTX pictures are converted with `keep_data_uris`, and every image
+  data URI (base64 or percent-encoded) is decoded.
+  Both are written under `sources/parsed/<doc_id>/images/` and the reference is
+  rewritten to `images/<name>`. A decoded picture is named
+  `image-<sha256 prefix>.<ext>`, so a repeated picture is stored once and a re-parse
+  keeps its name. A reference that cannot be staged stays as written and is counted in
+  `metadata.unresolved_image_count`. References inside code fences or inline code are
+  left alone. An image whose alt text holds backticks is still staged, unless a code
+  span opens in the alt and closes after it (CommonMark then reads code, not an image).
+- **DOCX `Title` style.** A `Title` paragraph becomes a level-1 heading, so it is the
+  document title.
+- **DOCX merged cells.** A horizontal merge keeps its first cell's text and pads the
+  rest with empty cells. A vertical merge (rowspan) keeps the text in its first row and
+  an empty cell in each row below, so every row keeps its columns.
+- **DOCX nested tables.** A Markdown table cell cannot hold a table, so a nested table
+  is flattened into its cell as text: cells joined by ` / `, rows by `; `. A picture in
+  the nested table stays an image in that cell and is staged like any other. The count
+  is recorded in `metadata.flattened_table_count` and reported as a parse warning.
+
 ### List block rules
 
 `list` blocks keep reading structure rather than flattening to bullets:
@@ -623,6 +648,62 @@ the `.json` sidecar beside it is the registry record, mirroring
 - `notes` (optional): the writer's free-text side channel — QA/checker results,
   terminology decisions, job remarks. Stored only here, never in the body; returned by
   `get_section_translation` / `list_section_artifacts`.
+- `alignment` (optional): the body's block alignment, see *Block-aligned
+  translations* below; absent (`null`) for an unaligned translation.
+
+### Block-aligned translations
+
+A translation written with `write_section_translation(units=[...])` records which
+source blocks each part of the body translates, so the bilingual export can set each
+paragraph beside its own translation. Each unit the writer submits
+(`bookgraph.models.TranslationUnit`) is `{source_block_ids, content}`: Markdown plus
+the ids of the section's `CanonicalBlock`s it translates, in reading order (listed by
+`get_section(include_blocks=True)`). The registry joins the units' contents, trimmed
+of surrounding blank lines, one blank line apart, into the usual Markdown body (with a
+final newline), and stores each unit's span of it in the sidecar
+(`bookgraph.models.AlignedUnit`):
+
+```json
+"alignment": [
+  {"source_block_ids": ["b0", "b1"], "start": 0, "end": 31},
+  {"source_block_ids": ["b3"], "start": 33, "end": 50}
+]
+```
+
+- `start`/`end`: character offsets into the decoded body (`body[start:end]`), in body
+  order. The body stays the deliverable: renderers that ignore the alignment read it
+  like any other translation.
+- Mappings: one id per unit is 1:1; several ids merge paragraphs into one unit (n:1);
+  consecutive units that repeat a block split it (1:n).
+- Write validation (refused, nothing written): a unit with no content or no block id
+  (`empty_unit`), an id that is not in the section's `block_ids` (`foreign_block`),
+  ids out of source order within a unit, or a unit starting before the previous one
+  ends, other than repeating its last block (`out_of_order`), and a first unit that
+  starts with a `---` frontmatter block. `units` and `content` are exclusive.
+- Gaps (reported, not refused): a source `text`/`list`/`unknown` block with text that
+  no unit references (`unaligned_block`). Headings, figures, tables, equations, and
+  code blocks are passed through untranslated, so leaving them out is not a gap.
+- Merged units (reported, not refused): a unit after the first whose Markdown does not
+  start a top-level block of its own — a list-item continuation, an unclosed fence, an
+  HTML block running across the blank line, or a unit that renders no block at all
+  (only link reference definitions) — renders as part of the previous unit
+  (`unit_not_a_block`); the bilingual export gives both units, and their source
+  blocks, one row.
+- Alignment is provenance, not content: neither `source_section_hash` nor the
+  staleness rules look at it. `content_hash` still binds the sidecar, alignment
+  included, to the body: an edited body reads as `untracked` and unaligned.
+
+The read tools report `alignment_status` (`null` with no body):
+
+| `alignment_status` | Meaning |
+| --- | --- |
+| `aligned` | A valid alignment of `aligned_units` units; `alignment_issues` lists its gaps. |
+| `unaligned` | Written as plain `content` (or untracked). Valid; the bilingual export pairs the whole section. |
+| `invalid` | Recorded, but it no longer fits: a re-segment moved the section's blocks (the words, and so the freshness, unchanged), or a span does not tile the body (`bad_range`). `alignment_issues` says why; it is used as `unaligned` until rewritten with `units`. |
+
+`bookgraph.translation_alignment` does the checks for the MCP tools, reading-batch
+completion (non-blocking `translation_alignment_gaps` / `translation_alignment_invalid`),
+and the export alike.
 
 Freshness is **derived, never stored**: each read recomputes the section's current
 hash and compares it with the sidecar.
@@ -715,7 +796,7 @@ skills (`.claude/` and `.agents/`):
 
 | What | Channel |
 | --- | --- |
-| Translated headings, prose, tables, figures | `write_section_translation(content=...)` |
+| Translated headings, prose, tables, figures | `write_section_translation(units=...)` (block-aligned), or `content=...` |
 | Figure/table references inside a translation | the asset's `AssetRef.link` from `get_section` / `get_context` — relative to `sources/parsed/<doc_id>/` (e.g. `images/fig1-1.png`); `AssetRef.path` is the absolute file to *open*, not to write |
 | QA/checker results, terminology decisions, doubts about the source | `write_section_translation(notes=...)` — the sidecar's `notes` |
 | `MEDIA:/path` delivery markers, cache/mark-read progress, job status | the agent's final chat reply |
@@ -798,7 +879,8 @@ is written beside the export:
      "parent_id": null, "source": "translated",
      "artifact": "translations/vi/ddia/ddia.chapter-1.md", "freshness": "fresh",
      "assets_embedded": 1, "assets_missing": 0,
-     "original_assets_embedded": null, "original_assets_missing": null}
+     "original_assets_embedded": null, "original_assets_missing": null,
+     "alignment": null, "bilingual_rows": null}
   ],
   "warnings": [
     {"code": "asset_missing", "message": "…", "section_id": "ddia.scalability",
@@ -828,6 +910,10 @@ is written beside the export:
   asset references that could not be embedded, per column. A missing original asset
   shown in both columns of an untranslated row is counted twice there but warned
   about once.
+- `alignment` is a translated section's `alignment_status` in `bilingual` mode
+  (`aligned`, `unaligned`, or `invalid`; `null` for a fallback row and in
+  `translated` mode), and `bilingual_rows` the number of rows the section took (`1`
+  unless `aligned`; `null` in `translated` mode).
 - An asset warning names the section (`section_id`), the raw reference as written
   (`reference`), and the workspace-relative file that carries it (`source_path`): the
   translation artifact, `sources/parsed/<doc_id>/document.json` for an original

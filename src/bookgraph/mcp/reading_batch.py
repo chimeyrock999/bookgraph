@@ -41,6 +41,7 @@ from bookgraph.reading_plans import (
     plan_lock,
     write_reading_plan,
 )
+from bookgraph.translation_alignment import describe_alignment_issues, translation_alignment
 from bookgraph.translation_structure import describe_structure_issues
 from bookgraph.translations import section_content_hash, translation_state, validate_lang
 from bookgraph.workspace import WorkspacePaths
@@ -64,7 +65,9 @@ class BatchRequirements(BaseModel):
       (``translations/<lang>/<doc_id>/<section_id>.md``) exists, is non-empty, and is
       not ``stale`` in the translation registry (an ``untracked`` body only warns), and
       keeps the section's link destinations, image paths, reference definitions, HTML
-      anchors, and heading ids unchanged.
+      anchors, and heading ids unchanged. A block alignment that no longer fits the
+      section, or has warnings (untranslated source text blocks, merged units), only
+      warns.
     - ``artifacts``: extra workspace-relative path templates that must exist and be
       non-empty per section; ``{doc_id}``, ``{section_id}`` and ``{plan_id}`` expand.
     """
@@ -479,9 +482,8 @@ def _translation_issues(workspace: WorkspacePaths, lang: str, section: Section) 
                 ),
             )
         )
-    structure = translation_structure_issues(
-        workspace, state, section, _load_doc_blocks(workspace, section.doc_id)
-    )
+    blocks = _load_doc_blocks(workspace, section.doc_id)
+    structure = translation_structure_issues(workspace, state, section, blocks)
     if structure:
         issues.append(
             BatchIssue(
@@ -494,6 +496,28 @@ def _translation_issues(workspace: WorkspacePaths, lang: str, section: Section) 
                     "id byte-for-byte, link carried figures/tables by their AssetRef.link "
                     "(relative, never the absolute path), and rewrite it with "
                     "write_section_translation."
+                ),
+            )
+        )
+    alignment = translation_alignment(state, section, blocks)
+    if alignment.status != "unaligned" and alignment.issues:
+        # An unaligned translation is valid; a broken or gappy alignment only degrades
+        # the bilingual layout (to section level, or rows the original fills alone).
+        invalid = alignment.status == "invalid"
+        problem = (
+            "has an alignment that no longer fits the section"
+            if invalid
+            else "has block-alignment warnings"
+        )
+        issues.append(
+            BatchIssue(
+                code="translation_alignment_invalid" if invalid else "translation_alignment_gaps",
+                section_id=section.id,
+                blocking=False,
+                message=(
+                    f"Translation '{relative}' {problem} "
+                    f"({describe_alignment_issues(alignment.issues)}); rewrite it with "
+                    "write_section_translation(units=...) for paragraph-level bilingual rows."
                 ),
             )
         )

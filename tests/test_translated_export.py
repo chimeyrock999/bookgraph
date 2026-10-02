@@ -486,3 +486,33 @@ def test_output_suffix_must_match_renderer() -> None:
         check_output_suffix(registry, "auto", Path("book.txt"))
     with pytest.raises(RenderError, match="writes .html files"):
         select_renderer(registry, "html", Path("book.pdf"))
+
+
+def test_raw_html_img_scanning_is_attribute_aware(workspace: WorkspacePaths) -> None:
+    chapter, _, _ = _section_ids(workspace)
+    svg = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg"/>'
+    _translate(
+        workspace,
+        chapter,
+        "# Chương\n\n"
+        "A <img alt='a src=x' src=\"images/fig1.png\"> decoy.\n\n"
+        f"An <img src='{svg}'> inline SVG.\n\n"
+        'Old <!-- <img src="old.png"> --> comment.\n\n'
+        '<!--\n<img src="gone-block.png">\n-->\n',
+    )
+
+    export = build_translated_export(workspace, DOC, lang="vi", generated_at=GENERATED_AT)
+    html = export.html
+
+    # The decoy ``src=x`` inside ``alt`` is ignored; the real src is embedded.
+    assert f"<img alt='a src=x' src=\"{PNG_URI}\">" in html
+    # A '>' inside a quoted value does not end the tag; the value is re-quoted escaped.
+    assert (
+        'src="data:image/svg+xml,&lt;svg xmlns=&quot;http://www.w3.org/2000/svg&quot;/&gt;"' in html
+    )
+    # Commented-out images are left alone and never reported.
+    assert '<!-- <img src="old.png"> -->' in html
+    assert '<img src="gone-block.png">' in html
+    assert [w for w in export.report.warnings if w.section_id == chapter] == []
+    assert export.report.sections[0].assets_embedded == 2
+    assert export.report.sections[0].assets_missing == 0

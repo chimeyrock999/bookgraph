@@ -64,10 +64,16 @@ _EMBEDDABLE_MIME_TYPES = frozenset(
     {"image/png", "image/jpeg", "image/gif", "image/svg+xml", "image/webp"}
 )
 
-# Raw HTML ``<img>`` tags and their ``src`` attribute (double-, single- or unquoted).
-_HTML_IMG_RE = re.compile(r"<img\b[^>]*>", re.IGNORECASE)
-_HTML_SRC_RE = re.compile(
-    r"""(?<![\w-])src\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))""", re.IGNORECASE
+# Raw HTML scanning for ``<img>`` tags, attribute by attribute so a ``src=`` or ``>``
+# inside another attribute's quoted value is never mistaken for the real one.
+_HTML_ATTR = r"""[^\s"'<>/=]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+))?"""
+_HTML_ATTR_RE = re.compile(r"""([^\s"'<>/=]+)(?:\s*=\s*("[^"]*"|'[^']*'|[^\s"'=<>`]+))?""")
+# Alternatives, in order: an HTML comment (left untouched, so a commented-out image is
+# neither embedded nor reported), a well-formed ``<img>`` tag, and a malformed one
+# (reported, so it cannot vanish silently under the CSP).
+_HTML_IMG_SCAN_RE = re.compile(
+    rf"(?P<comment><!--.*?-->)|(?P<img><img\b(?:\s+{_HTML_ATTR})*\s*/?>)|(?P<bad><img\b[^>]*>)",
+    re.IGNORECASE | re.DOTALL,
 )
 
 # Ingest quality warnings worth repeating in an export report: the section's source
@@ -435,22 +441,24 @@ class _Assembler:
         self, html: str, section_id: str, bases: list[Path], counter: _AssetCounter
     ) -> str:
         def replace(match: re.Match[str]) -> str:
+            if match.group("comment"):
+                return match.group(0)
             tag = match.group(0)
-            src_match = _HTML_SRC_RE.search(tag)
-            if src_match is None:
-                self._warn(ASSET_MISSING, "HTML <img> tag has no src", section_id, tag)
+            src_attr = _html_src_attr(tag[4:]) if match.group("img") else None
+            if src_attr is None:
+                self._warn(ASSET_MISSING, "HTML <img> tag has no usable src", section_id, tag)
                 counter.missing += 1
                 return _missing(tag)
-            src = unescape(next(g for g in src_match.groups() if g is not None))
+            src, (start, end) = src_attr
             uri = self._link_data_uri(src, section_id, bases)
             if uri is None:
                 counter.missing += 1
                 return _missing(src)
             counter.embedded += 1
-            start, end = src_match.span()
-            return f'{tag[:start]}src="{uri}"{tag[end:]}'
+            start, end = start + 4, end + 4  # offsets are relative to the text after "<img"
+            return f'{tag[:start]}src="{escape(uri, quote=True)}"{tag[end:]}'
 
-        return _HTML_IMG_RE.sub(replace, html)
+        return _HTML_IMG_SCAN_RE.sub(replace, html)
 
     def _link_data_uri(self, src: str, section_id: str, bases: list[Path]) -> str | None:
         if not src:
@@ -573,6 +581,26 @@ def _shift_headings(tokens: list[Token], level: int) -> None:
     for token in tokens:
         if token.type in {"heading_open", "heading_close"}:
             token.tag = f"h{max(1, min(int(token.tag[1]) + offset, 6))}"
+
+
+def _html_src_attr(attributes: str) -> tuple[str, tuple[int, int]] | None:
+    """The unescaped ``src`` value of an ``<img>`` tag's attributes, with its span.
+
+    ``attributes`` is the tag text after ``<img``. Attributes are walked one at a
+    time, so only a real ``src`` attribute counts (not ``data-src``, nor ``src=``
+    inside another attribute's quoted value).
+    """
+
+    for attr in _HTML_ATTR_RE.finditer(attributes):
+        if attr.group(1).lower() != "src":
+            continue
+        raw = attr.group(2)
+        if raw is None:
+            return None
+        if raw[:1] in {'"', "'"}:
+            raw = raw[1:-1]
+        return unescape(raw), attr.span()
+    return None
 
 
 def _html_inline(content: str) -> Token:

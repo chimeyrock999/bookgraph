@@ -116,6 +116,8 @@ chat), reuse the cache instead of retranslating:
    link labels, but keep link destinations and fragment ids
    (`(ch03.html#sec_x)`, `(#fig_y)`), image and file paths, reference-style
    identifiers, HTML `id`/`name` anchors, and `{#id}` heading ids byte-for-byte.
+   Never point a link at an export anchor yourself: `export translated-pdf`
+   resolves the source destinations to its own section anchors.
    A non-empty `structure_issues` on the write result lists what changed; fix and
    rewrite it (`complete_reading_batch` blocks on `translation_structure_changed`).
 4. `list_section_artifacts(doc_id, lang)` shows every cached translation and which

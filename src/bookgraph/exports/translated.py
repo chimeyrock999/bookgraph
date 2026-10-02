@@ -46,8 +46,8 @@ from markdown_it.token import Token
 from bookgraph.assets import asset_reference, resolve_asset_path
 from bookgraph.books import read_book_bookmarks
 from bookgraph.documents import read_document
-from bookgraph.exports.bilingual import bilingual_section
 from bookgraph.exports.images import AssetCounter, AssetOrigin, ImageEmbedder
+from bookgraph.exports.links import resolve_section_links
 from bookgraph.exports.models import (
     ASSET_MISSING,
     TRANSLATION_EMPTY,
@@ -214,13 +214,15 @@ def build_translated_export(
         )
         for node in flatten(outline)
     }
-    if mode == "bilingual":
-        rendered = {
-            node.section.id: bilingual_section(
-                *rendered[node.section.id], assembler.original_column(node), lang
-            )
-            for node in flatten(outline)
-        }
+    originals = (
+        {node.section.id: assembler.original_column(node) for node in flatten(outline)}
+        if mode == "bilingual"
+        else {}
+    )
+    rendered, link_warnings = resolve_section_links(
+        outline, rendered, originals, assembler.original_source, lang
+    )
+    assembler.warnings.extend(link_warnings)
     report = ExportReport.from_sections(
         [entry for entry, _ in rendered.values()],
         mode=mode,
@@ -440,7 +442,8 @@ class _Assembler(ImageEmbedder):
         """Flag a translation whose link destinations/anchors/paths differ from the source.
 
         Export navigation itself anchors on section ids, never on (translated) heading
-        text, but intra-book links and image paths in the body only work as written.
+        text, but intra-book links are resolved from their source destinations
+        (:mod:`.links`), and image paths only work as written.
         """
 
         resolves = local_asset_resolver(self.workspace.root, self._translation_bases(artifact))
@@ -537,10 +540,9 @@ class _Assembler(ImageEmbedder):
 
     def _render_original(self, section: Section, depth: int, counter: AssetCounter) -> str:
         blocks = [self.blocks[b] for b in section.block_ids if b in self.blocks]
+        source = self.original_source(section)
         if not blocks:
-            source = _relative(self.workspace, self.manifest)
             return self._markdown(section.text, section.id, counter, source)
-        source = _relative(self.workspace, self.parsed_dir / "document.json")
         parts: list[str] = []
         for index, block in enumerate(blocks):
             if block.type == "title":
@@ -555,6 +557,14 @@ class _Assembler(ImageEmbedder):
             elif block.text.strip():
                 parts.append(self._markdown(block.text, section.id, counter, source, block.id))
         return "".join(parts)
+
+    def original_source(self, section: Section) -> str | None:
+        """The file an original section is rebuilt from: ``document.json``, else the
+        sections manifest when none of its blocks were parsed."""
+
+        if any(b in self.blocks for b in section.block_ids):
+            return _relative(self.workspace, self.parsed_dir / "document.json")
+        return _relative(self.workspace, self.manifest)
 
     def _asset_block(
         self, block: CanonicalBlock, section_id: str, counter: AssetCounter, source: str | None

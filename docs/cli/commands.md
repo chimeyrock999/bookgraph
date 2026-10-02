@@ -1190,6 +1190,43 @@ chapters of one book. A section whose bookmark sits directly under a bookmark ti
 as a part is a chapter too. Other sections flow inside their chapter. This matters for PDFs: MinerU marks every title as level
 1, so a heading-segmented PDF has a flat manifest that the outline restores.
 
+**Internal links.** Parsed text and translations keep link destinations as the source
+book wrote them (`[Chapter 10](ch10.html#ch_consistency)`, `[intro](#sec_intro)`), but
+the export is one document anchored on section ids. When it renders the page, the
+export rewrites each internal-book `<a href>` (a `#fragment`, or a link to a source
+`.html`/`.htm`/`.xhtml` file) to one of its own anchors, in this order:
+
+1. the fragment is an `id` already on the page → that anchor;
+2. the file names a section: `ch10.html` (or `chapter-10`, `ch10s02`) → the section
+   titled *Chapter 10* (or *10. …*); `app01.html`/`appa.html` → *Appendix A*;
+   `part02.html` → *Part II*; any other file → the section with the same title
+   words (`preface.html` → *Preface*);
+3. the fragment's words, minus a `sec_`/`ch_`/… prefix and the words of the
+   chapter's own title, name one section of that file
+   (`ch10.html#sec_consistency_linearizability` → *Linearizability*). A title with
+   exactly those words wins over titles that only contain them, at any depth
+   (`#sec_indexes` → *Indexes*, not *Transactions and Indexes*). When nothing
+   matches, the first word is retried without, as a per-chapter id slug
+   (`ch03.html#sec_datamodels_normalization` → *Normalization, Denormalization, and
+   Joins*). A file holds its section's subtree or, in a flat outline (MarkItDown puts
+   a chapter title and its sections at one level), the sections after it up to the
+   next *Chapter N* / *Appendix X* / *Part N* (a head with no such title, like a leaf
+   *Preface*, also stops at a same-depth section that has subsections). A
+   fragment-only link is looked up in the linking section's file, then the book;
+4. otherwise a link whose file named a section goes to that section (figure and
+   example fragments such as `ch10.html#fig_x` always do; a fragment-only link has no
+   file to fall back to).
+
+Only the shallowest match counts, and several matches at one depth are ambiguous. An
+unresolved link is left as written and reported as `internal_link_unresolved`.
+Steps 2 and 3 are heuristics over titles: a fragment that abbreviates its section's
+title can match another title that has the abbreviation
+(`ch08.html#sec_transactions_2pc` → *2PL is not 2PC*, not *Two-Phase Commit*), and
+such a wrong target is not reported. A missed link is.
+External URLs (`https:`, `mailto:`, …), absolute paths, and links to images or other
+files are never rewritten, and neither the parsed document nor the translation
+artifacts change. Both `bilingual` columns link to the right column's anchor.
+
 Two reader-facing modes (`--mode`):
 
 ```text

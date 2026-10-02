@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from bookgraph.exports.models import TRANSLATION_STRUCTURE_CHANGED
+from bookgraph.exports.models import INTERNAL_LINK_UNRESOLVED, TRANSLATION_STRUCTURE_CHANGED
 from bookgraph.exports.renderers import HtmlRenderer
 from bookgraph.exports.translated import (
     ExportError,
@@ -73,7 +73,13 @@ def test_translated_labels_and_heading_keep_targets_and_section_anchor(tmp_path:
 
     export = build_translated_export(paths, DOC, lang="vi", generated_at=GENERATED_AT)
 
-    assert export.report.warnings == []
+    # The targets match the source, so the translation is not flagged; this one-section
+    # book has no chapter 3 nor a section named by the figure's id, so both links stay
+    # as written and are reported as unresolved internal links.
+    assert [(w.code, w.reference) for w in export.report.warnings] == [
+        (INTERNAL_LINK_UNRESOLVED, "ch03.html#sec_datamodels_normalization"),
+        (INTERNAL_LINK_UNRESOLVED, "#fig_graphql_query"),
+    ]
     # Navigation anchors on the section id, never on the translated heading text.
     assert f'id="{section.id}"' in export.html
     assert f'href="#{section.id}"' in export.html

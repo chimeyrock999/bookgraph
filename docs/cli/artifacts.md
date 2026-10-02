@@ -636,6 +636,10 @@ counts as resolving, even when it points at a workspace file: the reading-agent
 contract links each carried figure/table by its relative `AssetRef.link`, never by its
 absolute `AssetRef.path`, so adding an absolute image link is reported. Heading *text* may be translated: export navigation anchors
 on section ids, never on heading text.
+Keep source destinations even though they do not navigate inside an assembled
+export: `export translated-pdf` resolves them to its own anchors when it renders the
+page (see *Internal links* in `commands.md`), so a translation that rewrites
+`ch10.html#ch_consistency` to an export section id is a structure change.
 
 What is compared:
 
@@ -836,6 +840,16 @@ is written beside the export:
     rewrote a link destination, image path, reference definition, HTML anchor, or
     heading id of its section (see the structure rule above). Rendered as written;
     `--strict` refuses it.
+  - `internal_link_unresolved`: an internal-book link (a `#fragment`, or a link to a
+    source `.html`/`.htm`/`.xhtml` file) of a rendered section matches no section or
+    anchor of the export, so it is left as written. `reference` is the destination and
+    `source_path` the file it was read from (as for an asset warning). Reported once
+    per section and destination, in reading order. In `bilingual` mode each column is
+    resolved on its own: a link in both columns is reported once, from the right
+    column's file (`column: mixed`), and a link only in the left column names the
+    original's file (`column: original`). `origin` is `translation` for a link read
+    from the artifact, `source` otherwise. A diagnostic only: `--strict` does not
+    refuse it yet.
   - `translation_empty`, `translation_unreadable`: the section falls back.
   - `asset_captions_only` / `asset_text_sparse`: ingest quality warnings, passed
     through for rendered sections whose source prose is mostly captions.

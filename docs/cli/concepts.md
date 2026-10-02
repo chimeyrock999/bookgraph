@@ -65,20 +65,27 @@ it is stored in `concept_mentions`:
 3. A canonical concept's edges take the registry `title`, so every mention aggregates
    under one display title.
 4. Two edges in one section that collapse onto the same canonical slug merge into one
-   mention. The first edge wins, and the first non-empty gloss is kept.
+   mention, and that mention keeps **one edge whole** (slug provenance and gloss are
+   never mixed). The edge asserted directly under the canonical slug wins. Otherwise
+   the first alias edge wins. A further colliding alias's `raw_slug` is not stored
+   (one provenance slot per mention); it stays in the annotation artifact.
 
 The registry, like annotations, is **deferred**: editing it touches only the file.
-Run `bookgraph index build` (all documents, since aliases are cross-book) to apply it,
-then `bookgraph index concepts` to re-render pages.
+Apply it with a **full** `bookgraph index build` (no `--doc-id`). A per-document
+build canonicalizes only that document, which leaves the other documents' rows
+half-merged; `stale-alias` lint flags any leftovers. Then run
+`bookgraph index concepts` to re-render the pages.
 
 ## Reads
 
 - **`get_concept(concept)`** resolves an alias first: `get_concept("metadata-file")`
   returns the canonical `table-metadata` with `resolved_from: "metadata-file"`,
   `canonical: true`, and `aliases` (the registry aliases plus any `raw_slug` seen on a
-  mention). Each mention carries its `raw_slug`. If the alias was registered after
-  the last build and the canonical slug is not indexed yet, the alias's own (stale)
-  node is served instead of failing.
+  mention). Each mention carries its `raw_slug`. Mentions still
+  indexed under one of the canonical's aliases (registry edited, index not rebuilt
+  yet) are folded in at read time, tagged with that alias as `raw_slug`. So both the
+  alias and the canonical slug return the full canonical view even when the canonical
+  has no rows of its own yet.
 - **`index concepts`** renders the canonical title and an `Also known as:` line
   listing the aliases. With `--durable-only` it skips concepts that have a lint
   **warning**, so not every noun phrase becomes a durable page. Canonical concepts
@@ -102,8 +109,17 @@ the one in more books, then more mentions, then fewer words):
 | near-identical spelling | `difflib` ratio ≥ 0.88 | `partiton-evolution` / `partition-evolution` |
 
 The default threshold is 0.5. A lone head noun inside a phrase (`table` /
-`table-metadata` = 0.4) falls below it. Ignored slugs, aliases (already merged), and
-distinct pairs are never suggested.
+`table-metadata`, `database` / `distributed-databases` = 0.4) falls below it. Ignored
+slugs, aliases (already merged), and distinct pairs are never suggested.
+
+- Plurals are folded per token. `-ies` → `-y`. Sibilant plurals (`-sses`, `-xes`,
+  `-ches`, `-shes`) drop `-es`. Any other trailing `s` is dropped
+  (`databases` → `database`).
+- Slugs that differ only in digits (`format-v1` / `format-v2`) are versions, not
+  spelling variants, and are never matched by the spelling rule.
+- Only pairs that share a blocking key are scored, so the scan is near-linear rather
+  than all-pairs. The keys are: a stem token, acronym letters, or the first or last
+  three characters.
 
 ### Lint
 
@@ -142,8 +158,9 @@ bookgraph concepts ignore   WS SLUG                            # global prune
 bookgraph concepts distinct WS LEFT RIGHT                      # silence a suggestion
 ```
 
-- `alias`: creates `CANONICAL` in the registry if needed. Its title is `--title`,
-  else the indexed title, else one derived from the slug. Aliasing a slug that was
+- `alias`: creates `CANONICAL` in the registry if needed, promoting it out of
+  `ignored`. Its title is `--title`, else the indexed title, else one derived from the
+  slug. It also removes any `distinct` verdict between the merged slugs. Aliasing a slug that was
   itself canonical moves its aliases to the new canonical. Aliasing *to* an alias is
   rejected (`'x' is an alias of 'y'; alias … to 'y' instead`).
 - `canonical`: promotes a slug that was an alias or ignored, removing it from that

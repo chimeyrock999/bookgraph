@@ -17,6 +17,7 @@ from bookgraph.exports.models import (
     TRANSLATION_UNREADABLE,
     TRANSLATION_UNTRACKED,
     ExportReport,
+    FallbackPolicy,
 )
 from bookgraph.exports.renderers import (
     ExportRenderer,
@@ -160,12 +161,19 @@ def test_mixed_sections_render_translation_or_original_in_reading_order(
     assert "Văn bản tiếng Việt." in html
     assert "Intro prose in English." not in html  # translated sections drop the original
     assert "Second section English text." in html  # untranslated falls back to English
-    assert "Untranslated — original text" in html
     body = html[html.index("<main>") :]
     assert body.index("Chương Một") < body.index("Second section") < body.index("Phần Ba")
     assert PNG_URI in html
-    assert "2/3 sections translated (66.7%)" in html
-    assert GENERATED_AT in html
+    # Reader-facing by default: coverage and per-section status stay in the report.
+    for status in ("Untranslated — original text", "sections translated", GENERATED_AT):
+        assert status not in html
+
+    debug = build_translated_export(
+        workspace, DOC, lang="vi", generated_at=GENERATED_AT, debug_status=True
+    ).html
+    assert "Untranslated — original text" in debug
+    assert "2/3 sections translated (66.7%)" in debug
+    assert GENERATED_AT in debug
 
 
 def test_original_fallback_keeps_assets_and_equations_in_block_order(
@@ -187,7 +195,8 @@ def test_original_fallback_keeps_assets_and_equations_in_block_order(
     assert [(w.section_id, w.reference) for w in missing] == [
         (second_entry.section_id, "missing-table.png")
     ]
-    assert "Missing asset: missing-table.png" in html
+    assert "missing-table.png" not in html  # the path is in the report, not the book
+    assert '<span class="missing-asset">Image not available</span>' in html
 
 
 def test_translated_headings_are_relevelled_to_the_section_level(
@@ -257,7 +266,10 @@ def test_broken_remote_and_escaping_image_links_are_reported_not_embedded(
     assert export.report.sections[0].assets_missing == 5
     assert 'src="https://' not in export.html
     assert f'src="{outside}"' not in export.html
-    assert "Missing asset: https://example.com/x.png" in export.html
+    debug = build_translated_export(
+        workspace, DOC, lang="vi", generated_at=GENERATED_AT, debug_status=True
+    )
+    assert "Missing asset: https://example.com/x.png" in debug.html
 
 
 def test_empty_translation_falls_back_with_a_warning(workspace: WorkspacePaths) -> None:
@@ -282,7 +294,13 @@ def test_skip_fallback_renders_placeholders(workspace: WorkspacePaths) -> None:
 
     assert [e.source for e in export.report.sections] == ["translated", "skipped", "skipped"]
     assert "Second section English text." not in export.html
-    assert export.html.count("Not translated yet") == 2
+    # The reader keeps the chapter's headings; only the report says they were skipped.
+    assert "<h2>Section Two</h2></section>" in export.html
+    assert "Not translated yet" not in export.html
+    debug = build_translated_export(
+        workspace, DOC, lang="vi", fallback="skip", generated_at=GENERATED_AT, debug_status=True
+    )
+    assert debug.html.count("Not translated yet") == 2
     # Assets of skipped sections are not rendered, so they are not reported missing.
     assert not [w for w in export.report.warnings if w.code == ASSET_MISSING]
 
@@ -353,6 +371,15 @@ def test_sections_only_workspace_renders_section_text(tmp_path: Path) -> None:
 def test_missing_manifest_is_an_export_error(tmp_path: Path) -> None:
     with pytest.raises(ExportError, match="Sections manifest not found"):
         build_translated_export(WorkspacePaths(tmp_path), DOC, lang="vi")
+
+
+def test_duplicate_section_ids_are_an_export_error(workspace: WorkspacePaths) -> None:
+    manifest = workspace.sources_sections / DOC / "sections.jsonl"
+    first = manifest.read_text().splitlines()[0]
+    manifest.write_text(manifest.read_text() + first + "\n")
+
+    with pytest.raises(ExportError, match="duplicate section ids: tiny.chapter-one"):
+        build_translated_export(workspace, DOC, lang="vi")
 
 
 def test_frontmatter_split() -> None:
@@ -630,9 +657,14 @@ def test_stale_translation_renders_flagged_and_counts_as_translated(
     assert export.report.translated_sections == 3
     assert _codes(export.report, chapter) == [TRANSLATION_STALE]
     assert "Bản dịch cũ." in export.html
-    # The note sits right under the section heading, and the TOC flags it too.
-    assert '<h1>Chương Một</h1>\n<p class="source-note">Translation may be outdated' in export.html
-    assert 'Chương Một</a> <span class="status">(may be outdated)</span>' in export.html
+    assert "may be outdated" not in export.html
+    # With ``debug_status`` the note sits right under the section heading, and the TOC
+    # flags it too.
+    debug = build_translated_export(
+        workspace, DOC, lang="vi", fallback="fail", generated_at=GENERATED_AT, debug_status=True
+    )
+    assert '<h1>Chương Một</h1>\n<p class="source-note">Translation may be outdated' in debug.html
+    assert 'Chương Một</a> <span class="status">(may be outdated)</span>' in debug.html
 
     # ``--strict`` refuses to present it as current.
     with pytest.raises(ExportError, match="strict mode"):
@@ -657,8 +689,13 @@ def test_untracked_translation_renders_with_a_warning(
     assert export.report.sections[0].freshness == "untracked"
     assert _codes(export.report, chapter) == [TRANSLATION_UNTRACKED]
     assert "Sửa tay." in export.html
-    assert "Translation status unknown — it may be outdated" in export.html
-    assert 'Chương Một</a> <span class="status">(not tracked)</span>' in export.html
+    assert "Translation status unknown" not in export.html
+    assert "not tracked" not in export.html
+    debug = build_translated_export(
+        workspace, DOC, lang="vi", fallback="skip", generated_at=GENERATED_AT, debug_status=True
+    )
+    assert "Translation status unknown — it may be outdated" in debug.html
+    assert 'Chương Một</a> <span class="status">(not tracked)</span>' in debug.html
     # Freshness unknown is not known-bad: ``--strict`` still writes the export.
     report = write_translated_export(export, tmp_path / "out.html", HtmlRenderer(), strict=True)
     assert report.sections[0].freshness == "untracked"
@@ -720,3 +757,113 @@ def test_body_that_exists_but_cannot_be_read_is_unreadable(workspace: WorkspaceP
     with pytest.raises(UntranslatedSectionsError) as excinfo:
         build_translated_export(workspace, DOC, lang="vi", fallback="fail")
     assert excinfo.value.report.untranslated == [chapter]
+
+
+def _write_outline(paths: WorkspacePaths, bookmarks: list[tuple[str, int, int]]) -> None:
+    manifest = paths.sources_inbox / DOC / "book.json"
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text(
+        json.dumps(
+            {
+                "pdf": {
+                    "bookmarks": [
+                        {"title": title, "page_index": page, "level": level}
+                        for title, page, level in bookmarks
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_child_sections_render_inside_their_chapter(workspace: WorkspacePaths) -> None:
+    chapter, second, third = _section_ids(workspace)
+    _register(workspace, second, "# Phần Hai\n\nNội dung.\n")
+
+    export = build_translated_export(workspace, DOC, lang="vi", generated_at=GENERATED_AT)
+    html = export.html
+
+    assert [(e.depth, e.parent_id) for e in export.report.sections] == [
+        (1, None),
+        (2, chapter),
+        (2, chapter),
+    ]
+    # One chapter <section> holding both child sections; only the chapter opens a page.
+    main = html[html.index("<main>") :]
+    assert main.count('class="section depth-1 chapter"') == 1
+    assert main.count('class="section depth-2"') == 2
+    chapter_open = main.index(f'id="{chapter}"')
+    chapter_close = main.rindex("</section>")
+    assert chapter_open < main.index(f'id="{second}"') < main.index(f'id="{third}"')
+    assert main.index(f'id="{third}"') < chapter_close
+    assert main.count("</section>\n</section>") == 1  # children close before the chapter
+    # The TOC nests the same way.
+    assert (
+        f'<ol><li><a href="#{chapter}">Chapter One</a><ol><li><a href="#{second}">Phần Hai</a>'
+        in html
+    )
+
+
+def test_pdf_outline_sets_reading_order_and_chapters(workspace: WorkspacePaths) -> None:
+    # The manifest is flat (every MinerU title is level 1) and in the wrong order.
+    chapter, second, third = _section_ids(workspace)
+    sections = {s.id: s for s in _sections(workspace)}
+    flat = [
+        sections[i].model_copy(update={"level": 1})
+        for i in (third, chapter, second)
+    ]
+    write_sections(flat, workspace.sources_sections / DOC)
+    _write_outline(
+        workspace,
+        [("Part One", 0, 1), ("Chapter One", 0, 2), ("Section Two", 1, 3), ("Section Three", 2, 3)],
+    )
+
+    export = build_translated_export(workspace, DOC, lang="vi", generated_at=GENERATED_AT)
+
+    assert [(e.section_id, e.depth, e.parent_id) for e in export.report.sections] == [
+        (chapter, 2, None),
+        (second, 3, chapter),
+        (third, 3, chapter),
+    ]
+    toc = export.html[export.html.index('<nav class="toc">') : export.html.index("</nav>")]
+    assert toc.index("Chapter One") < toc.index("Section Two") < toc.index("Section Three")
+    assert "<h2>Chapter One</h2>" in export.html
+    assert "<h3>Section Two</h3>" in export.html
+
+
+@pytest.mark.parametrize("fallback", ["original", "skip"])
+def test_default_export_has_no_status_text(
+    workspace: WorkspacePaths, fallback: FallbackPolicy
+) -> None:
+    chapter, second, third = _section_ids(workspace)
+    _register(workspace, chapter, "# Chương Một\n\nCũ.\n")
+    _translate(workspace, second, "# Phần Hai\n\nSửa tay.\n")  # untracked
+    _change_section_text(workspace, chapter)  # stale
+
+    export = build_translated_export(
+        workspace, DOC, lang="vi", fallback=fallback, generated_at=GENERATED_AT
+    )
+
+    assert [e.freshness for e in export.report.sections] == ["stale", "untracked", None]
+    assert {TRANSLATION_STALE, TRANSLATION_UNTRACKED} <= {w.code for w in export.report.warnings}
+    # The rendered book (not the stylesheet), with section anchors — ids, not text — removed.
+    body = export.html[export.html.index("<body>") :]
+    body = body.replace(f'id="{DOC}.', 'id="').replace(f'href="#{DOC}.', 'href="#')
+    for leak in (
+        "(original)",
+        "(skipped)",
+        "(not tracked)",
+        "(may be outdated)",
+        "may be outdated",
+        "Translation status unknown",
+        "Untranslated",
+        "Not translated yet",
+        "Missing asset",
+        "coverage",
+        "fallback",
+        "data-source",
+        "source-",
+        DOC,
+    ):
+        assert leak not in body, leak

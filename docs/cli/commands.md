@@ -263,7 +263,9 @@ bookgraph segment /path/to/workspace <doc_id> --segmenter token-page --max-token
 Reads `sources/parsed/<doc_id>/document.json` (fails if missing). The `bookmark`
 segmenter also reads `sources/inbox/<doc_id>/book.json` and uses its
 `pdf.bookmarks` array when present; without usable bookmarks it falls back to the
-heading segmenter. The `token-page` segmenter is a deterministic fallback for
+heading segmenter. Bookmark sections come out in page order; bookmarks on the same
+page keep their outline (TOC) order, and each section's `heading_path` is its
+outline ancestry (`["Part I", "Chapter 1", "Storage"]`). The `token-page` segmenter is a deterministic fallback for
 documents with weak/missing headings or bookmarks: it keeps blocks whole,
 chunks by a token budget, and prefers page boundaries when a page break is
 available near the budget.
@@ -1036,10 +1038,34 @@ bookgraph llmwiki serve /path/to/workspace --print
 
 **Status:** Implemented.
 
-Assemble a partially translated book into one reading edition. Sections come out in
-`sections.jsonl` order. A section with a translation artifact for `--lang` renders that
-artifact; any other section follows `--fallback`. This produces a clean reading
-edition. It does not reproduce the publisher's page layout.
+Assemble a partially translated book into one reading edition. A section with a
+translation artifact for `--lang` renders that artifact; any other section follows
+`--fallback`. This produces a clean reading edition. It does not reproduce the
+publisher's page layout.
+
+The book is **reader-facing and content-only** by default: a title page, a table of
+contents, and the sections. Export and translation state (coverage, which sections
+are original text or skipped, stale or untracked translations, asset paths) is not
+rendered; it is in the `.report.json` and the printed warnings. `--debug-status`
+renders it into the book as well.
+
+**Structure.** Sections are arranged into the book's structure:
+
+- When `sources/inbox/<doc_id>/book.json` carries a PDF outline (`pdf.bookmarks`), it
+  is the canonical table of contents. Sections are matched to bookmarks by title
+  (ignoring case, punctuation, and quote style; a repeated title such as
+  *Conclusion* goes to the bookmark on the nearest page). Matched sections take the
+  bookmark's level as their depth and are put in outline order. A section no bookmark
+  names stays right after the matched section before it, one level deeper.
+- Otherwise, or when no section title matches, `sections.jsonl` order and
+  `Section.level` are kept.
+
+A section renders inside its parent (`<section>` elements nest, and the TOC nests the
+same way), with headings at its depth. A **chapter** starts a new page: every
+top-level section, and each child of a top-level section that is a *part* (its
+outline goes two levels below it — *Part I* > *Chapter 1* > *Section*). Other sections
+flow inside their chapter. This matters for PDFs: MinerU marks every title as level
+1, so a heading-segmented PDF has a flat manifest that the outline restores.
 
 ```bash
 bookgraph export translated-pdf /path/to/workspace ddia --lang vi
@@ -1056,8 +1082,10 @@ bookgraph export translated-pdf /path/to/workspace ddia --check           # cove
   (lowercased, so `VI` and `pt-BR` work).
 - `--fallback original|skip|fail` (default `original`). This controls what happens to
   a section that has no translation:
-  - `original` renders the original section, labelled *Untranslated — original text*;
-  - `skip` renders the title with a *Not translated yet* placeholder;
+  - `original` renders the original section (with `--debug-status`, labelled
+    *Untranslated — original text*);
+  - `skip` renders only the section title (with `--debug-status`, followed by a
+    *Not translated yet* placeholder), so the chapter's structure stays whole;
   - `fail` exits `1` and lists every untranslated section. Nothing is written. A
     `stale` or `untracked` translation counts as translated (use `--strict` to refuse
     stale ones).
@@ -1073,13 +1101,21 @@ bookgraph export translated-pdf /path/to/workspace ddia --check           # cove
   An `untracked` translation only warns.
 - `--check`: preflight only. Prints coverage and warnings and writes nothing. With
   `--strict`, it exits `1` whenever the real export would be refused.
+- `--debug-status`: also render the export status into the book: a title page with
+  `doc_id`, language, timestamp, coverage, and fallback; the per-section notes
+  (*Untranslated — original text*, *Translation may be outdated*, *Translation status
+  unknown — it may be outdated*, *Not translated yet*); TOC markers (`(original)`,
+  `(skipped)`, `(may be outdated)`, `(not tracked)`); and the path in each *Missing
+  asset* placeholder. Off by default.
 - The `--out` suffix must match the renderer: `.pdf` for `weasyprint`/`playwright`,
   `.html`/`.htm` for `html`. A mismatch, or a suffix that `auto` cannot map to a
   format, exits `2`.
 
 ### Reads
 
-- `sources/sections/<doc_id>/sections.jsonl`: the skeleton and reading order.
+- `sources/sections/<doc_id>/sections.jsonl`: the skeleton.
+- `sources/inbox/<doc_id>/book.json`, when present: its PDF outline sets reading
+  order and hierarchy (see *Structure* above).
 - `sources/parsed/<doc_id>/document.json`, when present. Original sections are
   rebuilt from their `block_ids`, so figures, tables and equations stay next to the
   prose around them in the source. Without it, original sections render
@@ -1087,8 +1123,9 @@ bookgraph export translated-pdf /path/to/workspace ddia --check           # cove
 - Translations, through the translation registry (`bookgraph.translations`) only:
   `translations/<lang>/<doc_id>/<section_id>.md` plus its `.json` sidecar, which
   decides the section's `fresh` / `stale` / `untracked` status (the sidecar is never
-  rendered). Stale and untracked translations render with a visible note and a
-  warning; see `artifacts.md`. `translation_cache/` is not read.
+  rendered). Stale and untracked translations render and are reported as warnings
+  (with `--debug-status`, also as a visible note); see `artifacts.md`.
+  `translation_cache/` is not read.
 
 ### Asset handling
 
@@ -1102,7 +1139,8 @@ All images are embedded as `data:` URIs, so the output is self-contained.
 - Original asset blocks use the shared `bookgraph.assets.resolve_asset_path` resolver.
 - A link is rejected if it leaves the workspace (including through symlinks), is a
   remote URL, or is not a png/jpeg/gif/svg/webp file. A rejected link is replaced by a
-  visible *Missing asset* placeholder and reported. It does not crash the export
+  visible *Image not available* placeholder (*Missing asset: <reference>* with
+  `--debug-status`) and reported. It does not crash the export
   unless `--strict` is set.
 - The page carries a CSP that allows only `data:` images and inline styles, and both
   PDF backends refuse any URL that is not `data:`. Rendering never reads the network

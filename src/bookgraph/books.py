@@ -5,7 +5,7 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
-from bookgraph.pdf_metadata import PdfMetadata, inspect_pdf_metadata
+from bookgraph.pdf_metadata import PdfBookmark, PdfMetadata, inspect_pdf_metadata
 from bookgraph.utils import slugify
 from bookgraph.workspace import WorkspacePaths
 
@@ -125,3 +125,38 @@ def _pdf_manifest(metadata: PdfMetadata | None) -> dict[str, object]:
             for bookmark in metadata.bookmarks
         ],
     }
+
+
+def read_book_bookmarks(workspace: WorkspacePaths, doc_id: str) -> list[PdfBookmark]:
+    """The PDF outline captured in ``sources/inbox/<doc_id>/book.json`` by ``add-book``.
+
+    Outline (TOC) order is kept. A missing or unreadable manifest, or a book without
+    bookmarks, yields ``[]``; malformed entries are skipped.
+    """
+
+    manifest = workspace.sources_inbox / doc_id / "book.json"
+    if not manifest.is_file():
+        return []
+    try:
+        payload = json.loads(manifest.read_text())
+    except (OSError, json.JSONDecodeError):
+        return []
+    pdf = payload.get("pdf") if isinstance(payload, dict) else None
+    raw_bookmarks = pdf.get("bookmarks") if isinstance(pdf, dict) else None
+    if not isinstance(raw_bookmarks, list):
+        return []
+    bookmarks: list[PdfBookmark] = []
+    for raw in raw_bookmarks:
+        if not isinstance(raw, dict):
+            continue
+        title = raw.get("title")
+        page_index = raw.get("page_index")
+        level = raw.get("level")
+        if not isinstance(title, str) or not title.strip():
+            continue
+        if page_index is not None and not isinstance(page_index, int):
+            continue
+        if not isinstance(level, int):
+            continue
+        bookmarks.append(PdfBookmark(title=title.strip(), page_index=page_index, level=level))
+    return bookmarks

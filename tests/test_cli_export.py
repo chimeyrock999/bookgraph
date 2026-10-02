@@ -51,6 +51,26 @@ def test_export_html_writes_edition_and_report(tmp_path: Path) -> None:
     payload = json.loads(report.read_text())
     assert payload["renderer"] == "html"
     assert [s["source"] for s in payload["sections"]] == ["translated", "original"]
+    # Reader-facing book; the status is in the report.
+    assert "(original)" not in html and "sections translated" not in html
+    assert payload["sections"][0]["freshness"] == "untracked"
+    codes = sorted(w["code"] for w in payload["warnings"])
+    assert codes == ["asset_missing", "translation_untracked"]
+
+
+def test_export_debug_status_prints_status_into_the_book(tmp_path: Path) -> None:
+    paths = _workspace(tmp_path)
+
+    result = CliRunner().invoke(
+        app,
+        ["export", "translated-pdf", str(tmp_path), DOC, "--renderer", "html", "--debug-status"],
+    )
+
+    assert result.exit_code == 0, result.output
+    html = (paths.exports_root / f"{DOC}.vi-progress.html").read_text(encoding="utf-8")
+    assert "1/2 sections translated" in html
+    assert '<span class="status">(original)</span>' in html
+    assert "Translation status unknown" in html
 
 
 def test_export_relative_out_lands_under_workspace(tmp_path: Path) -> None:

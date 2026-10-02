@@ -81,6 +81,15 @@ def export_translated_pdf(
         bool,
         typer.Option("--check", help="Preflight only: print coverage and warnings, write nothing."),
     ] = False,
+    debug_status: Annotated[
+        bool,
+        typer.Option(
+            "--debug-status",
+            help="Also print export/translation status into the book (coverage page, "
+            "'original text' and 'may be outdated' notes, TOC markers, asset paths). "
+            "By default the book is content-only and status stays in the .report.json.",
+        ),
+    ] = False,
 ) -> None:
     """Export a partially translated book as one reading PDF with original-text fallback."""
 
@@ -114,7 +123,11 @@ def export_translated_pdf(
 
     try:
         export = build_translated_export(
-            workspace, resolved_doc_id, lang=resolved_lang, fallback=policy
+            workspace,
+            resolved_doc_id,
+            lang=resolved_lang,
+            fallback=policy,
+            debug_status=debug_status,
         )
     except UntranslatedSectionsError as exc:
         _print_report(exc.report)

@@ -24,7 +24,7 @@ from bookgraph.annotations import (
 )
 from bookgraph.assets import asset_reference, resolve_asset_path
 from bookgraph.documents import read_document
-from bookgraph.graph import SectionGraph, build_section_graph
+from bookgraph.graph import SectionGraph, SectionNode, build_section_graph
 from bookgraph.index import default_index_backend, tokenize
 from bookgraph.models import (
     ASSET_BLOCK_TYPES,
@@ -183,10 +183,60 @@ class OutlineNode(BaseModel):
 
 
 class Outline(BaseModel):
-    """A document's section outline in reading order."""
+    """A document's section outline in reading order, optionally scoped.
+
+    ``root_id`` is the subtree the outline was scoped to (``None`` = the whole
+    document); ``total_nodes`` is the document's full section count. ``truncated`` is
+    true when ``max_depth`` cut off deeper sections in scope — their ids still appear in
+    the boundary nodes' ``child_ids``, so a client can drill in with ``root_id``.
+    """
 
     doc_id: str
     nodes: list[OutlineNode]
+    root_id: str | None = None
+    total_nodes: int = 0
+    truncated: bool = False
+
+
+class SectionTree(BaseModel):
+    """A small outline around one section: its breadcrumb, siblings, and children.
+
+    ``ancestors`` run root-first (top-level section down to the parent). ``siblings``
+    are the parent's children in reading order — the section itself included, so its
+    position among them is visible; for a top-level section they are the top-level
+    sections.
+    """
+
+    doc_id: str
+    section: SectionRef
+    ancestors: list[SectionRef] = Field(default_factory=list)
+    siblings: list[SectionRef] = Field(default_factory=list)
+    children: list[SectionRef] = Field(default_factory=list)
+
+
+class ProgressNode(OutlineNode):
+    """An outline node annotated with whether a reading plan has read it."""
+
+    read: bool = False
+
+
+class ChapterOutline(BaseModel):
+    """The outline of the chapter a reading plan is currently in.
+
+    The chapter is the top-level ancestor of ``current_section_id`` (the plan's next
+    unread section). When the plan is ``done`` there is no current section, so
+    ``chapter`` is ``None`` and ``nodes`` is empty.
+    """
+
+    plan_id: str
+    doc_id: str
+    current_section_id: str | None = None
+    chapter: SectionRef | None = None
+    nodes: list[ProgressNode] = Field(default_factory=list)
+    truncated: bool = False
+    completed: int
+    total: int
+    done: bool
 
 
 class RelatedSections(BaseModel):
@@ -670,23 +720,179 @@ def _load_graph(workspace: WorkspacePaths, doc_id: str) -> SectionGraph:
     return build_section_graph(doc_id, _load_doc_sections(workspace, doc_id))
 
 
-def get_outline(workspace: WorkspacePaths, doc_id: str) -> Outline:
-    """Return a document's section outline (hierarchy) in reading order."""
+def _scoped_nodes(
+    graph: SectionGraph, root_id: str | None, max_depth: int | None
+) -> tuple[list[SectionNode], bool]:
+    """The graph nodes under ``root_id`` (or the whole document) up to ``max_depth``.
+
+    Depth is tree depth, not heading ``level`` (levels may skip): the scope's top —
+    ``root_id`` itself, or every top-level section — is depth 1. Parents precede their
+    children in reading order, so one pass assigns every in-scope node its depth.
+    Returns the kept nodes in reading order and whether ``max_depth`` cut any off.
+    """
+
+    if max_depth is not None and max_depth < 1:
+        raise ReadingServiceError("max_depth must be at least 1")
+    if root_id is not None and all(node.id != root_id for node in graph.nodes):
+        raise SectionNotFoundError(
+            f"Section '{root_id}' not found in document '{graph.doc_id}'."
+        )
+
+    depths: dict[str, int] = {}
+    kept: list[SectionNode] = []
+    truncated = False
+    for node in graph.nodes:
+        if node.id == root_id or (root_id is None and node.parent_id is None):
+            depth = 1
+        elif node.parent_id is not None and node.parent_id in depths:
+            depth = depths[node.parent_id] + 1
+        else:
+            continue
+        depths[node.id] = depth
+        if max_depth is not None and depth > max_depth:
+            truncated = True
+        else:
+            kept.append(node)
+    return kept, truncated
+
+
+def _outline_node(node: SectionNode) -> OutlineNode:
+    return OutlineNode(
+        id=node.id,
+        title=node.title,
+        level=node.level,
+        parent_id=node.parent_id,
+        child_ids=list(node.child_ids),
+    )
+
+
+def get_outline(
+    workspace: WorkspacePaths,
+    doc_id: str,
+    root_id: str | None = None,
+    max_depth: int | None = None,
+) -> Outline:
+    """Return a document's section outline (hierarchy) in reading order.
+
+    With no options this is the full document. ``root_id`` scopes the outline to that
+    section's subtree (the section included); ``max_depth`` keeps only that many tree
+    levels from the scope's top (``1`` = the top-level sections, or ``root_id`` alone).
+    Large books produce huge full outlines, so agents should prefer a scoped call.
+    """
 
     graph = _load_graph(workspace, doc_id)
+    nodes, truncated = _scoped_nodes(graph, root_id, max_depth)
     return Outline(
         doc_id=doc_id,
-        nodes=[
-            OutlineNode(
-                id=node.id,
-                title=node.title,
-                level=node.level,
-                parent_id=node.parent_id,
-                child_ids=list(node.child_ids),
-            )
-            for node in graph.nodes
-        ],
+        nodes=[_outline_node(node) for node in nodes],
+        root_id=root_id,
+        total_nodes=len(graph.nodes),
+        truncated=truncated,
     )
+
+
+def _section_ref(node: SectionNode) -> SectionRef:
+    return SectionRef(id=node.id, title=node.title, level=node.level)
+
+
+def _ancestors(by_id: dict[str, SectionNode], node: SectionNode) -> list[SectionNode]:
+    """``node``'s ancestors, root-first (top-level section down to the parent)."""
+
+    ancestors: list[SectionNode] = []
+    seen = {node.id}
+    parent = by_id.get(node.parent_id) if node.parent_id is not None else None
+    # ``seen`` guards against a cycle in a corrupt persisted graph.
+    while parent is not None and parent.id not in seen:
+        seen.add(parent.id)
+        ancestors.append(parent)
+        parent = by_id.get(parent.parent_id) if parent.parent_id is not None else None
+    ancestors.reverse()
+    return ancestors
+
+
+def get_section_tree(
+    workspace: WorkspacePaths,
+    doc_id: str,
+    section_id: str,
+    include_siblings: bool = True,
+    include_children: bool = True,
+) -> SectionTree:
+    """Return a small outline around one section: breadcrumb, siblings, children.
+
+    A cheap alternative to the full outline for "where am I in this book?" questions.
+    For deeper nesting below the section, use ``get_outline(root_id=section_id)``.
+    """
+
+    graph = _load_graph(workspace, doc_id)
+    by_id = {node.id: node for node in graph.nodes}
+    node = by_id.get(section_id)
+    if node is None:
+        raise SectionNotFoundError(f"Section '{section_id}' not found in document '{doc_id}'.")
+
+    siblings: list[SectionRef] = []
+    if include_siblings:
+        parent_node = by_id.get(node.parent_id) if node.parent_id is not None else None
+        if parent_node is not None:
+            sibling_ids = parent_node.child_ids
+        else:
+            sibling_ids = [n.id for n in graph.nodes if n.parent_id is None]
+        siblings = [_section_ref(by_id[sid]) for sid in sibling_ids if sid in by_id]
+
+    children: list[SectionRef] = []
+    if include_children:
+        children = [_section_ref(by_id[cid]) for cid in node.child_ids if cid in by_id]
+
+    return SectionTree(
+        doc_id=doc_id,
+        section=_section_ref(node),
+        ancestors=[_section_ref(ancestor) for ancestor in _ancestors(by_id, node)],
+        siblings=siblings,
+        children=children,
+    )
+
+
+def get_chapter_outline(
+    workspace: WorkspacePaths, plan_id: str, max_depth: int | None = None
+) -> ChapterOutline:
+    """Return the outline of the chapter a reading plan is currently in.
+
+    The chapter is the top-level ancestor of the plan's next unread section; its
+    subtree comes back with a per-node ``read`` flag, plus plan progress counts.
+    ``max_depth`` limits the subtree as in ``get_outline``.
+    """
+
+    _, plan = _load_plan(workspace, plan_id)
+    pack = next_sections(plan)
+    completed = set(plan.completed)
+    result = ChapterOutline(
+        plan_id=plan.plan_id,
+        doc_id=plan.doc_id,
+        completed=sum(1 for section_id in plan.section_ids if section_id in completed),
+        total=len(plan.section_ids),
+        done=pack.done,
+    )
+    if pack.done:
+        return result
+
+    current_id = pack.sections[0]
+    graph = _load_graph(workspace, plan.doc_id)
+    by_id = {node.id: node for node in graph.nodes}
+    current = by_id.get(current_id)
+    if current is None:
+        raise SectionNotFoundError(
+            f"Reading plan '{plan_id}' references unknown section '{current_id}' "
+            f"in document '{plan.doc_id}'."
+        )
+    chapter = (_ancestors(by_id, current) or [current])[0]
+    nodes, truncated = _scoped_nodes(graph, chapter.id, max_depth)
+    result.current_section_id = current_id
+    result.chapter = _section_ref(chapter)
+    result.nodes = [
+        ProgressNode(**_outline_node(node).model_dump(), read=node.id in completed)
+        for node in nodes
+    ]
+    result.truncated = truncated
+    return result
 
 
 def get_related(workspace: WorkspacePaths, doc_id: str, section_id: str) -> RelatedSections:

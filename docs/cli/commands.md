@@ -605,9 +605,29 @@ telling the user to `uv sync --extra mcp`.
   title and text, with a short snippet. `doc_id` scopes to one document; omit it
   to search across every indexed document (cross-document search), each hit
   carrying its `doc_id`.
-- `get_outline(doc_id)` → the document's section outline (heading hierarchy) in
-  reading order: one node per section with `title`, `level`, `parent_id`, and
-  `child_ids`.
+- `get_outline(doc_id, root_id=None, max_depth=None)` → the document's section
+  outline (heading hierarchy) in reading order: one node per section with `title`,
+  `level`, `parent_id`, and `child_ids`. With no options it covers the whole
+  document, which can be very large for a real book. `root_id` scopes it to that
+  section's subtree (the section included). `max_depth` keeps that many **tree**
+  levels from the scope's top (`1` = top-level sections only, or `root_id` alone).
+  Depth follows the parent chain, not the heading `level`, so skipped levels don't
+  matter. The result also carries `root_id`, `total_nodes` (the document's full
+  section count), and `truncated` (whether `max_depth` cut deeper sections off).
+  Boundary nodes keep their full `child_ids`, so a client can drill in with
+  `root_id`. An unknown `root_id` or a `max_depth < 1` is an error.
+- `get_section_tree(doc_id, section_id, include_siblings=True,
+  include_children=True)` → a small outline around one section: `section`,
+  `ancestors` (root-first breadcrumb), `siblings` (the parent's children in
+  reading order, the section itself included; the top-level sections for a
+  top-level section), and direct `children`. Each entry is an id/title/level
+  reference.
+- `get_chapter_outline(plan_id, max_depth=None)` → the outline of the chapter a
+  reading plan is currently in. The chapter is the top-level ancestor of the
+  plan's next unread section (`current_section_id`). Its subtree nodes each carry
+  a `read` flag, alongside plan `completed`/`total`/`done` and `truncated`.
+  `max_depth` works as in `get_outline`. When the plan is done, `chapter` is null
+  and `nodes` is empty.
 - `get_related(doc_id, section_id)` → a section's structural neighbours in the
   graph: `parent`, `prev`, `next`, and `children` (each a lightweight
   id/title/level reference).

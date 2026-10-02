@@ -65,8 +65,14 @@ Operational details live in `docs/cli/parse-book-large-pdfs.md`.
 
 - `search(query, doc_id=None)` — find sections by topic. Omit `doc_id` to search
   **every** document (cross-document); each hit carries its `doc_id`.
-- `get_outline(doc_id)` — the full heading hierarchy, for jumping around or giving
-  the user a map.
+- `get_chapter_outline(plan_id)` — the current chapter's subtree with per-section
+  `read` flags. This is the cheap answer to "where am I / what's left in this chapter".
+- `get_section_tree(doc_id, section_id)` — a section's breadcrumb, siblings and
+  children.
+- `get_outline(doc_id, root_id=None, max_depth=None)` — the heading hierarchy, for
+  jumping around or giving the user a map. On real books, scope it: `max_depth=1`
+  for the chapter list, then `root_id=<chapter>` to drill in. An unscoped outline
+  can be huge.
 - `get_related(doc_id, section_id)` — a section's structural neighbours.
 - `get_concept(concept)` — the cross-book "where else is this discussed" view. Use it
   whenever a concept recurs, to build the user's mental graph across books.

@@ -50,12 +50,14 @@ def test_build_server_registers_the_reading_and_query_tools(tmp_path: Path) -> N
     assert sorted(tool.name for tool in tools) == [
         "annotate_section",
         "create_plan",
+        "get_chapter_outline",
         "get_concept",
         "get_context",
         "get_next_section",
         "get_outline",
         "get_related",
         "get_section",
+        "get_section_tree",
         "list_documents",
         "list_plans",
         "mark_read",
@@ -94,3 +96,33 @@ def test_get_context_tool_returns_section_with_neighbourhood(tmp_path: Path) -> 
     assert payload["section"]["text"] == "hello world"
     assert payload["related"]["section_id"] == "deep-work.a"
     assert payload["related"]["parent"] is None
+
+
+def test_get_outline_tool_accepts_scope_options(tmp_path: Path) -> None:
+    server = build_server(_workspace(tmp_path))
+
+    result = asyncio.run(
+        server.call_tool(
+            "get_outline", {"doc_id": "deep-work", "root_id": "deep-work.a", "max_depth": 1}
+        )
+    )
+
+    payload = result.structured_content
+    assert [node["id"] for node in payload["nodes"]] == ["deep-work.a"]
+    assert payload["root_id"] == "deep-work.a"
+
+
+def test_scoped_outline_tools_return_section_tree_and_chapter(tmp_path: Path) -> None:
+    server = build_server(_workspace(tmp_path))
+
+    tree = asyncio.run(
+        server.call_tool("get_section_tree", {"doc_id": "deep-work", "section_id": "deep-work.a"})
+    ).structured_content
+    assert tree["section"]["id"] == "deep-work.a"
+    assert [ref["id"] for ref in tree["siblings"]] == ["deep-work.a"]
+
+    chapter = asyncio.run(
+        server.call_tool("get_chapter_outline", {"plan_id": "daily"})
+    ).structured_content
+    assert chapter["current_section_id"] == "deep-work.a"
+    assert [node["read"] for node in chapter["nodes"]] == [False]

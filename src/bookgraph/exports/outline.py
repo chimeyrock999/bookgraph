@@ -92,9 +92,7 @@ def build_outline(sections: list[Section], bookmarks: list[PdfBookmark]) -> list
             root_anchor[id(node)] = anchor
         stack.append(node)
     shaped = {
-        id(root)
-        for root in roots
-        if _has_part_shape(root, root_anchor[id(root)], outline_children)
+        id(root) for root in roots if _has_part_shape(root, root_anchor[id(root)], outline_children)
     }
     # Most top-level nodes with children share the part shape: the book is in parts.
     book_in_parts = 2 * len(shaped) > sum(1 for root in roots if root.children)
@@ -140,9 +138,7 @@ def _match_bookmarks(sections: list[Section], bookmarks: list[PdfBookmark]) -> d
         ]
         if not candidates:
             continue
-        chosen = min(
-            candidates, key=lambda b: _rank(bookmarks[b], b, section.page_start, cursor)
-        )
+        chosen = min(candidates, key=lambda b: _rank(bookmarks[b], b, section.page_start, cursor))
         anchors[index] = chosen
         used.add(chosen)
         cursor = chosen
@@ -157,9 +153,7 @@ def _on_section_pages(bookmark: PdfBookmark, section: Section) -> bool:
     return first - _PAGE_TOLERANCE <= bookmark.page_index <= last + _PAGE_TOLERANCE
 
 
-def _rank(
-    bookmark: PdfBookmark, index: int, page: int | None, cursor: int
-) -> tuple[int, int, int]:
+def _rank(bookmark: PdfBookmark, index: int, page: int | None, cursor: int) -> tuple[int, int, int]:
     """Candidate order: nearest page, then after the previous match, then outline order."""
 
     if page is not None and bookmark.page_index is not None:

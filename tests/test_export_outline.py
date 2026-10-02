@@ -309,9 +309,7 @@ UNTITLED_PARTS = [
 
 def test_untitled_parts_are_detected_by_their_outline_shape() -> None:
     # Segmented at level 2: the chapters' sections exist only in the outline.
-    sections = [
-        _section(b.title, page=b.page_index) for b in UNTITLED_PARTS if b.level <= 2
-    ]
+    sections = [_section(b.title, page=b.page_index) for b in UNTITLED_PARTS if b.level <= 2]
 
     assert _shape(build_outline(sections, UNTITLED_PARTS)) == [
         ("Fundamentals", 1, True),

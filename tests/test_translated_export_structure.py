@@ -78,10 +78,7 @@ def test_pdf_outline_sets_reading_order_and_chapters(workspace: WorkspacePaths) 
     # The manifest is flat (every MinerU title is level 1) and in the wrong order.
     chapter, second, third = _section_ids(workspace)
     sections = {s.id: s for s in _sections(workspace)}
-    flat = [
-        sections[i].model_copy(update={"level": 1})
-        for i in (third, chapter, second)
-    ]
+    flat = [sections[i].model_copy(update={"level": 1}) for i in (third, chapter, second)]
     write_sections(flat, workspace.sources_sections / DOC)
     _write_outline(
         workspace,

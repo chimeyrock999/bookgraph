@@ -301,6 +301,40 @@ def test_reading_plan_mark_read_advances_progress(tmp_path: Path) -> None:
     assert "remaining: 0" in nxt.output
 
 
+def test_reading_plan_progress_reports_the_current_chapter(tmp_path: Path) -> None:
+    runner = _init_workspace(tmp_path)
+    manifest = _write_sections_manifest(
+        tmp_path, "deep-work", ["deep-work.ch-1", "deep-work.ch-1-a", "deep-work.ch-2"]
+    )
+    rows = [json.loads(line) for line in manifest.read_text().splitlines()]
+    rows[1]["level"] = 2
+    manifest.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+    runner.invoke(app, ["reading-plan", "create", str(tmp_path), "deep-work"])
+    runner.invoke(app, ["reading-plan", "mark-read", str(tmp_path), "deep-work"])
+
+    result = runner.invoke(app, ["reading-plan", "progress", str(tmp_path), "deep-work"])
+
+    assert result.exit_code == 0, result.output
+    assert "completed: 1/3" in result.output
+    assert "chapter: deep-work.ch-1 (deep-work.ch-1)" in result.output
+    assert "chapter_progress: 1/2" in result.output
+    assert "remaining_in_chapter: 1" in result.output
+    assert "next: deep-work.ch-1-a" in result.output
+    assert "next_boundary: deep-work.ch-2 (deep-work.ch-2)" in result.output
+
+
+def test_reading_plan_progress_reports_a_complete_plan(tmp_path: Path) -> None:
+    runner = _init_workspace(tmp_path)
+    _write_sections_manifest(tmp_path, "deep-work", ["deep-work.a"])
+    runner.invoke(app, ["reading-plan", "create", str(tmp_path), "deep-work"])
+    runner.invoke(app, ["reading-plan", "mark-read", str(tmp_path), "deep-work"])
+
+    result = runner.invoke(app, ["reading-plan", "progress", str(tmp_path), "deep-work"])
+
+    assert result.exit_code == 0, result.output
+    assert "chapter: (complete)" in result.output
+
+
 def test_reading_plan_mark_read_rejects_an_unknown_section(tmp_path: Path) -> None:
     runner = _init_workspace(tmp_path)
     _write_sections_manifest(tmp_path, "deep-work", ["deep-work.a"])

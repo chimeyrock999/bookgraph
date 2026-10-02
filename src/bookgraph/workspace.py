@@ -81,12 +81,30 @@ class WorkspacePaths:
         return self.root / "annotations"
 
     @property
+    def concepts_root(self) -> Path:
+        """Curated concept artifacts (the registry); distinct from ``wiki/concepts``."""
+        return self.root / "concepts"
+
+    @property
+    def concept_registry(self) -> Path:
+        return self.concepts_root / "registry.json"
+
+    @property
+    def translations_root(self) -> Path:
+        return self.root / "translations"
+
+    @property
     def reading_plans_root(self) -> Path:
         return self.root / "reading_plans"
 
     @property
     def runs_root(self) -> Path:
         return self.root / "runs"
+
+    @property
+    def exports_root(self) -> Path:
+        """Reader-facing exports such as ``bookgraph export translated-pdf`` output."""
+        return self.root / "exports"
 
     def directories(self) -> list[Path]:
         return [
@@ -99,6 +117,7 @@ class WorkspacePaths:
             self.wiki_daily,
             self.indexes_root,
             self.annotations_root,
+            self.translations_root,
             self.reading_plans_root,
             self.runs_root,
         ]
@@ -117,6 +136,7 @@ class WorkspacePaths:
             "wiki.daily": self.wiki_daily,
             "indexes.root": self.indexes_root,
             "annotations.root": self.annotations_root,
+            "translations.root": self.translations_root,
             "reading_plans.root": self.reading_plans_root,
             "runs.root": self.runs_root,
         }

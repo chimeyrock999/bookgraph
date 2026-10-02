@@ -8,6 +8,8 @@ import typer
 
 from bookgraph.cli._app import index_app
 from bookgraph.cli._shared import _validate_id
+from bookgraph.concept_hygiene import durable_slugs
+from bookgraph.concept_registry import ConceptRegistry, read_registry
 from bookgraph.documents import read_document
 from bookgraph.index import Concept, IndexUnavailableError, default_index_backend
 from bookgraph.sections import read_sections
@@ -79,7 +81,8 @@ def index_build(
             indexed_any = True
             typer.echo(f"doc_id: {current_doc}")
             typer.echo(f"sections: {count}")
-    except IndexUnavailableError as exc:
+    except (IndexUnavailableError, ValueError) as exc:
+        # ValueError: an invalid concepts/registry.json (the build refuses to guess).
         raise typer.BadParameter(str(exc)) from exc
     finally:
         # Report where the db is even if a later document aborts the run, so a
@@ -93,6 +96,16 @@ def index_build(
 @index_app.command("concepts")
 def index_concepts(
     workspace_path: Annotated[Path, typer.Argument(help="BookGraph workspace/output root path.")],
+    durable_only: Annotated[
+        bool,
+        typer.Option(
+            "--durable-only",
+            help=(
+                "Skip concepts with a lint warning (generic, one-off, stale) unless they "
+                "are canonical in concepts/registry.json. See 'bookgraph concepts lint'."
+            ),
+        ),
+    ] = False,
 ) -> None:
     """Render cross-book concept pages under wiki/concepts/ from the index."""
 
@@ -103,6 +116,15 @@ def index_concepts(
         raise typer.BadParameter(
             f"No concepts in {backend.location(workspace)}. Run 'bookgraph index build' first."
         )
+    try:
+        registry = read_registry(workspace.concept_registry)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    skipped = 0
+    if durable_only:
+        keep = durable_slugs(concepts, registry)
+        skipped = len(concepts) - len(keep)
+        concepts = [concept for concept in concepts if concept.node.slug in keep]
 
     concepts_dir = workspace.wiki_concepts
     if concepts_dir.exists():
@@ -114,7 +136,7 @@ def index_concepts(
     missing_links = 0
     for concept in concepts:
         (concepts_dir / f"{concept.node.slug}.md").write_text(
-            _render_concept_page(workspace, concept, title_cache)
+            _render_concept_page(workspace, concept, title_cache, registry)
         )
         written += 1
         for mention in concept.mentions:
@@ -125,6 +147,8 @@ def index_concepts(
                 missing_links += 1
 
     typer.echo(f"concepts: {written}")
+    if skipped:
+        typer.echo(f"skipped: {skipped} (lint warnings; see 'bookgraph concepts lint')")
     typer.echo(f"wiki: {concepts_dir}")
     if missing_links:
         # Backlinks resolve into wiki/books/, which is the wiki backend's surface
@@ -137,16 +161,24 @@ def index_concepts(
 
 
 def _render_concept_page(
-    workspace: WorkspacePaths, concept: Concept, title_cache: dict[str, str]
+    workspace: WorkspacePaths,
+    concept: Concept,
+    title_cache: dict[str, str],
+    registry: ConceptRegistry,
 ) -> str:
     node = concept.node
+    record = registry.record(node.slug)
     lines = [
-        f"# {node.title}",
+        f"# {record.title if record is not None else node.title}",
         "",
         f"Mentioned in {node.doc_count} "
         f"{'book' if node.doc_count == 1 else 'books'} · "
         f"{node.mention_count} {'section' if node.mention_count == 1 else 'sections'}.",
     ]
+    aliases = list(record.aliases) if record is not None else []
+    aliases += sorted({m.raw_slug for m in concept.mentions if m.raw_slug} - set(aliases))
+    if aliases:
+        lines += ["", "Also known as: " + ", ".join(f"`{alias}`" for alias in aliases) + "."]
     current_doc: str | None = None
     for mention in concept.mentions:  # already ordered by doc, then reading order
         if mention.doc_id != current_doc:

@@ -67,6 +67,8 @@ them to `uv sync` (persistent) or `uv run` (one-off) with `--extra`:
 | `parsers` | MarkItDown + pypdf adapters for Office/HTML/simple-PDF → Markdown | `uv sync --extra parsers` |
 | `mineru` | MinerU pipeline for raw-PDF layout parsing (`bookgraph parse-book`) | `uv sync --extra mineru` |
 | `mcp` | FastMCP server (`bookgraph mcp`) that serves an agent | `uv sync --extra mcp` |
+| `pdf` | WeasyPrint PDF renderer for `bookgraph export translated-pdf` (needs system Pango) | `uv sync --extra pdf` |
+| `pdf-chromium` | Playwright/Chromium PDF renderer for `bookgraph export translated-pdf` | `uv sync --extra pdf-chromium && uv run playwright install chromium` |
 | `dev` | pytest, ruff, mypy for contributing | `uv sync --extra dev` |
 
 Combine extras as needed, e.g. a reading-agent setup that also parses raw PDFs:

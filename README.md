@@ -109,6 +109,8 @@ wiki/                # compiled linked markdown wiki
 indexes/             # graph/search indexes
 reading_plans/       # daily reading progression state
 runs/                # run logs/artifacts
+translations/        # optional per-language section translations (read by export)
+exports/             # reader-facing exports (e.g. translated reading PDFs)
 bookgraph.toml       # workspace config
 ```
 
@@ -116,6 +118,14 @@ bookgraph.toml       # workspace config
 settings, segmenter selection/heading target level, wiki backend, and reading-plan
 daily batch size. Explicit CLI flags still win over config defaults. Next, wire an
 agent to the workspace — see [`docs/mcp/reading-agent.md`](docs/mcp/reading-agent.md).
+
+When some sections have been translated, export the book as a single reading PDF.
+Sections that are not translated yet appear in the original language:
+
+```bash
+bookgraph export translated-pdf /path/to/workspace <doc_id> --lang vi   # needs: --extra pdf or pdf-chromium
+bookgraph export translated-pdf /path/to/workspace <doc_id> --check     # coverage + missing-asset report
+```
 
 ## External tools
 
@@ -188,9 +198,9 @@ flowchart TD
 
     subgraph MCP["MCP server — bookgraph mcp"]
         direction LR
-        MCP1["reading<br/>get_next_section · get_section · mark_read"]
+        MCP1["reading<br/>get_next_section · get_section · mark_read · complete_reading_batch"]
         MCP2["search"]
-        MCP3["graph/context<br/>get_outline · get_related · get_context"]
+        MCP3["graph/context<br/>get_outline · get_section_tree · get_chapter_outline<br/>get_related · get_context"]
         MCP4["concepts<br/>get_concept"]
     end
 
@@ -226,6 +236,9 @@ src/bookgraph/
   concepts.py               # shared deterministic concept extractor (wiki + index)
   quality.py                # ingest/section quality checks (segment report + MCP warnings)
   assets.py                 # one asset-reference resolver (shared by MCP + quality)
+  exports/
+    translated.py           # partially translated reading edition (HTML assembly + report)
+    renderers.py            # ExportRenderer port: weasyprint / playwright / html
   index/
     base.py                 # IndexBackend port + hits/concept models + tokenizer
     sqlite.py               # default backend: SQLite/FTS5 (indexes/bookgraph.db)

@@ -18,6 +18,8 @@ has not been indexed yet.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from pydantic import BaseModel, Field
 
 from bookgraph.models import Section
@@ -86,3 +88,85 @@ def build_section_graph(doc_id: str, sections: list[Section]) -> SectionGraph:
             node.next_id = None
 
     return SectionGraph(doc_id=doc_id, nodes=nodes)
+
+
+def resolve_chapter(
+    nodes: list[SectionNode], section_id: str, *, chapter_level: int | None = None
+) -> SectionNode:
+    """Return the "chapter" (scope ancestor-or-self) that contains ``section_id``.
+
+    With ``chapter_level`` it is the nearest ancestor-or-self whose heading ``level`` is
+    at most ``chapter_level`` (falling back to the outermost ancestor). Without it, it is
+    the outermost ancestor — except that a **lone** top-level root (one ``# Book Title``
+    heading above every chapter, common for Markdown/EPUB ingestion) is skipped one level
+    down the path, so the scope is the chapter rather than the whole book. The root
+    itself stays the scope while it is the section being read (see
+    :func:`chapter_span` for how far that scope reaches).
+
+    Shared by every API that needs "the chapter the reader is in", so they never
+    disagree. ``nodes`` come from :func:`build_section_graph` or the persisted index.
+    """
+
+    by_id = {node.id: node for node in nodes}
+    if section_id not in by_id:
+        raise ValueError(f"section '{section_id}' is not in the graph")
+
+    path = [by_id[section_id]]  # ancestor-or-self chain, innermost first
+    while path[-1].parent_id is not None and path[-1].parent_id in by_id:
+        path.append(by_id[path[-1].parent_id])
+
+    if chapter_level is not None:
+        return next((node for node in path if node.level <= chapter_level), path[-1])
+
+    root = path[-1]
+    return path[-2] if _is_lone_root(nodes, root) and len(path) > 1 else root
+
+
+def _is_lone_root(nodes: list[SectionNode], node: SectionNode) -> bool:
+    """Whether ``node`` is the document's only top-level section."""
+
+    return node.parent_id is None and sum(1 for n in nodes if n.parent_id is None) == 1
+
+
+@dataclass(frozen=True)
+class ChapterSpan:
+    """A resolved chapter: its heading, member section ids, and the boundary after it."""
+
+    chapter: SectionNode
+    member_ids: list[str]
+    boundary: SectionNode | None
+
+
+def chapter_span(
+    nodes: list[SectionNode], section_id: str, *, chapter_level: int | None = None
+) -> ChapterSpan:
+    """Resolve the chapter containing ``section_id`` and the sections it spans.
+
+    The chapter comes from :func:`resolve_chapter`; its members are the chapter and the
+    contiguous run of strictly deeper sections after it (mirroring how
+    :func:`build_section_graph` assigns parents), and ``boundary`` is the first section
+    past that run (``None`` at the end of the document). One exception: while a
+    wrapper heading is itself being read, the scope is that heading's own section only,
+    with its first child as the boundary — so a tick never spans a whole book or part.
+    A wrapper is a lone book-title root when no ``chapter_level`` is given, or any
+    heading shallower than ``chapter_level`` (e.g. a part with ``chapter_level=2``).
+    """
+
+    chapter = resolve_chapter(nodes, section_id, chapter_level=chapter_level)
+    start = next(index for index, node in enumerate(nodes) if node.id == chapter.id)
+    end = start + 1
+    # A wrapper heading that is itself being read spans only its own section: a lone
+    # book-title root by default, or (with ``chapter_level``) any heading shallower than
+    # the chapter level, such as a part. The ``chapter.id == section_id`` guard keeps a
+    # deeper section under a level jump (``part(1) > sec(3)``) in the part's subtree.
+    wrapper_being_read = chapter.id == section_id and (
+        _is_lone_root(nodes, chapter) if chapter_level is None else chapter.level < chapter_level
+    )
+    if not wrapper_being_read:
+        while end < len(nodes) and nodes[end].level > chapter.level:
+            end += 1
+    return ChapterSpan(
+        chapter=chapter,
+        member_ids=[node.id for node in nodes[start:end]],
+        boundary=nodes[end] if end < len(nodes) else None,
+    )

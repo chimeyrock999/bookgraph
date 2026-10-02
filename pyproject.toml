@@ -1,6 +1,6 @@
 [project]
 name = "bookgraph"
-version = "0.1.1"
+version = "0.1.2"
 description = "Source-grounded book/document graph wiki pipeline with pluggable parsers, segmenters, wiki backends, and MCP serving."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -24,6 +24,12 @@ mineru = [
 ]
 mcp = [
   "fastmcp>=2.0",
+]
+pdf = [
+  "weasyprint>=62",
+]
+pdf-chromium = [
+  "playwright>=1.40",
 ]
 dev = [
   "pytest>=8.0",
@@ -59,7 +65,7 @@ strict = true
 packages = ["bookgraph"]
 
 [[tool.mypy.overrides]]
-module = ["markitdown.*", "fastmcp.*", "pypdf.*"]
+module = ["markitdown.*", "fastmcp.*", "pypdf.*", "weasyprint.*", "playwright.*"]
 ignore_missing_imports = true
 
 # The FastMCP tool decorators are untyped when the optional ``mcp`` extra is not

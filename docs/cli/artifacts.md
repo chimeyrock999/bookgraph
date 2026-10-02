@@ -454,6 +454,25 @@ mirroring `bookgraph.models.ReadingPlan`:
 These are recomputed from `section_ids` + `completed` on each `next` call rather
 than persisted, so the file stays a minimal source of truth.
 
+### Write rules
+
+- Every writer (`reading-plan create`/`mark-read`, the MCP `create_plan`,
+  `mark_read`, and `complete_reading_batch` tools) replaces the file atomically
+  (fsynced temp file in `reading_plans/` + rename), so a crash or power loss
+  mid-write leaves the previous plan, never a truncated one. The file keeps its
+  existing permissions (umask default on first write).
+- Every writer holds a per-plan lock across load → modify → write (a CLI `create`,
+  which overwrites blindly, across its write): an in-process lock plus, on POSIX, an
+  advisory `flock` on `reading_plans/.<plan_id>.json.lock`, opened read-write (an exclusive
+  lock on NFS needs it) and read-only only when the file is not writable to us, so a
+  lock file created by another user does not block. Concurrent writers — e.g. the CLI and
+  an MCP server — therefore never lose each other's updates. The `.lock` file is
+  empty and may be left in place; it is not a plan. Without `fcntl` (Windows) only
+  the in-process lock applies.
+- `complete_reading_batch` appends a whole batch to `completed` in one write, and
+  only after its readiness checks pass (see `commands.md`, *Reading batch
+  completion*).
+
 ## `annotations/<doc_id>/<section_id>.json`
 
 Owner: the MCP `annotate_section` tool (`bookgraph.mcp.service` /
@@ -482,6 +501,184 @@ The concept edges here are the authoritative set for that section and, on the ne
 `index build`, override the deterministic Tier-1 extraction (an empty `concepts` list
 prunes that section's mentions). See **`annotations.md`** for the field rules, the
 presence-based merge rule, and the `markdown-graph` non-goal.
+
+## `concepts/registry.json`
+
+Owner: the `bookgraph concepts` CLI (`bookgraph.concept_registry`). Read by
+`index build`, `index concepts`, and the MCP `get_concept` / `concept_hygiene` tools.
+
+A **human-curated source of truth**, like `annotations/`: canonical concepts with
+their deprecated aliases, ignored slugs, and reviewed-distinct pairs. A missing file is
+an empty registry. An invalid one is an error. `index build` rewrites alias edges to
+their canonical slug (keeping the original in `concept_mentions.raw_slug`) and drops
+ignored slugs.
+
+```json
+{
+  "canonical": [
+    {"slug": "table-metadata", "title": "Table Metadata", "aliases": ["metadata-file"], "note": ""}
+  ],
+  "ignored": ["however"],
+  "distinct": [["snapshot", "snapshot-id"]]
+}
+```
+
+See **`concepts.md`** for the invariants, canonicalization rules, and hygiene reports.
+
+## `translations/<lang>/<doc_id>/<section_id>.md` + `.json`
+
+Owner: the translation registry, `bookgraph.translations` (written by the MCP
+`write_section_translation` tool). Read by `get_section_translation`,
+`list_section_artifacts`, reading-batch completion, and — read-only —
+`bookgraph export translated-pdf`. The registry is the **only** location for
+translations: `translation_cache/` is not read by anything (see below).
+
+A **cache of generated per-section translations** plus its registry. The `.md` body
+is the translation itself and keeps the path convention reading jobs already used;
+the `.json` sidecar beside it is the registry record, mirroring
+`bookgraph.models.SectionArtifact`:
+
+```json
+{
+  "type": "translation",
+  "lang": "vi",
+  "doc_id": "iceberg",
+  "section_id": "iceberg.table-format",
+  "path": "translations/vi/iceberg/iceberg.table-format.md",
+  "source_section_hash": "sha256:9f2c...",
+  "content_hash": "sha256:41ab...",
+  "includes_assets": true,
+  "model": "claude-...",
+  "created_at": "2026-10-02T00:00:00+00:00"
+}
+```
+
+- `lang`: a lowercase hyphenated tag (`vi`, `pt-br`); input is lowercased, so
+  `pt-BR` and `pt-br` name the same cache. Directories are always lowercase: a
+  mixed-case legacy directory (e.g. `translations/pt-BR/`) is not a valid `lang` and
+  is ignored by lookups and listings on case-sensitive filesystems — rename it to
+  lowercase to bring it into the registry.
+- `path`: the body, relative to the workspace root.
+- `source_section_hash`: `sha256:` over the section's `title` + `text` (canonical
+  JSON) at write time. Ids, page spans, and block ids are excluded, so a re-segment
+  that keeps the words keeps the translation fresh.
+- `content_hash`: `sha256:` over the body's UTF-8 bytes at write time. It binds the
+  sidecar to the body it describes: a body overwritten afterwards (a path-convention
+  writer, a manual edit) no longer matches and reads as `untracked`.
+- `includes_assets`: whether the writer carried the section's figures/tables into
+  the translation (declared by the writer, not inferred).
+
+Freshness is **derived, never stored**: each read recomputes the section's current
+hash and compares it with the sidecar.
+
+| `status` | Meaning |
+| --- | --- |
+| `fresh` | Body + matching sidecar; reuse as-is. |
+| `stale` | Body + sidecar, but the section's content changed since. |
+| `untracked` | Body with no valid sidecar for it (cached before the registry, a corrupt/misplaced sidecar, or a body whose hash no longer matches `content_hash`); freshness unknown. |
+| `missing` | No body (a sidecar without a body is ignored). |
+| `orphaned` | Body whose section (or whole document) no longer exists; reported by listing. |
+
+**Reuse rule.** `fresh` means the translation matches the section's current *text*;
+the hash does not cover assets, so a re-parse that newly stages a figure leaves a
+prose-only translation `fresh`. Reuse a translation as-is only when `status` is
+`fresh` **and** (`includes_assets` or not `section_has_assets`).
+
+Write order: remove the previous sidecar, write the body, then write the new sidecar,
+each via a same-directory temp file + fsync + rename (files take the process umask,
+not `mkstemp`'s 0600). A crash or a racing writer between the steps leaves an
+`untracked` body — never a sidecar describing a different body. A sidecar whose
+`lang`/`doc_id`/`section_id` disagrees with its location is ignored. Like
+annotations, the cache is **not** rebuildable from sources (regenerating it costs
+model calls), so `index build`, `segment`, and `wiki` never delete it.
+
+## Translation bodies as read by `bookgraph export translated-pdf`
+
+The export is a **read-only consumer** of the registry above: it resolves each
+section with `bookgraph.translations.translation_state` and renders the `.md` body
+(the `.json` sidecar is provenance, never content). `--lang` is normalised the same
+way the registry does it (`VI` → `vi`). Per section:
+
+| Registry status | Export |
+| --- | --- |
+| `fresh` | Rendered. `freshness: "fresh"`. |
+| `stale` | Rendered with a *Translation may be outdated* note (and a `(may be outdated)` TOC marker); `freshness: "stale"` + `translation_stale`. |
+| `untracked` | Rendered with a *Translation status unknown — it may be outdated* note (and a `(not tracked)` TOC marker); `freshness: "untracked"` + `translation_untracked`. |
+| `missing` | Untranslated: follows `--fallback`. |
+
+Stale and untracked translations count as translated, so `--fallback fail` accepts
+them. `--strict` refuses `translation_stale` (known outdated) but not
+`translation_untracked` (freshness unknown, e.g. a hand-written body), matching
+reading-batch completion. Completeness follows the registry's reuse rule: a
+registered translation with `includes_assets: false` of a section that has
+figures/tables is rendered but flagged `translation_missing_assets`, which `--strict`
+also refuses.
+
+`translation_cache/<doc_id>/<section_id>.<lang>.md` is **not read**. It was an
+export-only fallback that no BookGraph command ever wrote, so there is no migration:
+to keep such a file, move it to `translations/<lang>/<doc_id>/<section_id>.md` (it
+then reads as `untracked`), or re-register it with `write_section_translation`.
+
+- Optional leading `---` frontmatter. Only flat `key: value` lines are read. `title`
+  is the translated section title used in the table of contents.
+- If the body starts with a heading, that heading is the translated title. Artifact
+  headings are shifted so the top one sits at the section's `level`. A body with no
+  heading gets the frontmatter `title`, or the original title.
+- Image links (`![caption](images/fig1.png)`) may point at workspace files, for
+  example the parsed assets under `sources/parsed/<doc_id>/images/`. They may also be
+  absolute paths inside the workspace, such as an MCP `AssetRef.path`. See the
+  asset-handling rules in `commands.md`.
+- An empty or unreadable (including non-UTF-8) body counts as untranslated and is
+  reported (`translation_empty` / `translation_unreadable`).
+
+## `exports/<doc_id>.<lang>-progress.pdf` + `.report.json`
+
+Owner: `bookgraph export translated-pdf`. This is derived, reader-facing output and
+can be regenerated at any time. The report (`bookgraph.exports.models.ExportReport`)
+is written beside the export:
+
+```json
+{
+  "doc_id": "ddia",
+  "title": "Designing Data-Intensive Applications",
+  "lang": "vi",
+  "fallback": "original",
+  "generated_at": "2026-10-02T00:00:00Z",
+  "total_sections": 3,
+  "translated_sections": 1,
+  "coverage": 0.3333,
+  "sections": [
+    {"section_id": "ddia.chapter-1", "title": "Chương 1", "level": 1,
+     "source": "translated", "artifact": "translations/vi/ddia/ddia.chapter-1.md",
+     "freshness": "fresh", "assets_embedded": 1, "assets_missing": 0}
+  ],
+  "warnings": [
+    {"code": "asset_missing", "message": "…", "section_id": "ddia.scalability",
+     "reference": "t1.png"}
+  ],
+  "renderer": "playwright",
+  "output": "/path/to/workspace/exports/ddia.vi-progress.pdf"
+}
+```
+
+- `source` is `translated`, `original`, or `skipped`.
+- `freshness` is the translation's registry status (`fresh`, `stale`, or
+  `untracked`) for a `translated` section, `null` otherwise.
+- `generated_at` follows `SOURCE_DATE_EPOCH` when it is set. With unchanged inputs and
+  a pinned timestamp, the assembled HTML is byte-identical.
+- Stable warning codes:
+  - `asset_missing`, `asset_remote`, `asset_unsupported`: an asset is not in the
+    export. `--strict` refuses these.
+  - `translation_stale`: the source section changed after the translation was
+    registered. Rendered with a note; `--strict` refuses it.
+  - `translation_missing_assets`: a registered prose-only translation
+    (`includes_assets: false`) of a section that has figures/tables. `--strict`
+    refuses it.
+  - `translation_untracked`: no valid registry record, or the body was edited after
+    registration. Rendered with a note; never refused.
+  - `translation_empty`, `translation_unreadable`: the section falls back.
+  - `asset_captions_only` / `asset_text_sparse`: ingest quality warnings, passed
+    through for rendered sections whose source prose is mostly captions.
 
 ## Future artifacts
 

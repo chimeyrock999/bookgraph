@@ -155,13 +155,19 @@ def read_annotations_for_doc(annotations_root: Path, doc_id: str) -> dict[str, S
 
 @dataclass(frozen=True)
 class ConceptEdge:
-    """One concept→section edge to persist: which tier it came from + its gloss."""
+    """One concept→section edge to persist: which tier it came from + its gloss.
+
+    ``raw_slug`` is the slug the edge was asserted under when the concept registry
+    rewrote it to a canonical slug (see :mod:`bookgraph.concept_registry`); it is empty
+    when the edge was stored under its own slug.
+    """
 
     slug: str
     title: str
     section_id: str
     gloss: str
     source: str
+    raw_slug: str = ""
 
 
 def _has_agent_concepts(annotation: SectionAnnotation | None) -> bool:

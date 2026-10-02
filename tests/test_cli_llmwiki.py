@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from bookgraph.cli import app
+from bookgraph.cli import llmwiki as llmwiki_cli
 
 runner = CliRunner()
 
@@ -145,12 +147,7 @@ def test_llmwiki_bridge_is_idempotent(tmp_path: Path) -> None:
 def test_llmwiki_bridge_plan_stages_only_read_sections(tmp_path: Path) -> None:
     assert runner.invoke(app, ["init", str(tmp_path)]).exit_code == 0
     _write_sections_manifest(tmp_path, "deep-work")
-    assert (
-        runner.invoke(
-            app, ["reading-plan", "create", str(tmp_path), "deep-work"]
-        ).exit_code
-        == 0
-    )
+    assert runner.invoke(app, ["reading-plan", "create", str(tmp_path), "deep-work"]).exit_code == 0
     # Read the first section only.
     mark = runner.invoke(app, ["reading-plan", "mark-read", str(tmp_path), "deep-work"])
     assert mark.exit_code == 0, mark.output
@@ -168,12 +165,7 @@ def test_llmwiki_bridge_plan_stages_only_read_sections(tmp_path: Path) -> None:
 def test_llmwiki_bridge_plan_with_nothing_read_stages_nothing(tmp_path: Path) -> None:
     assert runner.invoke(app, ["init", str(tmp_path)]).exit_code == 0
     _write_sections_manifest(tmp_path, "deep-work")
-    assert (
-        runner.invoke(
-            app, ["reading-plan", "create", str(tmp_path), "deep-work"]
-        ).exit_code
-        == 0
-    )
+    assert runner.invoke(app, ["reading-plan", "create", str(tmp_path), "deep-work"]).exit_code == 0
 
     result = runner.invoke(
         app, ["llmwiki", "bridge", str(tmp_path), "deep-work", "--plan", "deep-work"]
@@ -184,7 +176,7 @@ def test_llmwiki_bridge_plan_with_nothing_read_stages_nothing(tmp_path: Path) ->
     assert not (tmp_path / "llmwiki").exists()
 
 
-def test_llmwiki_bridge_compile_print_emits_root_contract(tmp_path: Path) -> None:
+def test_llmwiki_bridge_compile_print_emits_cwd_command(tmp_path: Path) -> None:
     assert runner.invoke(app, ["init", str(tmp_path)]).exit_code == 0
     _write_sections_manifest(tmp_path, "deep-work")
 
@@ -194,7 +186,66 @@ def test_llmwiki_bridge_compile_print_emits_root_contract(tmp_path: Path) -> Non
 
     assert result.exit_code == 0, result.output
     project = (tmp_path / "llmwiki").resolve()
-    assert f"llmwiki compile --root {project}" in result.output
+    # `llmwiki compile` has no --root option; it compiles the current directory.
+    assert result.output.strip().splitlines()[-1] == f"cd {project} && llmwiki compile"
+    assert "--root" not in result.output
+
+
+def test_llmwiki_bridge_compile_print_quotes_project_path(tmp_path: Path) -> None:
+    workspace = tmp_path / "my workspace"
+    assert runner.invoke(app, ["init", str(workspace)]).exit_code == 0
+    _write_sections_manifest(workspace, "deep-work")
+
+    result = runner.invoke(
+        app, ["llmwiki", "bridge", str(workspace), "deep-work", "--compile", "--print"]
+    )
+
+    assert result.exit_code == 0, result.output
+    project = (workspace / "llmwiki").resolve()
+    assert result.output.strip().splitlines()[-1] == f"cd '{project}' && llmwiki compile"
+
+
+def test_llmwiki_bridge_compile_runs_in_project_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert runner.invoke(app, ["init", str(tmp_path)]).exit_code == 0
+    _write_sections_manifest(tmp_path, "deep-work")
+    calls: list[tuple[list[str], Path | None]] = []
+
+    def fake_call(command: list[str], cwd: Path | None = None) -> int:
+        calls.append((command, cwd))
+        return 0
+
+    monkeypatch.setattr(llmwiki_cli.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(llmwiki_cli.subprocess, "call", fake_call)
+
+    result = runner.invoke(app, ["llmwiki", "bridge", str(tmp_path), "deep-work", "--compile"])
+
+    assert result.exit_code == 0, result.output
+    assert calls == [(["llmwiki", "compile"], (tmp_path / "llmwiki").resolve())]
+
+
+def test_llmwiki_serve_launch_keeps_root_option(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert runner.invoke(app, ["init", str(tmp_path)]).exit_code == 0
+    state = tmp_path / "llmwiki" / ".llmwiki" / "state.json"
+    state.parent.mkdir(parents=True)
+    state.write_text("{}\n")
+    calls: list[tuple[list[str], Path | None]] = []
+
+    def fake_call(command: list[str], cwd: Path | None = None) -> int:
+        calls.append((command, cwd))
+        return 0
+
+    monkeypatch.setattr(llmwiki_cli.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(llmwiki_cli.subprocess, "call", fake_call)
+
+    result = runner.invoke(app, ["llmwiki", "serve", str(tmp_path)])
+
+    assert result.exit_code == 0, result.output
+    project = (tmp_path / "llmwiki").resolve()
+    assert calls == [(["llmwiki", "serve", "--root", str(project)], None)]
 
 
 def test_llmwiki_bridge_print_without_compile_errors(tmp_path: Path) -> None:

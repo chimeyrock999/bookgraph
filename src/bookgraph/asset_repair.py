@@ -43,7 +43,7 @@ from pydantic import BaseModel, Field
 from bookgraph.assets import asset_reference, resolve_asset_path
 from bookgraph.documents import read_document
 from bookgraph.models import ASSET_BLOCK_TYPES, CanonicalBlock, Document, Section
-from bookgraph.parsers.markitdown import _clean_reference, _match_member, _safe_asset_name
+from bookgraph.parsers.markitdown import clean_asset_reference, match_epub_member, safe_asset_name
 from bookgraph.utils import is_url
 
 # Block metadata keys written on a recovered block, so the repair stays traceable.
@@ -239,14 +239,14 @@ class _Sources:
                     self._members = [n for n in archive.namelist() if not n.endswith("/")]
             except (OSError, zipfile.BadZipFile):
                 self._members = []
-        member = _match_member(reference, self._members)
+        member = match_epub_member(reference, self._members)
         if member is None:
             return []
         return [_Match(label=f"{self._epub}!{member}", archive=self._epub, member=member)]
 
 
 def _reference_parts(reference: str) -> list[str]:
-    cleaned = _clean_reference(reference).lstrip("/")
+    cleaned = clean_asset_reference(reference).lstrip("/")
     return [part for part in PurePosixPath(cleaned).parts if part not in ("..", ".")]
 
 
@@ -294,7 +294,7 @@ def _destination(found: _Match, images_dir: Path, reserved: set[str]) -> str:
     if found.path is not None and found.path.parent == images_dir:
         return f"{_IMAGES_SUBDIR}/{found.path.name}"
     raw = found.path.name if found.path is not None else PurePosixPath(found.member or "").name
-    name = _safe_asset_name(raw)
+    name = safe_asset_name(raw)
     stem, suffix = PurePosixPath(name).stem, PurePosixPath(name).suffix
     candidate, counter = name, 1
     while candidate.lower() in reserved:
@@ -341,7 +341,8 @@ def _repoint(block: CanonicalBlock, reference: str, recovered_from: str) -> Cano
 def _write_atomically(path: Path, text: str) -> None:
     partial = path.with_name(f".{path.name}.partial")
     try:
-        partial.write_text(text)
+        # Bytes, not write_text(): document.json is UTF-8 whatever the locale encoding is.
+        partial.write_bytes(text.encode("utf-8"))
         partial.replace(path)
     finally:
         partial.unlink(missing_ok=True)

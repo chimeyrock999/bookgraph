@@ -163,7 +163,7 @@ def _stage_epub_assets(source: Path, output_dir: Path, markdown: str) -> tuple[s
 
             def stage(source_ref: str) -> str | None:
                 nonlocal extraction_failed
-                member = _match_member(source_ref, image_members)
+                member = match_epub_member(source_ref, image_members)
                 if member is None:
                     return None
                 staged = staged_by_member.get(member)
@@ -187,7 +187,7 @@ def _stage_epub_assets(source: Path, output_dir: Path, markdown: str) -> tuple[s
                 staged = stage(src)
                 if staged is None:
                     # Normalise before recording so ``x.png`` and ``x.png#note`` count once.
-                    missing.append(_clean_reference(src))
+                    missing.append(clean_asset_reference(src))
                     return match.group(0)
                 # Preserve any ``"title"`` the source carried; the destination is repointed to the
                 # link-safe staged path, so it is always emitted bare (never angle-bracketed).
@@ -293,7 +293,7 @@ def _rewrite_line(line: str, rewrite: Callable[[re.Match[str]], str]) -> str:
     return "".join(pieces)
 
 
-def _match_member(source_ref: str, image_members: list[str]) -> str | None:
+def match_epub_member(source_ref: str, image_members: list[str]) -> str | None:
     """Find the single EPUB member an image reference points at, or ``None`` if ambiguous.
 
     The reference is XHTML-relative and its originating file is lost once MarkItDown flattens
@@ -308,7 +308,7 @@ def _match_member(source_ref: str, image_members: list[str]) -> str | None:
     image.
     """
 
-    tail = _clean_reference(source_ref).lstrip("/")
+    tail = clean_asset_reference(source_ref).lstrip("/")
     if not tail:
         return None
     normalized = PurePosixPath(tail)
@@ -341,7 +341,7 @@ def _extract_member(
     location, which ``dest_dir`` (a staging directory) is renamed or merged into afterwards.
     """
 
-    name = _unique_name(_safe_asset_name(PurePosixPath(member).name), used_names)
+    name = _unique_name(safe_asset_name(PurePosixPath(member).name), used_names)
     dest_dir.mkdir(parents=True, exist_ok=True)
     # Stream rather than read the whole member into memory: a scanned technical book can carry
     # tens-of-MB raster figures, and copyfileobj keeps the peak flat on image-heavy EPUBs.
@@ -350,7 +350,7 @@ def _extract_member(
     return f"{_ASSETS_SUBDIR}/{name}"
 
 
-def _safe_asset_name(name: str) -> str:
+def safe_asset_name(name: str) -> str:
     """Collapse characters that break a bare Markdown link destination into ``_``.
 
     A staged filename becomes part of the rewritten ``![alt](images/<name>)`` destination, so a
@@ -386,7 +386,7 @@ def _unique_name(name: str, used_names: set[str]) -> str:
     return candidate
 
 
-def _clean_reference(source_ref: str) -> str:
+def clean_asset_reference(source_ref: str) -> str:
     """Drop URL fragment/query and percent-decode so the path can match a zip member."""
 
     path = source_ref.split("#", 1)[0].split("?", 1)[0]

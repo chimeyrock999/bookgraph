@@ -759,7 +759,7 @@ is written beside the export:
   "warnings": [
     {"code": "asset_missing", "message": "…", "section_id": "ddia.scalability",
      "reference": "t1.png", "source_path": "translations/vi/ddia/ddia.scalability.md",
-     "block_id": null}
+     "block_id": null, "column": "mixed", "origin": "translation"}
   ],
   "renderer": "playwright",
   "output": "/path/to/workspace/exports/ddia.vi-progress.pdf",
@@ -789,6 +789,16 @@ is written beside the export:
   translation artifact, `sources/parsed/<doc_id>/document.json` for an original
   section (with the parsed `block_id`), or `sections.jsonl` when the document has no
   parsed blocks.
+- Every warning names its `column` and `origin`. `column` is `mixed` for the
+  reading edition (the whole page in `translated` mode, the right column in
+  `bilingual` mode), or `original` for a problem that only the `bilingual` left
+  column shows: an original asset of a translated (or `--fallback skip`) section,
+  which `--mode translated` never renders. An untranslated row shown with
+  `--fallback original` has its original in both columns, so its asset warnings
+  are `mixed`. `origin` is `translation` when the problem is in the translation
+  artifact (its body, image links, or registry record), or `source` when it is in
+  the original source (`document.json` / `sections.jsonl`) or its ingest quality.
+  The CLI prints `original` warnings as `[original column] …`.
 - The report is where status/debug metadata lives: the reading pages carry the title,
   the table of contents, and book content only. `show_status` records whether the
   export was made with `--show-status`, which also prints coverage, freshness and

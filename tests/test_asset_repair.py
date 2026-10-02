@@ -108,6 +108,8 @@ def test_missing_image_export_is_clean_and_report_captures_it(tmp_path: Path) ->
             "reference": f"sources/parsed/{DOC}/images/ddia_0307.png",
             "source_path": f"translations/vi/{DOC}/{section.id}.md",
             "block_id": None,
+            "column": "mixed",
+            "origin": "translation",
         }
     ]
 

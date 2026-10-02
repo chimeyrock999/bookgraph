@@ -1196,7 +1196,10 @@ bookgraph export translated-pdf /path/to/workspace ddia --check           # cove
   `bilingual` mode the left column counts too: a missing original asset of a
   **translated** section is refused, even though `translated` mode never shows it.
   The same workspace can therefore pass `--strict` in `translated` mode and fail it
-  in `bilingual` mode.
+  in `bilingual` mode. Those problems are source assets, not translation problems:
+  their warnings carry `"column": "original"` in the report and print as
+  `[original column] …`, and the strict error counts them apart. Run
+  `--mode translated --strict` to check the reading edition alone.
 - `--show-status`: debug view. Also print status metadata on the reading pages:
   coverage/doc_id/mode/fallback on the title page, TOC status markers (`(original)`,
   `(may be outdated)`, `(not tracked)`, `(skipped)`), the *Untranslated — original
@@ -1262,6 +1265,8 @@ All images are embedded as `data:` URIs, so the output is self-contained.
 - `doc_id`, `lang`, `mode`, `fallback`, and `coverage: <translated>/<total> (<pct>%)`.
 - One `warning: <code>: <section_id>: <message>` line per warning, followed by
   ` (in <source_path>)` when the warning names the file carrying the reference.
+  In `bilingual` mode the message is prefixed with `[original column] ` when the
+  warning's `column` is `original`.
 - `renderer`, `export`, and `report` paths. With `--check` it prints
   `export: (check only, not written)` instead.
 

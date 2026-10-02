@@ -14,6 +14,7 @@ from bookgraph.reading_plans import (
     list_plan_progress,
     mark_section_read,
     next_sections,
+    plan_lock,
     read_reading_plan,
     write_reading_plan,
 )
@@ -150,21 +151,24 @@ def reading_plan_mark_read(
 
     workspace = WorkspacePaths(workspace_path.expanduser().resolve())
     resolved_plan_id = _validate_id(plan_id, "plan_id")
-    path, plan = _load_plan(workspace, resolved_plan_id)
+    # Load → mark → write under the plan lock so a concurrent MCP writer's update to
+    # the same plan is not lost between our read and our replace.
+    with plan_lock(_plan_path(workspace, resolved_plan_id)):
+        path, plan = _load_plan(workspace, resolved_plan_id)
 
-    # section_id is a lookup key against the plan's own section ids (which contain
-    # dots, e.g. ``<doc_id>.<slug>``), never a filename, so it is validated by
-    # membership in the store rather than as a bare slug.
-    try:
-        updated, marked = mark_section_read(plan, section_id)
-    except ValueError as exc:
-        raise typer.BadParameter(str(exc)) from exc
+        # section_id is a lookup key against the plan's own section ids (which contain
+        # dots, e.g. ``<doc_id>.<slug>``), never a filename, so it is validated by
+        # membership in the store rather than as a bare slug.
+        try:
+            updated, marked = mark_section_read(plan, section_id)
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
 
-    typer.echo(f"plan_id: {updated.plan_id}")
-    typer.echo(f"marked: {marked}")
-    typer.echo(f"completed: {len(updated.completed)}/{len(updated.section_ids)}")
-    if dry_run:
-        typer.echo("reading_plan: (dry run, not written)")
-        return
-    write_reading_plan(updated, path)
+        typer.echo(f"plan_id: {updated.plan_id}")
+        typer.echo(f"marked: {marked}")
+        typer.echo(f"completed: {len(updated.completed)}/{len(updated.section_ids)}")
+        if dry_run:
+            typer.echo("reading_plan: (dry run, not written)")
+            return
+        write_reading_plan(updated, path)
     typer.echo(f"reading_plan: {path}")

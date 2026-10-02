@@ -30,10 +30,16 @@ from bookgraph.mcp.service import (
     _load_doc_blocks,
     _load_doc_sections,
     _load_plan,
+    _plan_path,
     _section_assets,
 )
 from bookgraph.models import ReadingPlan, Section, SectionAnnotation
-from bookgraph.reading_plans import mark_section_read, next_sections, write_reading_plan
+from bookgraph.reading_plans import (
+    mark_section_read,
+    next_sections,
+    plan_lock,
+    write_reading_plan,
+)
 from bookgraph.utils import validate_slug_id
 from bookgraph.workspace import WorkspacePaths
 
@@ -132,14 +138,17 @@ def complete_reading_batch(
     every reason, so the caller can fix them all before retrying.
     """
 
-    path, plan, report = _evaluate(workspace, plan_id, section_ids, requirements)
-    if not report.ok:
-        return report
-    updated = plan
-    for section_id in report.section_ids:
-        updated, _ = mark_section_read(updated, section_id)
-    if updated is not plan:
-        write_reading_plan(updated, path)
+    # Checks and write run under one plan lock, so a concurrent mark_read cannot land
+    # between the plan load inside _evaluate and the replace below and be overwritten.
+    with plan_lock(_plan_path(workspace, plan_id)):
+        path, plan, report = _evaluate(workspace, plan_id, section_ids, requirements)
+        if not report.ok:
+            return report
+        updated = plan
+        for section_id in report.section_ids:
+            updated, _ = mark_section_read(updated, section_id)
+        if updated is not plan:
+            write_reading_plan(updated, path)
     completed, total, done = _progress(updated)
     return report.model_copy(
         update={"committed": True, "completed": completed, "total": total, "done": done}

@@ -44,6 +44,7 @@ from bookgraph.reading_plans import (
     list_plan_progress,
     mark_section_read,
     next_sections,
+    plan_lock,
     read_reading_plan,
     write_reading_plan,
 )
@@ -457,9 +458,12 @@ def _load_doc_sections(workspace: WorkspacePaths, doc_id: str) -> list[Section]:
         raise SectionsNotFoundError(f"Invalid sections manifest: {manifest}: {exc}") from exc
 
 
+def _plan_path(workspace: WorkspacePaths, plan_id: str) -> Path:
+    return workspace.reading_plans_root / f"{_validate_id(plan_id, 'plan_id')}.json"
+
+
 def _load_plan(workspace: WorkspacePaths, plan_id: str) -> tuple[Path, ReadingPlan]:
-    _validate_id(plan_id, "plan_id")
-    path = workspace.reading_plans_root / f"{plan_id}.json"
+    path = _plan_path(workspace, plan_id)
     if not path.is_file():
         raise PlanNotFoundError(
             f"Reading plan '{plan_id}' not found: {path}. "
@@ -530,12 +534,14 @@ def mark_read(
 ) -> MarkReadResult:
     """Mark a section read for a plan and persist the updated plan."""
 
-    path, plan = _load_plan(workspace, plan_id)
-    try:
-        updated, marked = mark_section_read(plan, section_id)
-    except ValueError as exc:
-        raise ReadingServiceError(str(exc)) from exc
-    write_reading_plan(updated, path)
+    path = _plan_path(workspace, plan_id)
+    with plan_lock(path):
+        _, plan = _load_plan(workspace, plan_id)
+        try:
+            updated, marked = mark_section_read(plan, section_id)
+        except ValueError as exc:
+            raise ReadingServiceError(str(exc)) from exc
+        write_reading_plan(updated, path)
     return MarkReadResult(
         plan_id=updated.plan_id,
         marked=marked,
@@ -984,25 +990,26 @@ def create_plan(
         raise ReadingServiceError("daily_sections must be at least 1")
 
     path = workspace.reading_plans_root / f"{resolved_plan_id}.json"
-    if path.exists() and not overwrite:
-        raise ReadingServiceError(
-            f"reading plan '{resolved_plan_id}' already exists; resume it with "
-            "get_next_section/list_plans, or pass overwrite=True to replace it "
-            "(discarding its progress)"
-        )
+    with plan_lock(path):
+        if path.exists() and not overwrite:
+            raise ReadingServiceError(
+                f"reading plan '{resolved_plan_id}' already exists; resume it with "
+                "get_next_section/list_plans, or pass overwrite=True to replace it "
+                "(discarding its progress)"
+            )
 
-    sections = _load_doc_sections(workspace, resolved_doc_id)
-    try:
-        plan = create_reading_plan(
-            sections,
-            plan_id=resolved_plan_id,
-            doc_id=resolved_doc_id,
-            daily_sections=daily_sections,
-        )
-    except ValueError as exc:
-        raise ReadingServiceError(str(exc)) from exc
+        sections = _load_doc_sections(workspace, resolved_doc_id)
+        try:
+            plan = create_reading_plan(
+                sections,
+                plan_id=resolved_plan_id,
+                doc_id=resolved_doc_id,
+                daily_sections=daily_sections,
+            )
+        except ValueError as exc:
+            raise ReadingServiceError(str(exc)) from exc
 
-    write_reading_plan(plan, path)
+        write_reading_plan(plan, path)
     return CreatedPlan(
         plan_id=plan.plan_id,
         doc_id=plan.doc_id,

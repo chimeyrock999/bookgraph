@@ -458,8 +458,13 @@ than persisted, so the file stays a minimal source of truth.
 
 - Every writer (`reading-plan create`/`mark-read`, the MCP `create_plan`,
   `mark_read`, and `complete_reading_batch` tools) replaces the file atomically
-  (temp file in `reading_plans/` + rename), so a crash mid-write leaves the previous
-  plan, never a truncated one.
+  (fsynced temp file in `reading_plans/` + rename), so a crash or power loss
+  mid-write leaves the previous plan, never a truncated one. The file keeps its
+  existing permissions (umask default on first write).
+- Writers hold a per-plan lock across load → modify → write (in-process, plus an
+  advisory `flock` on `reading_plans/.<plan_id>.json.lock` on POSIX), so concurrent
+  writers — e.g. the CLI and an MCP server — never lose each other's updates. The
+  `.lock` file is empty and may be left in place; it is not a plan.
 - `complete_reading_batch` appends a whole batch to `completed` in one write, and
   only after its readiness checks pass (see `commands.md`, *Reading batch
   completion*).

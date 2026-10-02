@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import stat
 from pathlib import Path
 
 import pytest
@@ -130,3 +132,41 @@ def test_write_then_read_round_trips(tmp_path: Path) -> None:
 
     assert written == path
     assert read_reading_plan(path) == plan
+
+
+def _a_plan() -> ReadingPlan:
+    return ReadingPlan(plan_id="daily", doc_id="doc", section_ids=["doc.a", "doc.b"])
+
+
+def test_write_reading_plan_keeps_original_when_replace_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "reading_plans" / "daily.json"
+    write_reading_plan(_a_plan(), path)
+    before = path.read_text()
+
+    def boom(src: object, dst: object) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(os, "replace", boom)
+    updated = _a_plan().model_copy(update={"completed": ["doc.a"]})
+    with pytest.raises(OSError, match="disk full"):
+        write_reading_plan(updated, path)
+
+    assert path.read_text() == before
+    assert [p.name for p in path.parent.iterdir()] == ["daily.json"]  # temp file removed
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX permission bits")
+def test_write_reading_plan_uses_umask_mode_and_keeps_existing_mode(tmp_path: Path) -> None:
+    path = tmp_path / "daily.json"
+    previous = os.umask(0o022)
+    try:
+        write_reading_plan(_a_plan(), path)
+    finally:
+        os.umask(previous)
+    assert stat.S_IMODE(path.stat().st_mode) == 0o644  # not mkstemp's owner-only 0600
+
+    path.chmod(0o640)
+    write_reading_plan(_a_plan(), path)
+    assert stat.S_IMODE(path.stat().st_mode) == 0o640

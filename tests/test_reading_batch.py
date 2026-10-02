@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 
 import pytest
@@ -16,7 +17,7 @@ from bookgraph.mcp.reading_batch import (
 )
 from bookgraph.mcp.service import ConceptInput, ReadingServiceError
 from bookgraph.models import CanonicalBlock, Document, ReadingPlan, Section
-from bookgraph.reading_plans import read_reading_plan, write_reading_plan
+from bookgraph.reading_plans import plan_lock, read_reading_plan, write_reading_plan
 from bookgraph.sections import read_sections, write_sections
 from bookgraph.workspace import WorkspacePaths
 
@@ -355,11 +356,37 @@ def test_request_errors(tmp_path: Path) -> None:
         complete_reading_batch(workspace, "daily", requirements=NOTHING)
 
 
+@pytest.mark.parametrize("writer", ["mark_read", "complete_reading_batch"])
+def test_concurrent_plan_writes_do_not_lose_updates(tmp_path: Path, writer: str) -> None:
+    workspace = _workspace(tmp_path)
+    path = workspace.reading_plans_root / "daily.json"
+
+    def write_b() -> None:
+        if writer == "mark_read":
+            service.mark_read(workspace, "daily", B)
+        else:
+            complete_reading_batch(workspace, "daily", [B], NOTHING)
+
+    with plan_lock(path):
+        other = threading.Thread(target=write_b)
+        other.start()
+        other.join(timeout=0.2)
+        assert other.is_alive()  # blocked on the lock, not racing our write
+        # Another writer's read-modify-write lands while the thread waits ...
+        write_reading_plan(_plan(workspace).model_copy(update={"completed": [A]}), path)
+    other.join(timeout=5)
+
+    # ... and the waiting writer applies its mark on top of it instead of clobbering it.
+    assert _plan(workspace).completed == [A, B]
+
+
 def test_plan_writes_leave_no_temp_files(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path)
 
     complete_reading_batch(workspace, "daily", requirements=NOTHING)
     service.mark_read(workspace, "daily")
 
-    assert sorted(p.name for p in workspace.reading_plans_root.iterdir()) == ["daily.json"]
+    names = sorted(p.name for p in workspace.reading_plans_root.iterdir())
+    assert not [name for name in names if name.endswith(".tmp")]
+    assert "daily.json" in names
     assert _plan(workspace).completed == [A, B, C]

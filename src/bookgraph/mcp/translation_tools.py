@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import UTC, datetime
 
 from bookgraph.mcp.errors import (
@@ -25,7 +26,17 @@ from bookgraph.mcp.views import (
     SectionArtifactView,
 )
 from bookgraph.models import (
+    AlignedUnit,
+    CanonicalBlock,
     Section,
+    TranslationUnit,
+)
+from bookgraph.translation_alignment import (
+    alignment_errors,
+    check_alignment,
+    describe_alignment_issues,
+    join_units,
+    translation_alignment,
 )
 from bookgraph.translation_assets import check_translation_assets, describe_missing_assets
 from bookgraph.translations import (
@@ -70,6 +81,7 @@ def _artifact_view(
         # Decode the bytes the status was computed from (no second read of the file).
         content = state.body.decode("utf-8", errors="replace")
     blocks = _load_doc_blocks(workspace, state.doc_id)
+    alignment = translation_alignment(state, section, blocks)
     # The sidecar's ``includes_assets`` is only the writer's claim: verify it against
     # the body, so a re-parse that staged a new figure makes a prose-only body incomplete.
     assets = translation_asset_check(workspace, state, section, blocks)
@@ -97,6 +109,9 @@ def _artifact_view(
         content=content,
         structure_issues=translation_structure_issues(workspace, state, section, blocks),
         missing_assets=assets.missing if assets is not None else [],
+        alignment_status=alignment.status if body_exists else None,
+        aligned_units=len(alignment.units),
+        alignment_issues=alignment.issues,
     )
 
 
@@ -135,11 +150,12 @@ def write_section_translation(
     doc_id: str,
     section_id: str,
     lang: str,
-    content: str,
+    content: str = "",
     includes_assets: bool = False,
     model: str | None = None,
     source_section_hash: str | None = None,
     notes: str | None = None,
+    units: list[TranslationUnit] | None = None,
 ) -> SectionArtifactView:
     """Cache a section translation and register it against the section's content.
 
@@ -162,13 +178,28 @@ def write_section_translation(
     QA/checker results, terminology decisions — goes in ``notes``: stored in the
     registry sidecar, returned by ``get_section_translation``, never part of the body
     or the export.
+
+    ``units`` (instead of ``content``) writes a block-aligned translation: each unit is
+    Markdown plus the ids of the section's source blocks it translates, in reading
+    order. The units are joined (one blank line apart) into the body, and their spans
+    are recorded in the sidecar so the bilingual export can interleave paragraph by
+    paragraph. A unit with no content or no block id, a block id outside the section,
+    or units out of source order is refused; a source text block no unit translates,
+    or a unit that continues the previous unit's Markdown block, is reported in
+    ``alignment_issues``, not refused.
     """
 
     resolved_doc_id = _validate_id(doc_id, "doc_id")
     resolved_lang = _validate_lang(lang)
+    if units is not None and content.strip():
+        raise ReadingServiceError("pass either content or units, not both")
+    section = _find_section(workspace, resolved_doc_id, section_id)
+    blocks = _load_doc_blocks(workspace, resolved_doc_id)
+    alignment: list[AlignedUnit] | None = None
+    if units is not None:
+        content, alignment = _aligned_content(section, blocks, units)
     if not content.strip():
         raise ReadingServiceError("translation content must not be empty")
-    section = _find_section(workspace, resolved_doc_id, section_id)
     current_hash = section_content_hash(section)
     if source_section_hash is not None and source_section_hash != current_hash:
         raise ReadingServiceError(
@@ -179,7 +210,7 @@ def write_section_translation(
     assets = check_translation_assets(
         section,
         split_frontmatter(content)[1],
-        blocks=_load_doc_blocks(workspace, resolved_doc_id),
+        blocks=blocks,
         root=workspace.root,
         parsed_dir=workspace.sources_parsed / resolved_doc_id,
         body_dir=translation_paths(
@@ -201,9 +232,32 @@ def write_section_translation(
         model=model,
         created_at=datetime.now(UTC).isoformat(),
         notes=notes,
+        alignment=alignment,
     )
     state = translation_state(workspace, resolved_lang, resolved_doc_id, section.id, current_hash)
     return _artifact_view(workspace, state, section, include_content=False)
+
+
+def _aligned_content(
+    section: Section, blocks: Mapping[str, CanonicalBlock], units: list[TranslationUnit]
+) -> tuple[str, list[AlignedUnit]]:
+    """The body and alignment of ``units``, refusing an alignment that does not fit."""
+
+    if not units:
+        raise ReadingServiceError("units must not be empty")
+    content, alignment = join_units(units)
+    if split_frontmatter(content)[1] != content:
+        # Spans are offsets into the stored body; a frontmatter block would be split off
+        # before rendering and shift every unit.
+        raise ReadingServiceError("the first unit must not start with a '---' frontmatter block")
+    errors = alignment_errors(check_alignment(section, blocks, alignment, content))
+    if errors:
+        raise ReadingServiceError(
+            f"translation units of section '{section.id}' do not align with its source "
+            f"blocks: {describe_alignment_issues(errors)}; source block ids are in "
+            "get_section's block_ids, in reading order"
+        )
+    return content, alignment
 
 
 def list_section_artifacts(

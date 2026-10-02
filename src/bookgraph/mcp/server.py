@@ -38,6 +38,7 @@ from bookgraph.mcp.service import (
     SectionTree,
     SectionView,
 )
+from bookgraph.models import TranslationUnit
 from bookgraph.workspace import WorkspacePaths
 
 # Sent to every client at connect time, before any tool is called: the rules a reading
@@ -46,7 +47,10 @@ SERVER_INSTRUCTIONS = """\
 BookGraph serves books section by section. Artifacts you write (translations, annotation
 summaries and glosses) are reused by later runs and printed in reading PDFs, so they
 hold book content only. Keep the channels separate:
-- translated headings/prose/tables/figures -> write_section_translation(content=...);
+- translated headings/prose/tables/figures -> write_section_translation(units=...), one
+  {source_block_ids, content} unit per paragraph with the ids from
+  get_section(include_blocks=True), so the bilingual export interleaves paragraph by
+  paragraph (plain content=... still works, paired per section);
   link each figure/table by its AssetRef.link (relative), never by its absolute path;
   translate prose and link labels, but keep link destinations, fragment ids, file
   paths, reference identifiers, HTML anchors and {#id} heading ids byte-for-byte
@@ -129,7 +133,7 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
 
     @mcp.tool
     def get_section(
-        doc_id: str, section_id: str, include_assets: bool = True
+        doc_id: str, section_id: str, include_assets: bool = True, include_blocks: bool = False
     ) -> SectionView:
         """Return one section's full reading content by document and section id.
 
@@ -142,10 +146,15 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
         disputed asset type, text that is only asset captions), so a reader does not have
         to inspect the parsed ``document.json`` to notice them. Page-range warnings are
         always present; asset warnings need ``include_assets``.
+
+        ``include_blocks`` adds ``blocks``: the section's parsed source blocks (id, type,
+        text) in reading order — the ids a block-aligned translation's units reference.
         """
 
         try:
-            return service.get_section(workspace, doc_id, section_id, include_assets)
+            return service.get_section(
+                workspace, doc_id, section_id, include_assets, include_blocks
+            )
         except ReadingServiceError as exc:
             raise ToolError(str(exc)) from exc
 
@@ -431,6 +440,11 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
         against the body; missing_assets lists the figures/tables it does not link,
         each with the link to add. Pass
         ``current_section_hash`` back to write_section_translation to pin your write.
+        ``alignment_status`` is 'aligned' (written with units; alignment_issues lists
+        source text blocks no unit translates and units that merged into the previous
+        one), 'unaligned' (plain content — valid, the
+        bilingual export pairs it per section), or 'invalid' (the stored alignment no
+        longer fits the section; rewrite it with units).
         """
 
         try:
@@ -445,11 +459,12 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
         doc_id: str,
         section_id: str,
         lang: str,
-        content: str,
+        content: str = "",
         includes_assets: bool = False,
         model: str | None = None,
         source_section_hash: str | None = None,
         notes: str | None = None,
+        units: list[TranslationUnit] | None = None,
     ) -> SectionArtifactView:
         """Cache a section translation (Markdown) and register it as fresh.
 
@@ -473,6 +488,18 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
         fragment ids, image/file paths, reference-style identifiers, HTML id/name
         anchors, and {#id} heading ids byte-for-byte. structure_issues in the result
         lists any that changed; fix and rewrite the translation.
+
+        Prefer units over content: a list of {source_block_ids, content}, one per
+        translated paragraph, in reading order, with the ids from
+        get_section(include_blocks=True). Merge paragraphs by listing several ids in one
+        unit; split one by repeating its id in consecutive units. Headings, figures,
+        tables and code may share a unit with their prose or be left out. The units are
+        joined into the Markdown body, and the alignment lets the bilingual export set
+        each paragraph beside its translation. A unit without content or ids, an id
+        outside the section, or units out of source order is refused; a source text
+        block no unit translates, or a unit that continues the previous unit's list or
+        fence instead of starting its own Markdown block, is reported in
+        alignment_issues.
         """
 
         try:
@@ -486,6 +513,7 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
                 model,
                 source_section_hash,
                 notes,
+                units,
             )
         except ReadingServiceError as exc:
             raise ToolError(str(exc)) from exc

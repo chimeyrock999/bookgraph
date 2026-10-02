@@ -18,7 +18,7 @@ from bookgraph.translation_assets import (
     translation_link_bases,
 )
 from bookgraph.translation_structure import check_section_translation, local_asset_resolver
-from bookgraph.translations import TranslationState, split_frontmatter
+from bookgraph.translations import TranslationState, decoded_body, split_frontmatter
 from bookgraph.workspace import WorkspacePaths
 
 
@@ -26,13 +26,8 @@ def _cached_body(state: TranslationState) -> str | None:
     """The cached body with frontmatter split off, or ``None`` when there is none or it
     is not UTF-8."""
 
-    if state.body is None:
-        return None
-    try:
-        body = state.body.decode("utf-8")
-    except UnicodeDecodeError:
-        return None
-    return split_frontmatter(body)[1]
+    body = decoded_body(state)
+    return split_frontmatter(body)[1] if body is not None else None
 
 
 def translation_structure_issues(

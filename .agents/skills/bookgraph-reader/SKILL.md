@@ -76,6 +76,15 @@ Optional translation cache tools (when the user wants sections translated):
   verified against the body and a claim it does not back is refused. `content` is
   book content only; QA/checker results and terminology decisions go in `notes` (see
   *Artifact channels* below).
+  Prefer a block-aligned write: `get_section(doc_id, section_id, include_blocks=True)`
+  lists the source blocks (`id`, `type`, `text`); pass
+  `units=[{source_block_ids: ["b12"], content: "<translated paragraph>"}, ...]`
+  instead of `content`, one unit per paragraph in reading order (several ids merge
+  paragraphs, the same id in consecutive units splits one; headings, figures and code
+  may share a unit or be left out). The bilingual export then interleaves paragraph
+  by paragraph. Foreign ids or units out of order are refused; `alignment_issues`
+  lists text blocks left untranslated and units that do not start a Markdown block of
+  their own (start each unit with a new paragraph, list, heading or fence).
   Translate content, preserve structural Markdown: translate prose, captions, and
   link labels, but keep link destinations and fragment ids, image and file paths,
   reference-style identifiers, HTML `id`/`name` anchors, and `{#id}` heading ids
@@ -147,7 +156,8 @@ Optional translation cache tools (when the user wants sections translated):
 A cached translation is reused by later runs and printed in the reading PDF, so it
 holds **book content only**. Keep the channels separate:
 
-- translated headings/prose/tables/figures → `content` of `write_section_translation`;
+- translated headings/prose/tables/figures → `units` (block-aligned, preferred) or
+  `content` of `write_section_translation`;
 - QA/checker results, terminology decisions, doubts about the source → `notes` of
   `write_section_translation` (stored beside the translation, never exported);
 - `MEDIA:/path` delivery markers, "Đã lưu cache/enrich và mark read: …", progress and

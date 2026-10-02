@@ -128,16 +128,21 @@ def get_section(
     doc_id: str,
     section_id: str,
     include_assets: bool = True,
+    include_blocks: bool = False,
 ) -> SectionView:
     """Return one section's full reading content by id.
 
     When ``include_assets`` (the default) the view carries a structured ``assets`` list
     of the section's figures/tables (path, type, caption, order) so a reader no longer has
-    to grep the parsed ``document.json`` to find them.
+    to grep the parsed ``document.json`` to find them. ``include_blocks`` adds the
+    section's parsed source blocks (id, type, text), which a block-aligned translation
+    references.
     """
 
     section = _find_section(workspace, doc_id, section_id)
-    return _section_view(workspace, section, include_assets=include_assets)
+    return _section_view(
+        workspace, section, include_assets=include_assets, include_blocks=include_blocks
+    )
 
 
 def mark_read(

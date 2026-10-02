@@ -25,6 +25,7 @@ from bookgraph.mcp.views import (
     ChapterProgressView,
     SectionRef,
     SectionView,
+    SourceBlockView,
 )
 from bookgraph.models import (
     ASSET_BLOCK_TYPES,
@@ -159,8 +160,24 @@ def _section_view(
     *,
     include_assets: bool = True,
     blocks_by_id: dict[str, CanonicalBlock] | None = None,
+    include_blocks: bool = False,
 ) -> SectionView:
     markdown_path = _section_markdown_path(workspace, section.doc_id, section.id)
+    source_blocks: list[SourceBlockView] | None = None
+    if include_blocks:
+        if blocks_by_id is None:
+            blocks_by_id = _load_doc_blocks(workspace, section.doc_id)
+        source_blocks = [
+            SourceBlockView(
+                id=block.id,
+                type=block.type,
+                text=block.text,
+                level=block.level,
+                code=bool(block.metadata.get("code")),
+            )
+            for block in (blocks_by_id.get(block_id) for block_id in section.block_ids)
+            if block is not None
+        ]
     assets: list[AssetRef] = []
     asset_summaries: list[AssetSummary] = []
     if include_assets:
@@ -184,6 +201,7 @@ def _section_view(
         # The same checks back the segment stage's quality.json report, so a reader and
         # an ingest run never disagree about what is wrong with a section.
         warnings=section_warnings(section, asset_summaries),
+        blocks=source_blocks,
     )
 
 

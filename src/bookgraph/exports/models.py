@@ -11,6 +11,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from bookgraph.models import AlignmentStatus
+
 FallbackPolicy = Literal["original", "skip", "fail"]
 FALLBACK_POLICIES: tuple[str, ...] = ("original", "skip", "fail")
 
@@ -106,7 +108,10 @@ class ExportSection(BaseModel):
     follows the source PDF outline when there is one. ``assets_*`` count the mixed
     rendering (the whole section in ``translated`` mode, the right column in
     ``bilingual`` mode); ``original_assets_*`` count the bilingual left column and stay
-    ``None`` in ``translated`` mode.
+    ``None`` in ``translated`` mode. In ``bilingual`` mode ``alignment`` is a translated
+    section's block alignment (``aligned`` rows interleave unit by unit; ``unaligned``
+    and ``invalid`` ones pair the whole section) and ``bilingual_rows`` the rows it
+    took; both stay ``None`` in ``translated`` mode, and ``alignment`` for a fallback.
     """
 
     section_id: str
@@ -121,6 +126,8 @@ class ExportSection(BaseModel):
     assets_missing: int = 0
     original_assets_embedded: int | None = None
     original_assets_missing: int | None = None
+    alignment: AlignmentStatus | None = None
+    bilingual_rows: int | None = None
 
 
 class ExportReport(BaseModel):

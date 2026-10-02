@@ -65,6 +65,15 @@ Operational details live in `docs/cli/parse-book-large-pdfs.md`.
    don't pull the whole outline. Pass `chapter_level=2` when chapters sit under parts (a lone `# Book Title`
    root is skipped automatically).
 
+For an **enrichment job** (annotating, translating, or rebuilding the index per
+batch), advance with `complete_reading_batch(plan_id, inspected_assets=[...],
+translation_lang=..., ...)` instead of `mark_read`: it marks the whole batch read
+only after verifying the work, and otherwise returns `committed: false` with
+actionable `issues`. Fix every blocking issue and retry — never advance past a
+failed step. If you read with `get_next_section(stop_at_boundary=True)`, pass the same
+`stop_at_boundary` / `chapter_level` so it completes the batch you were handed.
+`validate_reading_batch` takes the same arguments as a dry run.
+
 ## Navigating and connecting
 
 - `search(query, doc_id=None)` — find sections by topic. Omit `doc_id` to search
@@ -117,8 +126,9 @@ chat), reuse the cache instead of retranslating:
 
 ## Notes
 
-- Only `create_plan` and `mark_read` (the reading plan), `annotate_section`, and
-  `write_section_translation` change state; everything else is read-only.
+- Only `create_plan`, `mark_read`, and `complete_reading_batch` (the reading plan),
+  `annotate_section`, and `write_section_translation` change state; everything else
+  is read-only.
 - Concepts require `bookgraph index build`; `search` and the graph tools also work
   before indexing (live scan), just with rougher ranking.
 - Full tool reference: `docs/cli/commands.md`; setup + client config:

@@ -454,6 +454,25 @@ mirroring `bookgraph.models.ReadingPlan`:
 These are recomputed from `section_ids` + `completed` on each `next` call rather
 than persisted, so the file stays a minimal source of truth.
 
+### Write rules
+
+- Every writer (`reading-plan create`/`mark-read`, the MCP `create_plan`,
+  `mark_read`, and `complete_reading_batch` tools) replaces the file atomically
+  (fsynced temp file in `reading_plans/` + rename), so a crash or power loss
+  mid-write leaves the previous plan, never a truncated one. The file keeps its
+  existing permissions (umask default on first write).
+- Every writer holds a per-plan lock across load → modify → write (a CLI `create`,
+  which overwrites blindly, across its write): an in-process lock plus, on POSIX, an
+  advisory `flock` on `reading_plans/.<plan_id>.json.lock`, opened read-write (an exclusive
+  lock on NFS needs it) and read-only only when the file is not writable to us, so a
+  lock file created by another user does not block. Concurrent writers — e.g. the CLI and
+  an MCP server — therefore never lose each other's updates. The `.lock` file is
+  empty and may be left in place; it is not a plan. Without `fcntl` (Windows) only
+  the in-process lock applies.
+- `complete_reading_batch` appends a whole batch to `completed` in one write, and
+  only after its readiness checks pass (see `commands.md`, *Reading batch
+  completion*).
+
 ## `annotations/<doc_id>/<section_id>.json`
 
 Owner: the MCP `annotate_section` tool (`bookgraph.mcp.service` /

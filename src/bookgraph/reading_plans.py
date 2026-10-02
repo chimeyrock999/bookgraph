@@ -1,11 +1,22 @@
 from __future__ import annotations
 
+import os
+import stat
+import threading
+import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
 from bookgraph.graph import build_section_graph, chapter_span
 from bookgraph.models import ReadingPlan, Section
 from bookgraph.utils import validate_slug_id
+
+try:  # POSIX only; elsewhere plan_lock falls back to the in-process lock alone
+    import fcntl
+except ImportError:  # pragma: no cover - exercised only on Windows
+    fcntl = None  # type: ignore[assignment]
 
 
 @dataclass(frozen=True)
@@ -197,11 +208,83 @@ def mark_section_read(plan: ReadingPlan, section_id: str | None = None) -> tuple
     return updated, section_id
 
 
+_PLAN_LOCKS: dict[Path, threading.Lock] = {}
+_PLAN_LOCKS_GUARD = threading.Lock()
+
+
+@contextmanager
+def plan_lock(path: Path) -> Iterator[None]:
+    """Serialise read-modify-write cycles on one reading plan.
+
+    Wrap the whole load → modify → :func:`write_reading_plan` sequence so a concurrent
+    writer cannot slip in between the load and the replace and have its update lost.
+    Holds an in-process lock (concurrent MCP requests) plus, on POSIX, an advisory
+    ``flock`` on a sibling ``.<plan>.json.lock`` file (the CLI and an MCP server
+    racing). Not re-entrant.
+    """
+
+    key = path.resolve()
+    with _PLAN_LOCKS_GUARD:
+        thread_lock = _PLAN_LOCKS.setdefault(key, threading.Lock())
+    with thread_lock:
+        if fcntl is None:
+            yield
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd = _open_lock_file(path.with_name(f".{path.name}.lock"))
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+
+
+def _open_lock_file(lock_path: Path) -> int:
+    """Open (creating if needed) a plan's lock file for ``flock``.
+
+    Read-write first: Linux NFS clients emulate ``flock`` with ``fcntl`` byte-range
+    locks, where an exclusive lock needs a descriptor open for writing. Falls back to
+    read-only when the file is not writable to us (e.g. created 0644 by another user
+    in a shared workspace), which is enough for ``flock`` on local filesystems.
+    """
+
+    try:
+        return os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o666)
+    except PermissionError:
+        return os.open(lock_path, os.O_RDONLY | os.O_CREAT, 0o666)
+
+
 def write_reading_plan(plan: ReadingPlan, path: Path) -> Path:
-    """Persist a reading plan to ``reading_plans/<plan_id>.json``."""
+    """Atomically persist a reading plan to ``reading_plans/<plan_id>.json``.
+
+    The plan is the reading-progress source of truth, so it is written to a temp file
+    in the same directory, fsynced, and swapped in with ``os.replace``: a crash or
+    power loss mid-write leaves the previous plan intact rather than a truncated or
+    empty file that loses all progress. The temp file is created with the usual
+    umask-derived mode (like ``Path.write_text``), and an existing plan keeps its mode.
+    Atomicity covers torn writes only; callers that read-modify-write must hold
+    :func:`plan_lock` to avoid lost updates.
+    """
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(plan.model_dump_json(indent=2) + "\n")
+    tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
+    try:
+        with os.fdopen(fd, "w") as handle:
+            handle.write(plan.model_dump_json(indent=2) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.chmod(tmp, stat.S_IMODE(path.stat().st_mode))
+        except FileNotFoundError:
+            pass  # first write: keep the umask-derived mode
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
     return path
 
 

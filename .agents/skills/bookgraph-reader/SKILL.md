@@ -46,6 +46,9 @@ workspace paths; they operate on the workspace used when `bookgraph mcp` started
 - `get_context(doc_id, section_id)` — fetch section text, structural neighbours,
   and concepts.
 - `mark_read(plan_id, section_id=None)` — advance reading progress.
+- `complete_reading_batch(plan_id, ...)` — advance a whole batch only once its
+  enrichment (annotation, translation, figures, index) is verified; use instead of
+  `mark_read` for annotate/translate jobs. `validate_reading_batch` is the dry run.
 
 Optional navigation tools:
 
@@ -106,6 +109,13 @@ Optional translation cache tools (when the user wants sections translated):
      `get_plan_progress(plan_id)` (or read `chapter` from `get_next_section`)
      instead of fetching the outline.
    - When pausing, call `list_plans()` and report `completed/total`.
+   - **Enrichment jobs** (annotate/translate/index per batch): do not call
+     `mark_read`. Call `complete_reading_batch(plan_id, inspected_assets=[...],
+     translation_lang=..., ...)` after the work; if `committed` is false, fix every
+     blocking `issue` it lists (each says what to do) and call it again. Never
+     advance progress past a failed step. If you read with
+     `get_next_section(stop_at_boundary=True)`, pass the same `stop_at_boundary` /
+     `chapter_level` so it completes the batch you were handed.
 
 ## Behavior rules
 
@@ -116,8 +126,9 @@ Optional translation cache tools (when the user wants sections translated):
 - Treat auto-extracted concepts as hints, not authoritative labels.
 - Prefer deterministic BookGraph tools over web/general knowledge for book
   content questions.
-- Only `create_plan`, `mark_read`, `annotate_section`, and
-  `write_section_translation` write state. Treat all other tools as read-only.
+- Only `create_plan`, `mark_read`, and `complete_reading_batch` write reading
+  progress; `annotate_section` and `write_section_translation` write their
+  artifacts. Treat all other tools as read-only.
 
 ## Client-specific packaging
 

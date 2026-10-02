@@ -463,8 +463,9 @@ than persisted, so the file stays a minimal source of truth.
   existing permissions (umask default on first write).
 - Every writer holds a per-plan lock across load → modify → write (a CLI `create`,
   which overwrites blindly, across its write): an in-process lock plus, on POSIX, an
-  advisory `flock` on `reading_plans/.<plan_id>.json.lock`, opened read-only so a lock
-  file created by another user does not block. Concurrent writers — e.g. the CLI and
+  advisory `flock` on `reading_plans/.<plan_id>.json.lock`, opened read-write (an exclusive
+  lock on NFS needs it) and read-only only when the file is not writable to us, so a
+  lock file created by another user does not block. Concurrent writers — e.g. the CLI and
   an MCP server — therefore never lose each other's updates. The `.lock` file is
   empty and may be left in place; it is not a plan. Without `fcntl` (Windows) only
   the in-process lock applies.

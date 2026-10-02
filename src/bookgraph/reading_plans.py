@@ -124,9 +124,7 @@ def plan_lock(path: Path) -> Iterator[None]:
             yield
             return
         path.parent.mkdir(parents=True, exist_ok=True)
-        # Read-only is enough for flock, so a lock file created by another user (0644
-        # under the usual umask) never stops a writer who can still replace the plan.
-        fd = os.open(path.with_name(f".{path.name}.lock"), os.O_RDONLY | os.O_CREAT, 0o666)
+        fd = _open_lock_file(path.with_name(f".{path.name}.lock"))
         try:
             fcntl.flock(fd, fcntl.LOCK_EX)
             try:
@@ -135,6 +133,21 @@ def plan_lock(path: Path) -> Iterator[None]:
                 fcntl.flock(fd, fcntl.LOCK_UN)
         finally:
             os.close(fd)
+
+
+def _open_lock_file(lock_path: Path) -> int:
+    """Open (creating if needed) a plan's lock file for ``flock``.
+
+    Read-write first: Linux NFS clients emulate ``flock`` with ``fcntl`` byte-range
+    locks, where an exclusive lock needs a descriptor open for writing. Falls back to
+    read-only when the file is not writable to us (e.g. created 0644 by another user
+    in a shared workspace), which is enough for ``flock`` on local filesystems.
+    """
+
+    try:
+        return os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o666)
+    except PermissionError:
+        return os.open(lock_path, os.O_RDONLY | os.O_CREAT, 0o666)
 
 
 def write_reading_plan(plan: ReadingPlan, path: Path) -> Path:

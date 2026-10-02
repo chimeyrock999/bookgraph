@@ -231,3 +231,24 @@ def test_plan_lock_works_with_a_read_only_lock_file(tmp_path: Path) -> None:
         write_reading_plan(_a_plan(), path)
 
     assert read_reading_plan(path) == _a_plan()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="flock is POSIX-only")
+def test_plan_lock_prefers_a_writable_lock_descriptor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # An exclusive flock on NFS needs a descriptor open for writing, so the read-only
+    # open must stay a fallback for lock files we cannot write.
+    flags: list[int] = []
+    real_open = os.open
+
+    def recording_open(file: object, flag: int, mode: int = 0o777) -> int:
+        if str(file).endswith(".lock"):
+            flags.append(flag)
+        return real_open(file, flag, mode)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(os, "open", recording_open)
+    with plan_lock(tmp_path / "daily.json"):
+        pass
+
+    assert len(flags) == 1 and flags[0] & os.O_ACCMODE == os.O_RDWR

@@ -126,9 +126,12 @@ must hold **book content only**. Everything else has its own place:
 
 Rules:
 
-- Write translations **only** through `write_section_translation`. Never create or
-  edit files under `translations/` directly, and never paste your chat reply (or a
-  part of it) into `content`.
+- Write translations **only** through `write_section_translation` — it is the only
+  translation store. Never write translation files yourself: not under
+  `translations/`, and not in any directory of your own (a `translation_cache/`, a
+  scratch folder). Nothing reads them, so the section stays untranslated in the
+  export and in batch completion. Never paste your chat reply (or a part of it)
+  into `content`.
 - Link each figure/table by its `AssetRef.link` (relative, e.g.
   `![Hình 1-1](images/fig1-1.png)`), never by `AssetRef.path` (absolute — it is for
   opening the file). `MEDIA:` belongs to the chat reply, not to `content`.
@@ -137,8 +140,10 @@ Rules:
   status, not book text.
 - Annotation summaries and glosses follow the same rule: book explanation only.
 - After translating, advance with `complete_reading_batch(plan_id,
-  translation_lang=..., ...)`, not plain `mark_read`: it verifies the cached
-  translation exists and is fresh before marking the batch read.
+  translation_lang=..., ...)`, not plain `mark_read`, and **always pass
+  `translation_lang`** in a translation job: only then does it verify the cached
+  translation exists and is fresh before marking the batch read. Without it the
+  batch completes with nothing saved.
 
 ## Behavior
 

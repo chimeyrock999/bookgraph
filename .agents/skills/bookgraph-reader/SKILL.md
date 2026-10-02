@@ -146,15 +146,20 @@ holds **book content only**. Keep the channels separate:
 
 Rules:
 
-- Write translations only through `write_section_translation`; never create or edit
-  files under `translations/` directly, and never paste the chat reply into `content`.
+- Write translations only through `write_section_translation`, the only translation
+  store. Never write translation files yourself, not under `translations/` and not in
+  any directory of your own (such as a `translation_cache/`): nothing reads them, so
+  the section stays untranslated in the export and in batch completion. Never paste
+  the chat reply into `content`.
 - Link each figure/table by its `AssetRef.link` (relative, e.g. `images/fig1-1.png`),
   never by `AssetRef.path` (absolute — it is for opening the file).
 - Never copy export labels (`(original)`, `(untracked)`, "Translation status
   unknown", "Missing asset: …") into a translation.
 - Annotation summaries and glosses follow the same rule: book explanation only.
 - After translating, advance with `complete_reading_batch(plan_id,
-  translation_lang=...)`, which verifies the translation exists and is fresh.
+  translation_lang=...)`, and always pass `translation_lang` in a translation job:
+  only then does it verify the translation exists and is fresh. Without it the batch
+  completes with nothing saved.
 
 ## Client-specific packaging
 

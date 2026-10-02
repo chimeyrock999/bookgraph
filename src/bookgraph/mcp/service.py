@@ -1543,6 +1543,8 @@ def write_section_translation(
     ``includes_assets`` declares whether the section's figures/tables were carried into
     the translation.
 
+    This is the only translation store: a translation file written anywhere else (under
+    ``translations/`` by hand, or an agent's own ``translation_cache/``) is never read.
     ``content`` is the translated book content only, with figures linked by their
     ``AssetRef.link``. Everything else the job wants to record about the translation —
     QA/checker results, terminology decisions — goes in ``notes``: stored in the

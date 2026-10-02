@@ -236,5 +236,7 @@ def test_server_instructions_tell_agents_where_diagnostics_go(tmp_path: Path) ->
         "complete_reading_batch",
         "translation_lang",
         "get_section_translation",
+        "any directory of your own",
+        "always pass translation_lang",
     ):
         assert rule in instructions

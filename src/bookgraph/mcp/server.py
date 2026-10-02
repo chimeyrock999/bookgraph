@@ -60,8 +60,9 @@ translation files yourself, under translations/ or in any directory of your own:
 nothing reads them, so the section stays untranslated in the export and in batch
 completion.
 In a job that translates or annotates, do not call mark_read. Finish each batch with
-complete_reading_batch, passing translation_lang; if committed is false, fix every
-blocking issue and call it again.
+complete_reading_batch, and in a translation job always pass translation_lang: without
+it the batch completes without checking that anything was saved. If committed is
+false, fix every blocking issue and call it again.
 """
 
 
@@ -144,7 +145,12 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
 
     @mcp.tool
     def mark_read(plan_id: str, section_id: str | None = None) -> MarkReadResult:
-        """Mark a section read for a plan (defaults to the next unread section)."""
+        """Mark a section read for a plan (defaults to the next unread section).
+
+        It checks nothing. In a job that translates or annotates, finish each batch
+        with complete_reading_batch (passing translation_lang) instead, so progress
+        only advances once the work is saved.
+        """
 
         try:
             return service.mark_read(workspace, plan_id, section_id)
@@ -447,7 +453,11 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
         translated book content only: link each figure/table by its AssetRef.link
         (relative), never its absolute path. Put QA/checker results, terminology
         decisions and any other remarks in notes (stored beside the translation, never
-        in it); keep MEDIA: markers and progress lines for your final chat reply.
+        in it); keep MEDIA: markers and progress lines for your final chat reply. This
+        is the only translation store: never write translation files yourself, not
+        under translations/ and not in any directory of your own (such as a
+        translation_cache/) — nothing reads them, so the section stays untranslated in
+        the export and in batch completion.
         """
 
         try:

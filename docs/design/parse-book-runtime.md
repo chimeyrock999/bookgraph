@@ -67,3 +67,9 @@ They should assert:
 - failure includes `Log: ...` in the error output;
 - success and failure both append artifact summaries;
 - `_mineru` work directories are still cleaned after staging/failure.
+
+Fake runners write a `mineru-kit --format zip` bundle. Its `middle_json.json`
+should come from the recorded MinerU 4 output under `tests/fixtures/mineru4/<tier>/`
+(or match its `docvortex.middle` 2.x shape), so the parser is tested against the
+schema MinerU actually ships. Re-record those fixtures with a real `mineru-kit`
+when bumping the MinerU floor.

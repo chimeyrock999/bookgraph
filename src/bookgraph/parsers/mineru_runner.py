@@ -7,6 +7,7 @@ import subprocess
 import sys
 import threading
 import time
+import zipfile
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -17,10 +18,22 @@ from bookgraph.utils import MINERU_MIDDLE_JSON_SUFFIX
 
 CommandRunner = Callable[[list[str]], "subprocess.CompletedProcess[str]"]
 
+DEFAULT_COMMAND = "mineru-kit"
+# The MinerU 3.x executable. In MinerU 4 ``mineru`` is the document-library CLI and
+# one-off conversion moved to ``mineru-kit``, so this name gets a migration hint.
+_LEGACY_COMMAND = "mineru"
 _WORK_SUBDIR = "_mineru"
+_RESULT_ZIP = "result.zip"
 _DEFAULT_TIMEOUT_SECONDS = 3600
 _PROCESS_EXIT_GRACE_SECONDS = 10
 _ERROR_EXCERPT_CHARS = 4000
+
+# Fixed member names of the ``mineru-kit parse --format zip`` result bundle.
+_ZIP_MIDDLE_JSON = "middle_json.json"
+_ZIP_MARKDOWN = "markdown.md"
+_ZIP_STRUCTURED_CONTENT = "structured_content.json"
+_ZIP_MODEL_OUTPUT = "model_output.json"
+_ZIP_IMAGES_DIR = "images"
 
 
 class MinerUNotInstalledError(RuntimeError):
@@ -42,9 +55,8 @@ class MinerURunResult:
     middle_json: Path
     command: list[str]
     markdown: Path | None = None
-    layout_pdf: Path | None = None
-    span_pdf: Path | None = None
-    content_list: Path | None = None
+    structured_content: Path | None = None
+    model_output: Path | None = None
     images_dir: Path | None = None
 
     def artifacts(self) -> dict[str, Path]:
@@ -53,9 +65,8 @@ class MinerURunResult:
         mapping = {
             "middle_json": self.middle_json,
             "markdown": self.markdown,
-            "layout_pdf": self.layout_pdf,
-            "span_pdf": self.span_pdf,
-            "content_list": self.content_list,
+            "structured_content": self.structured_content,
+            "model_output": self.model_output,
             "images_dir": self.images_dir,
         }
         return {role: path for role, path in mapping.items() if path is not None}
@@ -63,25 +74,26 @@ class MinerURunResult:
 
 @dataclass
 class MinerURunner:
-    """Invoke MinerU on a raw PDF to produce ``*_middle.json`` and side artifacts.
+    """Invoke MinerU 4 on a raw PDF and stage its result bundle.
 
     MinerU is a heavy external tool, so it stays out of the base install and is
-    invoked as a subprocess rather than imported. ``run_process`` can be injected
-    to exercise the runner without MinerU installed; when it is ``None`` the
-    default subprocess runner is used and the executable is required on PATH.
+    invoked as a subprocess (``mineru-kit parse <pdf> --format zip``) rather than
+    imported. ``run_process`` can be injected to exercise the runner without MinerU
+    installed; when it is ``None`` the default subprocess runner is used and the
+    executable is required on PATH.
 
-    The runner owns only the "invoke the heavy process" step. Turning its
+    The runner owns only the "invoke the heavy process" step. Turning the staged
     ``*_middle.json`` into a canonical ``document.json`` remains the job of
     :class:`bookgraph.parsers.mineru.MinerUMiddleJsonParser` via ``bookgraph parse``.
+
+    A remote MinerU V1 parse service is used when ``url`` is set; its API key is
+    read by MinerU from ``MINERU_API_KEY`` so it never lands in argv or the run log.
     """
 
     name: str = "mineru"
-    command: str = "mineru"
-    method: str = "auto"
-    backend: str | None = None
-    effort: str | None = None
-    formula: bool | None = None
-    table: bool | None = None
+    command: str = DEFAULT_COMMAND
+    tier: str = "basic"
+    ocr_mode: str = "auto"
     image_analysis: bool | None = None
     url: str | None = None
     start_page: int | None = None
@@ -97,6 +109,12 @@ class MinerURunner:
             )
         if not pdf.is_file():
             raise UnsupportedSourceError(f"PDF not found: {pdf}")
+        if Path(self.command).name == _LEGACY_COMMAND:
+            raise MinerURunError(
+                f"'{self.command}' is the MinerU 3.x parse command; MinerU 4 parses with "
+                f"'{DEFAULT_COMMAND}'. Set [mineru].command = \"{DEFAULT_COMMAND}\" or pass "
+                f"--runner-command {DEFAULT_COMMAND}."
+            )
 
         process: CommandRunner | None = self.run_process
         if process is None:
@@ -119,7 +137,8 @@ class MinerURunner:
             shutil.rmtree(work_dir)
         work_dir.mkdir(parents=True, exist_ok=True)
 
-        argv = self._build_argv(pdf, work_dir)
+        result_zip = work_dir / _RESULT_ZIP
+        argv = self._build_argv(pdf, result_zip)
         try:
             try:
                 completed = process(argv)
@@ -133,39 +152,47 @@ class MinerURunner:
                     f"{_process_error_excerpt(completed)}"
                 )
 
-            middle_json = _select_middle_json(work_dir, pdf)
+            bundle = _extract_result_bundle(result_zip, work_dir / "result", pdf)
             # Staging copies out of work_dir before the finally cleanup removes it.
-            return _stage_artifacts(
-                middle_json, output_dir, stem=output_dir.name, command=argv
-            )
+            return _stage_artifacts(bundle, output_dir, stem=output_dir.name, command=argv)
         finally:
             shutil.rmtree(work_dir, ignore_errors=True)
 
-    def _build_argv(self, pdf: Path, work_dir: Path) -> list[str]:
-        argv = [self.command, "-p", str(pdf), "-o", str(work_dir), "-m", self.method]
-        if self.backend:
-            argv += ["-b", self.backend]
-        if self.effort:
-            argv += ["--effort", self.effort]
-        if self.formula is not None:
-            argv += ["-f", _bool_arg(self.formula)]
-        if self.table is not None:
-            argv += ["-t", _bool_arg(self.table)]
-        if self.image_analysis is not None:
-            argv += ["--image-analysis", _bool_arg(self.image_analysis)]
+    def _build_argv(self, pdf: Path, result_zip: Path) -> list[str]:
+        argv = [
+            self.command,
+            "parse",
+            str(pdf),
+            "--output",
+            str(result_zip),
+            "--format",
+            "zip",
+            "--tier",
+            self.tier,
+            "--ocr-mode",
+            self.ocr_mode,
+        ]
+        if self.image_analysis is False:
+            argv.append("--disable-image-analysis")
         if self.url:
-            argv += ["-u", self.url]
-        if self.start_page is not None:
-            argv += ["-s", str(self.start_page)]
-        if self.end_page is not None:
-            argv += ["-e", str(self.end_page)]
+            argv += ["--remote-url", self.url]
+        if (pages := _page_range(self.start_page, self.end_page)) is not None:
+            argv += ["--pages", pages]
         return argv
 
 
-def _bool_arg(value: bool) -> str:
-    """MinerU's click BOOLEAN flags accept the literal ``true``/``false``."""
+def _page_range(start_page: int | None, end_page: int | None) -> str | None:
+    """Map BookGraph's 0-based inclusive bounds onto MinerU 4's 1-based ranges.
 
-    return "true" if value else "false"
+    MinerU 4 has no open-ended range, so a missing end is ``r1`` (the last page)
+    and a missing start is page 1.
+    """
+
+    if start_page is None and end_page is None:
+        return None
+    first = 1 if start_page is None else start_page + 1
+    last = "r1" if end_page is None else str(end_page + 1)
+    return f"{first}-{last}"
 
 
 def _default_run_process(
@@ -274,47 +301,43 @@ def _process_error_excerpt(completed: subprocess.CompletedProcess[str]) -> str:
     return "…" + text[-_ERROR_EXCERPT_CHARS:]
 
 
-def _select_middle_json(work_dir: Path, pdf: Path) -> Path:
-    """Find the one MinerU middle JSON without hardcoding its nested layout.
+def _extract_result_bundle(result_zip: Path, target: Path, pdf: Path) -> Path:
+    """Unpack the ``mineru-kit`` zip bundle and check it holds MinerU 4 middle JSON."""
 
-    MinerU's output directory structure varies across versions (``<name>/auto/``
-    and similar), so the file is located by suffix instead of a fixed path.
-    Multiple matches are refused rather than silently picking one, because
-    downstream would then parse an arbitrary file.
-    """
-
-    matches = sorted(work_dir.rglob(f"*{MINERU_MIDDLE_JSON_SUFFIX}"))
-    if not matches:
+    if not result_zip.is_file():
         raise MinerURunError(
-            f"MinerU produced no *{MINERU_MIDDLE_JSON_SUFFIX} for {pdf.name}. "
-            f"Searched under {work_dir}."
+            f"MinerU produced no result bundle for {pdf.name}; expected {result_zip}."
         )
-    if len(matches) > 1:
-        names = ", ".join(match.name for match in matches)
+    try:
+        with zipfile.ZipFile(result_zip) as bundle:
+            # ZipFile.extractall drops absolute and ".." member paths, so every
+            # member lands inside ``target``.
+            bundle.extractall(target)
+    except zipfile.BadZipFile as exc:
+        raise MinerURunError(f"MinerU result bundle for {pdf.name} is not a zip: {exc}") from exc
+    if not (target / _ZIP_MIDDLE_JSON).is_file():
         raise MinerURunError(
-            f"MinerU produced multiple *{MINERU_MIDDLE_JSON_SUFFIX} for {pdf.name}: "
-            f"{names}. Cannot pick one safely."
+            f"MinerU result bundle for {pdf.name} has no {_ZIP_MIDDLE_JSON}; "
+            "is the installed MinerU older than 4.0?"
         )
-    return matches[0]
+    return target
 
 
 def _stage_artifacts(
-    middle_json: Path, output_dir: Path, *, stem: str, command: list[str]
+    bundle: Path, output_dir: Path, *, stem: str, command: list[str]
 ) -> MinerURunResult:
-    """Copy MinerU artifacts flat under ``output_dir`` with a stable ``stem`` prefix.
+    """Copy the bundle's artifacts flat under ``output_dir`` with a stable ``stem`` prefix.
 
-    MinerU names its outputs after the source stem and nests them; downstream
-    stages expect artifacts directly under ``sources/parsed/<doc_id>/`` named for
-    the workspace doc id, so each artifact is copied up under ``<stem>...``.
+    Downstream stages expect artifacts directly under ``sources/parsed/<doc_id>/``
+    named for the workspace doc id. Markdown and middle JSON reference images as
+    ``images/<file>``, so ``images/`` keeps its name next to them.
     """
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    source_dir = middle_json.parent
-    mineru_stem = middle_json.name[: -len(MINERU_MIDDLE_JSON_SUFFIX)]
     written: list[Path] = []
 
-    def stage_file(suffix: str) -> Path | None:
-        candidate = source_dir / f"{mineru_stem}{suffix}"
+    def stage_file(member: str, suffix: str) -> Path | None:
+        candidate = bundle / member
         if not candidate.is_file():
             return None
         target = output_dir / f"{stem}{suffix}"
@@ -323,17 +346,14 @@ def _stage_artifacts(
         return target
 
     try:
-        staged_middle = output_dir / f"{stem}{MINERU_MIDDLE_JSON_SUFFIX}"
-        shutil.copy2(middle_json, staged_middle)
-        written.append(staged_middle)
-
-        markdown = stage_file(".md")
-        layout_pdf = stage_file("_layout.pdf")
-        span_pdf = stage_file("_span.pdf")
-        content_list = stage_file("_content_list.json")
+        staged_middle = stage_file(_ZIP_MIDDLE_JSON, MINERU_MIDDLE_JSON_SUFFIX)
+        assert staged_middle is not None  # checked by _extract_result_bundle
+        markdown = stage_file(_ZIP_MARKDOWN, ".md")
+        structured_content = stage_file(_ZIP_STRUCTURED_CONTENT, "_structured_content.json")
+        model_output = stage_file(_ZIP_MODEL_OUTPUT, "_model_output.json")
 
         images_dir: Path | None = None
-        source_images = source_dir / "images"
+        source_images = bundle / _ZIP_IMAGES_DIR
         if source_images.is_dir():
             images_dir = output_dir / "images"
             if images_dir.exists():
@@ -353,8 +373,7 @@ def _stage_artifacts(
         middle_json=staged_middle,
         command=command,
         markdown=markdown,
-        layout_pdf=layout_pdf,
-        span_pdf=span_pdf,
-        content_list=content_list,
+        structured_content=structured_content,
+        model_output=model_output,
         images_dir=images_dir,
     )

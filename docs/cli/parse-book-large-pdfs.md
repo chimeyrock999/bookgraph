@@ -10,9 +10,16 @@ runner design.
 bookgraph parse-book /path/to/workspace <book_id>
 ```
 
-For the MinerU runner, first-time runs may download large model files and can take
-a long time on books with hundreds of pages. For example, a 552-page PDF can run
-long enough that it should not be launched from a cron job without a log path.
+For the MinerU runner, first-time runs of the model tiers (`basic`, `standard`,
+`advanced`) may download large model files and can take a long time on books with
+hundreds of pages. For example, a 552-page PDF can run long enough that it should
+not be launched from a cron job without a log path.
+
+For a born-digital book, the `flash` tier (`--profile fast-text`) reads the PDF text
+layer with no models and is the fastest way to a `document.json`. It extracts
+nothing from scanned pages; use `basic` (the default) or higher for those. A page
+range (`--start-page` / `--end-page`, 0-based) parses a slice, e.g. to check quality
+before a full run.
 
 ## Progress and logs
 
@@ -51,18 +58,25 @@ of relying on a user-global cache that may be owned by another process/user.
 
 ## MinerU dependencies
 
-The `mineru` extra includes the runtime dependency needed for the local VLM path:
+The `mineru` extra runs every tier on CPU (small models on ONNX, the `standard` /
+`advanced` VLM on llama.cpp). The VLM tiers are slow on CPU; the `mineru-torch` extra
+adds Torch for GPU-backed models:
 
 ```bash
-uv sync --extra mineru
+uv sync --extra mineru         # every tier, CPU
+uv sync --extra mineru-torch   # + Torch for GPU-backed models
 ```
 
-If you run ad hoc without syncing, ensure `accelerate` is present in that command
-environment. Older environments may need:
+Pre-download a tier's models so the parse itself does not stall on the download:
 
 ```bash
-uv run --with accelerate --extra mineru bookgraph parse-book /path/to/workspace <book_id>
+uv run mineru-kit models download --tier basic
 ```
+
+A MinerU 3.x setting fails before MinerU starts, with the replacement to use:
+`--backend`/`[mineru].backend` names the tier that replaced it, `--effort`,
+`--formula` and `--table` are decided by the tier, and `command = "mineru"` must
+become `mineru-kit`.
 
 ## MarkItDown PDF fallback
 

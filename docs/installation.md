@@ -9,8 +9,9 @@ extras** — install only what your workflow needs.
 - **Python ≥ 3.11** (declared in `pyproject.toml`).
 - **[uv](https://docs.astral.sh/uv/)** — the recommended toolchain for running,
   syncing extras, and building. `pip`/`pipx` work too (see below).
-- For raw-PDF parsing only: **MinerU**, which pulls in ML dependencies and downloads
-  models on first run — see [Optional extras](#optional-extras) and
+- For raw-PDF parsing only: **MinerU 4** (`mineru>=4.0.10,<5`, Python < 3.15). Its
+  `flash` tier needs no models; the other tiers download models on first run — see
+  [Optional extras](#optional-extras), [MinerU 4](#mineru-4) and
   [`cli/parse-book-large-pdfs.md`](cli/parse-book-large-pdfs.md).
 
 ## Install from a release (recommended)
@@ -65,7 +66,8 @@ them to `uv sync` (persistent) or `uv run` (one-off) with `--extra`:
 | Extra | Enables | Install |
 |-------|---------|---------|
 | `parsers` | MarkItDown + pypdf adapters for Office/HTML/simple-PDF → Markdown | `uv sync --extra parsers` |
-| `mineru` | MinerU pipeline for raw-PDF layout parsing (`bookgraph parse-book`) | `uv sync --extra mineru` |
+| `mineru` | MinerU 4 for raw-PDF parsing (`bookgraph parse-book`): every tier, small models on ONNX and the VLM on llama.cpp | `uv sync --extra mineru` |
+| `mineru-torch` | `mineru` plus the Torch stack (`mineru[torch]`) for GPU-backed models | `uv sync --extra mineru-torch` |
 | `mcp` | FastMCP server (`bookgraph mcp`) that serves an agent | `uv sync --extra mcp` |
 | `pdf` | WeasyPrint PDF renderer for `bookgraph export translated-pdf` (needs system Pango) | `uv sync --extra pdf` |
 | `pdf-chromium` | Playwright/Chromium PDF renderer for `bookgraph export translated-pdf` | `uv sync --extra pdf-chromium && uv run playwright install chromium` |
@@ -77,11 +79,38 @@ Combine extras as needed, e.g. a reading-agent setup that also parses raw PDFs:
 uv sync --extra mineru --extra mcp
 ```
 
-> **MinerU note:** the `mineru` extra installs a large ML stack and downloads models
-> on first parse. It is intentionally optional — you do not need it to read an
-> already-parsed workspace or to parse Markdown/Office sources. See
+> **MinerU note:** the `mineru` extras are intentionally optional — you do not need
+> them to read an already-parsed workspace or to parse Markdown/Office sources. See
 > [`cli/parse-book-large-pdfs.md`](cli/parse-book-large-pdfs.md) for model caches,
 > logs, and diagnosis of long parses.
+
+### MinerU 4
+
+`bookgraph parse-book` runs `mineru-kit parse` (MinerU 4). MinerU 3.x is no longer
+supported: its `mineru -p … -b <backend>` CLI, the `pipeline` extra, and
+`mineru.json` are gone in 4.0. Pick the parse quality with a **tier** (through a
+`--profile` or `--tier`):
+
+| Tier | What runs |
+|------|-----------|
+| `flash` | PDF text layer only, no models — fast for born-digital books, nothing for scans |
+| `basic` | small layout/OCR models on CPU, OCR when a page needs it (the default) |
+| `standard` | adds a VLM — local, or a remote MinerU V1 service with `--url` |
+| `advanced` | the VLM at its highest effort |
+
+The base `mineru` extra runs every tier: small models on ONNX and the VLM on
+llama.cpp, CPU included. `mineru-torch` adds Torch for GPU-backed models; vLLM /
+LMDeploy engines need MinerU's own `mineru[full]`.
+
+Download the models for a tier ahead of a long run (otherwise the first parse does it):
+
+```bash
+uv run mineru-kit models download --tier basic
+```
+
+MinerU 4 reads its own settings from `$MINERU_HOME/config.yaml` (override the path
+with `MINERU_CONFIG`). A remote MinerU V1 parse service reads its API key from
+`MINERU_API_KEY`, so the key never appears in the `parse-book` argv or run log.
 
 ## Install with pip / pipx
 

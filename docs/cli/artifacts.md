@@ -185,18 +185,39 @@ Allowed examples:
 ```text
 sources/parsed/<doc_id>/<doc_id>.md                  # staged markdown from MarkItDown or MinerU
 sources/parsed/<doc_id>/assets/...                   # extracted images/assets
-sources/parsed/<doc_id>/<doc_id>_middle.json         # staged MinerU middle JSON
-sources/parsed/<doc_id>/<doc_id>_layout.pdf          # MinerU layout debug PDF
-sources/parsed/<doc_id>/<doc_id>_span.pdf            # MinerU span debug PDF
-sources/parsed/<doc_id>/<doc_id>_content_list.json   # MinerU content-list JSON
-sources/parsed/<doc_id>/images/...                   # MinerU extracted images
+sources/parsed/<doc_id>/<doc_id>_middle.json              # staged MinerU 4 middle JSON
+sources/parsed/<doc_id>/<doc_id>_structured_content.json  # MinerU 4 structured content
+sources/parsed/<doc_id>/<doc_id>_model_output.json        # MinerU 4 raw model output
+sources/parsed/<doc_id>/images/...                        # MinerU extracted images
 ```
 
-MinerU runner staging contract, once wired by a future backend command:
+MinerU runner staging contract (`bookgraph parse-book`):
 
-- `MinerURunner.run(original_pdf, sources/parsed/<doc_id>)` invokes the MinerU CLI.
-- It stages artifacts flat under `sources/parsed/<doc_id>/` using `<doc_id>` as the filename stem.
+- `MinerURunner.run(original_pdf, sources/parsed/<doc_id>)` runs
+  `mineru-kit parse <pdf> --output <work>/result.zip --format zip --tier <tier> --ocr-mode <mode>`
+  in a temporary `sources/parsed/<doc_id>/_mineru/` work dir, removed afterwards.
+- It stages the bundle's members flat under `sources/parsed/<doc_id>/` using
+  `<doc_id>` as the filename stem: `middle_json.json` → `<doc_id>_middle.json`,
+  `markdown.md` → `<doc_id>.md`, `structured_content.json` →
+  `<doc_id>_structured_content.json`, `model_output.json` →
+  `<doc_id>_model_output.json`, and `images/` as is (Markdown and middle JSON
+  reference images as `images/<file>`).
+- A bundle without `middle_json.json` fails the run. MinerU 3.x side artifacts
+  (`*_layout.pdf`, `*_span.pdf`, `*_content_list.json`) are no longer produced.
 - It does not produce `document.json`; `mineru-middle-json` remains the parser that turns `<doc_id>_middle.json` into canonical blocks.
+
+`mineru-middle-json` block mapping for MinerU 4 (`docvortex.middle` 2.x):
+
+- block ids are `p<page_idx>.b<index>` with MinerU's page-local block `index`, so
+  they line up with MinerU's `page:{page}/block:{index}` locators;
+- `doc_title` → `title` level 1, `paragraph_title` → `title` with MinerU's level (2–6);
+- `text`, `ref_text`, `page_footnote`, `code`, `index` → `text`; `list` → `list`;
+  `equation` → `equation`; `image`/`table`/`chart` → the same type with
+  `asset_path` from the body's `image_path` and text from captions and footnotes;
+- `header`, `footer`, `page_number`, `aside_text` are page furniture and dropped;
+- each block's `metadata.mineru_type` keeps the MinerU type, and
+  `document.metadata` records `mineru_schema`, `mineru_version` and `mineru_tier`.
+- `bbox` is MinerU 4's page-normalized `[x0, y0, x1, y1]` (0–1), not PDF points.
 
 If a parser writes side artifacts, it should reference them from `document.metadata` when useful.
 
@@ -220,9 +241,14 @@ Common schema:
   "book_id": "deep-work",
   "runner": {
     "name": "mineru",
-    "command": "mineru",
-    "method": "auto",
-    "backend": null,
+    "command": "mineru-kit",
+    "profile": "balanced",
+    "tier": "basic",
+    "ocr_mode": "auto",
+    "image_analysis": null,
+    "url": null,
+    "start_page": null,
+    "end_page": null,
     "timeout_seconds": 3600
   },
   "parser": "mineru-middle-json",

@@ -197,7 +197,11 @@ Current auto-routing:
 | Office/HTML/text extensions supported in routing | `markitdown` |
 | raw `.pdf` | fail unless `--parser` is explicit |
 
-Reason for raw PDF failure: the current MinerU adapter consumes MinerU `*_middle.json`; it does not invoke MinerU from PDF. A future parser-runner command should own raw PDF execution.
+Reason for raw PDF failure: the MinerU adapter consumes MinerU `*_middle.json`; it does not invoke MinerU from PDF. `bookgraph parse-book` owns raw PDF execution.
+
+`mineru-middle-json` reads MinerU 4's `docvortex.middle` schema 2.x, and still reads
+MinerU 3.x `pdf_info` middle JSON staged before the MinerU 4 migration. An unknown
+`docvortex.middle` major version fails instead of parsing to an empty document.
 
 ### Writes
 
@@ -1336,16 +1340,16 @@ middle JSON into the canonical `document.json`.
 
 ```bash
 bookgraph parse-book /path/to/workspace <book_id>
-# Fast local text extraction for digital PDFs / weak GPU / Apple Silicon / CPU
+# Born-digital PDF: native text layer, no models (flash tier)
 bookgraph parse-book /path/to/workspace <book_id> --profile fast-text
 # Explicit knobs (each overrides the profile)
 bookgraph parse-book /path/to/workspace <book_id> \
-  --backend pipeline --method txt --no-formula --no-table --no-image-analysis
-# Accurate local GPU/VLM profile for machines with enough VRAM
-bookgraph parse-book /path/to/workspace <book_id> --profile local-gpu --effort high
-# Remote GPU / service-backed backend
+  --tier basic --ocr-mode txt --no-image-analysis
+# Local VLM for machines with enough GPU memory
+bookgraph parse-book /path/to/workspace <book_id> --profile local-gpu
+# Remote MinerU V1 parse service (API key from MINERU_API_KEY)
 bookgraph parse-book /path/to/workspace <book_id> \
-  --backend hybrid-http-client --url http://gpu-box:30000
+  --profile remote-gpu --url http://gpu-box:8000
 # Page range (0-based) and timeout
 bookgraph parse-book /path/to/workspace <book_id> --start-page 0 --end-page 63
 bookgraph parse-book /path/to/workspace <book_id> --timeout-seconds 3600
@@ -1355,48 +1359,50 @@ bookgraph parse-book /path/to/workspace <book_id> --parser mineru-middle-json --
 Options:
 
 - `--runner`: raw-source runner. Default: `[mineru].runner` (`mineru`).
-- `--runner-command`: executable name. Default: `[mineru].command` (`mineru`).
-- `--profile` / `--mineru-profile`: named MinerU profile picking hardware/quality
-  defaults. One of `fast-text | balanced | accurate | local-gpu | remote-gpu`.
+- `--runner-command`: MinerU 4 executable. Default: `[mineru].command` (`mineru-kit`).
+- `--profile` / `--mineru-profile`: named MinerU profile picking a tier for the
+  hardware. One of `fast-text | balanced | accurate | local-gpu | remote-gpu`.
   Default: `[mineru].profile` (`balanced`). Explicit knobs below override it.
-- `--method/-m` / `--mineru-method`: MinerU method `auto | txt | ocr`. Default: profile / `[mineru].method`.
-- `--backend/-b` / `--mineru-backend`: MinerU backend
-  `pipeline | vlm-engine | hybrid-engine | vlm-http-client | hybrid-http-client`. Default: profile / `[mineru].backend`.
-- `--effort` / `--mineru-effort`: `medium | high`. Default: profile / `[mineru].effort`.
-- `--formula/--no-formula`, `--table/--no-table`, `--image-analysis/--no-image-analysis`:
-  toggle MinerU feature passes. Default: profile / `[mineru].*`.
-- `--url/-u` / `--mineru-url`: remote GPU server URL, required by the `*-http-client` backends. Default: `[mineru].url`.
-- `--start-page/-s`, `--end-page/-e`: 0-based page range. Default: `[mineru].start_page` / `end_page`.
+- `--tier` / `--mineru-tier`: MinerU 4 tier `flash | basic | standard | advanced`. Default: profile / `[mineru].tier`.
+- `--ocr-mode` (aliases `--method/-m`, `--mineru-method`): `auto | txt | ocr`. Default: profile / `[mineru].ocr_mode` (or the 3.x key `[mineru].method`).
+- `--image-analysis/--no-image-analysis`: `--no-image-analysis` passes `--disable-image-analysis`. Default: profile / `[mineru].image_analysis`.
+- `--url/-u` / `--mineru-url`: remote MinerU V1 parse service, passed as `--remote-url`; required by `remote-gpu`. The API key comes from `MINERU_API_KEY`. Default: `[mineru].url`.
+- `--start-page/-s`, `--end-page/-e`: 0-based inclusive page range, passed to MinerU as its 1-based `--pages` (`--start-page 4` alone is `5-r1`). Default: `[mineru].start_page` / `end_page`.
 - `--timeout-seconds`: subprocess timeout. Default: config; pass `0` for no timeout.
 - `--parser/-p`: parser after runner output is staged. Default: `[parsers].default_pdf` (`mineru-middle-json`).
 
 Precedence is CLI flag > workspace config (`[mineru]`) > profile default. The resolved
-profile and the exact MinerU argv are recorded in the run log (the `$ mineru …` line).
+profile and the exact MinerU argv are recorded in the run log (the
+`$ mineru-kit parse <pdf> --output …/_mineru/result.zip --format zip --tier …` line).
 
 `--parser` is validated against the parser plugin registry; typoed plugin names fail before the runner is invoked.
-A `*-http-client` backend without a `--url` is rejected before MinerU is invoked.
+`remote-gpu` without a `--url` is rejected before MinerU is invoked.
+
+MinerU 3.x knobs fail before MinerU is invoked, with the replacement in the error:
+`--backend/-b` (and `[mineru].backend`) names the tier that replaced the backend
+(`pipeline` → `basic`; `vlm-engine`, `hybrid-engine`, `*-http-client` → `standard`,
+the last with `--url`); `--effort`, `--formula/--no-formula` and `--table/--no-table`
+are decided by the tier. These flags are hidden from `--help`. A `command = "mineru"`
+config fails with a pointer to `mineru-kit`.
 
 **Choosing a profile:**
 
 | Situation | Profile | Why |
 | --- | --- | --- |
-| Text-heavy digital book; reading sections / search matter more than layout | `fast-text` | `pipeline` + `txt`, table/formula/image off — skips the slow layout/VLM/OCR passes. |
-| Default, mixed content | `balanced` | MinerU's stock medium-effort path (unchanged behavior). |
-| Scanned / image-heavy PDF needing good tables & layout | `accurate` | Hybrid/VLM at `--effort high`. |
-| Local machine with enough CUDA/VRAM | `local-gpu` | Pure local `vlm-engine` backend, high effort. |
-| External GPU server | `remote-gpu` (+ `--url`) | `hybrid-http-client` offloads to the server. |
-| Apple Silicon / CPU | `fast-text` | No CUDA-like speed is promised; prefer the fast text path unless accuracy needs VLM. |
+| Born-digital book; reading sections / search matter more than layout | `fast-text` | `flash` + `txt`, image analysis off — the PDF text layer, no models. Nothing from scanned pages. |
+| Default, mixed or scanned content on any machine | `balanced` | `basic`: small ONNX models on CPU, OCR when a page needs it. |
+| Hard layout, tables, figures; best quality | `accurate` | `advanced`, the VLM at its highest effort. |
+| Local machine with enough GPU memory | `local-gpu` | `standard`, local VLM (`mineru-torch` for Torch on GPU). |
+| External GPU server | `remote-gpu` (+ `--url`) | `standard` on a remote MinerU V1 parse service. |
 
 Workspace defaults live under `[mineru]` in `bookgraph.toml`:
 
 ```toml
 [mineru]
 profile = "balanced"
-# method = "auto"
-# backend = "pipeline"
-# effort = "high"
-# formula = true
-# table = true
+# command = "mineru-kit"
+# tier = "basic"
+# ocr_mode = "auto"
 # image_analysis = true
 # url = ""
 # start_page = 0
@@ -1404,13 +1410,13 @@ profile = "balanced"
 # timeout_seconds = 3600
 ```
 
-Writes:
+Writes (staged from the `mineru-kit --format zip` bundle):
 
 ```text
 sources/parsed/<book_id>/
   document.json
-  <book_id>_middle.json
-  optional <book_id>.md / *_layout.pdf / *_span.pdf / *_content_list.json / images/
+  <book_id>_middle.json       # MinerU 4 middle JSON (docvortex.middle 2.x)
+  optional <book_id>.md / <book_id>_structured_content.json / <book_id>_model_output.json / images/
 ```
 
 Dry run still writes a placeholder request artifact under:

@@ -136,6 +136,20 @@ Current schema mirrors `bookgraph.models.Document`:
 - `order`: zero-based reading order.
 - `metadata`: parser-specific provenance. Must be JSON scalar values only.
 
+### Repaired asset blocks
+
+`bookgraph assets repair` is the only command besides a parser that rewrites
+`document.json`, and it changes nothing but the asset reference of blocks whose file
+was missing. A recovered block is repointed at `images/<name>` (in `asset_path`, or in
+`metadata.src` for Markdown-parsed blocks) and records:
+
+- `metadata.original_asset_reference`: the reference the parser wrote;
+- `metadata.asset_recovered_from`: the file it was recovered from, or
+  `<source.epub>!<member>` for an EPUB member.
+
+Block `text`, ids, and order are untouched, so sections and translation freshness are
+unaffected. A reference that cannot be recovered is left exactly as parsed.
+
 ### Provenance rules for converting adapters
 
 When an adapter converts the original source into Markdown before building
@@ -282,7 +296,8 @@ parse is visible at ingest time instead of during reading.
       "section_id": "iceberg.snapshots",
       "code": "asset_type_ambiguous",
       "message": "asset p12.b3: caption reads as a 'image' but the parser classified the block as 'table'; treat it as 'image' or open the file to confirm",
-      "block_id": "p12.b3"
+      "block_id": "p12.b3",
+      "reference": null
     }
   ]
 }
@@ -297,7 +312,7 @@ parse is visible at ingest time instead of during reading.
 | `asset_type_ambiguous` | The asset's caption label contradicts the parser's block type (a figure emitted as a `table`, say). Carries `block_id`. |
 | `asset_captions_only` | The section's `text` is effectively just its asset captions; the labels/tabular data live inside the asset files. |
 | `asset_text_sparse` | A figure/table-heavy section (2+ assets) with almost no prose beyond the captions. |
-| `asset_file_missing` | The section references an asset file that is not available under `sources/parsed/<doc_id>/` (never staged, remote, or outside the workspace). Carries `block_id`. |
+| `asset_file_missing` | The section references an asset file that is not available under `sources/parsed/<doc_id>/` (never staged, remote, or outside the workspace). Carries `block_id` and `reference` (the parser's raw asset reference). `bookgraph assets repair` can recover the file. |
 
 Codes are stable identifiers; `message` is display text and may be reworded.
 A document with no anomalies still gets a report, with `warning_count: 0` and an
@@ -567,6 +582,9 @@ the `.json` sidecar beside it is the registry record, mirroring
   writer, a manual edit) no longer matches and reads as `untracked`.
 - `includes_assets`: whether the writer carried the section's figures/tables into
   the translation (declared by the writer, not inferred).
+- `notes` (optional): the writer's free-text side channel — QA/checker results,
+  terminology decisions, job remarks. Stored only here, never in the body; returned by
+  `get_section_translation` / `list_section_artifacts`.
 
 Freshness is **derived, never stored**: each read recomputes the section's current
 hash and compares it with the sidecar.
@@ -591,6 +609,25 @@ not `mkstemp`'s 0600). A crash or a racing writer between the steps leaves an
 `lang`/`doc_id`/`section_id` disagrees with its location is ignored. Like
 annotations, the cache is **not** rebuildable from sources (regenerating it costs
 model calls), so `index build`, `segment`, and `wiki` never delete it.
+
+### Artifact channels
+
+A translation body (and an annotation's `summary`/`gloss`) is **book content
+only**: it is reused by later jobs and printed in reading PDFs. Everything else a
+reading/translation job produces has its own channel, and the agent contract says so
+— the MCP server `instructions`, the tool docstrings, and the `bookgraph-reader`
+skills (`.claude/` and `.agents/`):
+
+| What | Channel |
+| --- | --- |
+| Translated headings, prose, tables, figures | `write_section_translation(content=...)` |
+| Figure/table references inside a translation | the asset's `AssetRef.link` from `get_section` / `get_context` — relative to `sources/parsed/<doc_id>/` (e.g. `images/fig1-1.png`); `AssetRef.path` is the absolute file to *open*, not to write |
+| QA/checker results, terminology decisions, doubts about the source | `write_section_translation(notes=...)` — the sidecar's `notes` |
+| `MEDIA:/path` delivery markers, cache/mark-read progress, job status | the agent's final chat reply |
+| Export coverage, freshness, missing assets | the export's `.report.json` (the reading pages do not print them unless `--show-status`) |
+
+The tool does not try to detect or strip text that went into the wrong channel:
+that is agent behavior, fixed in the agent contract above.
 
 ## Translation bodies as read by `bookgraph export translated-pdf`
 
@@ -661,7 +698,8 @@ is written beside the export:
   ],
   "warnings": [
     {"code": "asset_missing", "message": "…", "section_id": "ddia.scalability",
-     "reference": "t1.png"}
+     "reference": "t1.png", "source_path": "translations/vi/ddia/ddia.scalability.md",
+     "block_id": null}
   ],
   "renderer": "playwright",
   "output": "/path/to/workspace/exports/ddia.vi-progress.pdf",
@@ -675,6 +713,11 @@ is written beside the export:
   renders at, and `parent_id` is the section it renders inside (`null` at the top
   level).
 - `source` is `translated`, `original`, or `skipped`.
+- An asset warning names the section (`section_id`), the raw reference as written
+  (`reference`), and the workspace-relative file that carries it (`source_path`): the
+  translation artifact, `sources/parsed/<doc_id>/document.json` for an original
+  section (with the parsed `block_id`), or `sections.jsonl` when the document has no
+  parsed blocks.
 - The report is where status/debug metadata lives: the reading pages carry the title,
   the table of contents, and book content only. `show_status` records whether the
   export was made with `--show-status`, which also prints coverage, freshness and
@@ -685,7 +728,7 @@ is written beside the export:
   a pinned timestamp, the assembled HTML is byte-identical.
 - Stable warning codes:
   - `asset_missing`, `asset_remote`, `asset_unsupported`: an asset is not in the
-    export. `--strict` refuses these.
+    export (its caption and surrounding prose are). `--strict` refuses these.
   - `translation_stale`: the source section changed after the translation was
     registered. Rendered (with a note under `--show-status`); `--strict` refuses it.
   - `translation_missing_assets`: a registered prose-only translation

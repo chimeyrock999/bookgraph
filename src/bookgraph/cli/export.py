@@ -35,7 +35,10 @@ def _print_report(report: ExportReport) -> None:
         f"({report.coverage * 100:.1f}%)"
     )
     for warning in report.warnings:
-        typer.echo(f"warning: {warning.code}: {warning.section_id}: {warning.message}")
+        line = f"warning: {warning.code}: {warning.section_id}: {warning.message}"
+        if warning.source_path:
+            line += f" (in {warning.source_path})"
+        typer.echo(line)
 
 
 @export_app.command("translated-pdf")

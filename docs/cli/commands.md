@@ -670,6 +670,30 @@ The server binds to that one workspace; tool arguments never take a workspace
 path. If the `mcp` extra is not installed, the command fails with a message
 telling the user to `uv sync --extra mcp`.
 
+### Server instructions
+
+The server sends MCP `instructions` (`bookgraph.mcp.server.SERVER_INSTRUCTIONS`) to
+every client at connect time, so the contract binds any agent, not only one that
+loaded a `bookgraph-reader` skill:
+
+- Artifacts hold book content only. Translated text goes in
+  `write_section_translation(content=...)`, with figures/tables linked by
+  `AssetRef.link` (relative). QA/terminology remarks go in `notes`. `MEDIA:` markers
+  and progress lines go in the agent's final chat reply. Export status stays in the
+  export report.
+- The translation registry is the only translation store: check
+  `get_section_translation` first, and save only with `write_section_translation`.
+  Translation files written anywhere else (under `translations/` by hand, or in an
+  agent's own directory such as `translation_cache/`) are never read.
+- A job that translates or annotates finishes each batch with
+  `complete_reading_batch`, not `mark_read`. A translation job always passes
+  `translation_lang`; without it nothing checks that a translation was saved. A
+  translation-only job also passes `require_annotation=False` and `index="ignore"`
+  (or `"deferred"`), since the defaults require an annotation and a fresh index.
+
+A test asserts these rules are present, so they cannot be dropped silently. The tool
+docstrings (`write_section_translation`, `mark_read`) and both skills repeat them.
+
 ### Tools
 
 - `get_next_section(plan_id, include_assets=True, stop_at_boundary=False,
@@ -692,8 +716,10 @@ telling the user to `uv sync --extra mcp`.
   `mark_read` calls stay correct (same semantics as `bookgraph reading-plan progress`).
 - `get_section(doc_id, section_id, include_assets=True)` → one section's full
   reading content, its `<section_id>.md` path, its figure/table `assets` (each
-  `{block_id, type, path, caption, order, page_idx, type_confidence,
-  suggested_type}`), and its `warnings`. `type_confidence` scores the parser's
+  `{block_id, type, path, link, caption, order, page_idx, type_confidence,
+  suggested_type}`), and its `warnings`. `path` is the absolute file to open; `link`
+  is the same file relative to `sources/parsed/<doc_id>/` (e.g. `images/fig1.png`),
+  the reference to write into a translation. `type_confidence` scores the parser's
   classification against the caption's label and `suggested_type` is set only when
   the caption contradicts it, so a figure emitted as a `table` is flagged rather
   than passed off as correct. `warnings` are the same data-quality anomalies the
@@ -806,15 +832,20 @@ telling the user to `uv sync --extra mcp`.
   `untracked` / `missing`, see `artifacts.md`), `path`, `metadata_path`,
   `source_section_hash`, `current_section_hash`, `includes_assets`,
   `section_has_assets` (whether the section owns any figure/table block), `model`,
-  `created_at`, and `content` (the body, unless `include_content=False`). A missing
+  `created_at`, `notes` (the writer's side-channel remarks), and `content` (the body,
+  unless `include_content=False`). A missing
   translation is a normal result, not an error.
 - `write_section_translation(doc_id, section_id, lang, content, includes_assets=False,
-  model=None, source_section_hash=None)` → write
+  model=None, source_section_hash=None, notes=None)` → write
   `translations/<lang>/<doc_id>/<section_id>.md` and its registry sidecar,
   replacing any previous translation; returns the entry (status `fresh`, no
   `content`). Empty `content` is rejected. When `source_section_hash` is given and
   differs from the section's current hash the write is refused, so a translation of
-  outdated content is never registered as fresh.
+  outdated content is never registered as fresh. `content` is the translated book
+  content only, with figures/tables linked by their `AssetRef.link`. `notes`
+  (optional) is the side channel for QA/checker results and terminology decisions:
+  stored in the registry sidecar, returned as `notes` by the read tools, never in the
+  body (see *Artifact channels* in `artifacts.md`).
 - `list_section_artifacts(doc_id=None, lang=None, type="translation")` → every
   cached translation (filtered by `doc_id` / `lang`) with its status, including
   `orphaned` ones whose section no longer exists; no bodies. Only
@@ -1137,10 +1168,12 @@ All images are embedded as `data:` URIs, so the output is self-contained.
   workspace.
 - Original asset blocks use the shared `bookgraph.assets.resolve_asset_path` resolver.
 - A link is rejected if it leaves the workspace (including through symlinks), is a
-  remote URL, or is not a png/jpeg/gif/svg/webp file. A rejected link is left out of
-  the page (a block's caption stays) and reported; `--show-status` shows a *Missing
-  asset* placeholder in its place. It does not crash the export
-  unless `--strict` is set.
+  remote URL, or is not a png/jpeg/gif/svg/webp file. A rejected link, or an asset
+  block whose file is missing, is left out of the page and reported with its section,
+  reference, and the file carrying it. A block's caption and the surrounding prose
+  stay, and a paragraph that held nothing but the image is dropped. `--show-status`
+  shows a *Missing asset* placeholder in its place. It does not crash the export
+  unless `--strict` is set. To get the figure back, run `bookgraph assets repair`.
 - The page carries a CSP that allows only `data:` images and inline styles, and both
   PDF backends refuse any URL that is not `data:`. Rendering never reads the network
   or arbitrary files, and scripts in artifact HTML never run.
@@ -1159,7 +1192,8 @@ All images are embedded as `data:` URIs, so the output is self-contained.
 ### Prints
 
 - `doc_id`, `lang`, `fallback`, and `coverage: <translated>/<total> (<pct>%)`.
-- One `warning: <code>: <section_id>: <message>` line per warning.
+- One `warning: <code>: <section_id>: <message>` line per warning, followed by
+  ` (in <source_path>)` when the warning names the file carrying the reference.
 - `renderer`, `export`, and `report` paths. With `--check` it prints
   `export: (check only, not written)` instead.
 
@@ -1180,6 +1214,74 @@ All images are embedded as `data:` URIs, so the output is self-contained.
 | `weasyprint` | `uv sync --extra pdf` (also needs the Pango system library, e.g. `brew install pango`) |
 | `playwright` | `uv sync --extra pdf-chromium && uv run playwright install chromium` |
 | `html` | built in |
+
+## `bookgraph assets repair`
+
+**Status:** Implemented.
+
+Recover image/table files that a parsed document references but never staged (the
+`asset_file_missing` quality warning, `asset_missing` in an export).
+
+```bash
+bookgraph assets repair /path/to/workspace ddia --dry-run
+bookgraph assets repair /path/to/workspace ddia
+bookgraph assets repair /path/to/workspace ddia --from ~/ddia-figures
+```
+
+### Inputs
+
+- `workspace_path`, `doc_id`: workspace root and a parsed document id (slug-validated).
+- `--from DIR` (repeatable): extra directories to search after the parser output.
+- `--dry-run`: report what would be recovered and write nothing.
+- `--json`: print the repair report as JSON instead of lines.
+
+### Behavior
+
+Every asset block whose reference does not resolve (through the shared
+`bookgraph.assets.resolve_asset_path`) is looked up, in order, in:
+
+1. the parser output: any file under `sources/parsed/<doc_id>/` whose path ends with
+   the reference, else whose basename matches it (hidden directories and symlinks
+   are skipped);
+2. the source EPUB (`document.metadata.source_path`), when there is one, matched like
+   the parse-time EPUB stager matches members;
+3. each `--from` directory, matched like the parser output.
+
+The first source with exactly one match wins. Byte-identical copies count as one
+match. When several different files match, the asset is reported as `ambiguous` and
+left alone, because guessing could show the wrong figure. A recovered file is copied
+into `sources/parsed/<doc_id>/images/` under a link-safe, non-clashing name, and its
+block is repointed there (see *Repaired asset blocks* in `artifacts.md`). Remote and
+absolute references are not repair candidates.
+
+### Writes
+
+- `sources/parsed/<doc_id>/images/<name>` for each recovered file.
+- `sources/parsed/<doc_id>/document.json`, atomically, only when something was
+  recovered.
+- `sources/sections/<doc_id>/quality.json`, re-checked against the repaired document,
+  when a sections manifest exists and something was recovered.
+
+### Must not do
+
+- Must not change block text, ids, or order, sections, or translation artifacts.
+- Must not rewrite a reference it could not recover. The export already leaves
+  such an asset out and keeps its caption.
+- Must not fetch remote assets.
+
+### Prints
+
+- `doc_id`, `missing: <n>`, `recovered: <n>`.
+- One line per missing asset: `recovered: <block_id> [<section_ids>]: <reference> ->
+  images/<name> (from <source>)`, `ambiguous: … <n> candidate files, none used: …`,
+  or `unrecoverable: <block_id> [<section_ids>]: <reference>`.
+- `quality: <path> (refreshed)` when the quality report was rewritten, and
+  `repair: (dry run, nothing written)` with `--dry-run`.
+
+### Errors
+
+- Exit `2` when `document.json` is missing, the sections manifest is invalid, or a
+  `--from` path is not a directory. An unrecoverable asset is not an error.
 
 ## Book-level parse / wiki compile contracts
 

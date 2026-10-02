@@ -184,6 +184,7 @@ def test_broken_remote_and_escaping_image_links_are_reported_not_embedded(
     assert export.report.sections[0].assets_missing == 5
     assert 'src="https://' not in export.html
     assert f'src="{outside}"' not in export.html
+    assert "Missing asset" not in export.html
     debug = build_translated_export(
         workspace, DOC, lang="vi", generated_at=GENERATED_AT, show_status=True
     )

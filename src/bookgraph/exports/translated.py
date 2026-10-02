@@ -3,23 +3,27 @@
 The original sections manifest is the skeleton, arranged into the book's structure
 by :mod:`bookgraph.exports.outline` (the source PDF outline's order and hierarchy when
 there is one, else ``sections.jsonl`` order): child sections render inside their
-chapter, and each chapter opens a new page. Each section is filled from its
-translation in the translation registry (:mod:`bookgraph.translations`) for the
-requested language, or — per the fallback policy — from the original parsed content,
-a placeholder, or not at all.
+chapter, and each chapter opens a new page; :mod:`bookgraph.exports.render` lays the
+book out as HTML. Each section is filled from its translation in the translation
+registry (:mod:`bookgraph.translations`) for the requested language, or — per the
+fallback policy — from the original parsed content, a placeholder, or not at all. The
+export only reads the registry: a translation's freshness (``fresh`` / ``stale`` /
+``untracked``) is reported per section in the report.
 
-The rendered book is reader-facing: by default it carries no export or translation
-state (coverage, which sections are original text, stale or untracked translations,
-asset paths). That state is in the report written beside it; ``show_status=True``
-(``--show-status``) also prints it into the book — export details on the title page,
-per-section notes, and TOC markers.
+The reading pages carry book content only. Status and debug metadata — freshness
+labels, "untranslated" notes, coverage, missing-asset placeholders — go to the report
+JSON, and are printed on the pages only with ``show_status`` (``--show-status``), so a
+reading agent never meets BookGraph's own status text in a page it reads back.
 
 Original sections are rebuilt from their parsed ``document.json`` blocks (via
 ``Section.block_ids``) when available, so figures, tables and equations land next
 to the prose that surrounds them in the source; a section whose blocks are not
 available falls back to its ``Section.text``. Every image is embedded as a
 ``data:`` URI, so the assembled HTML is self-contained and a PDF renderer never
-needs to touch the filesystem or network.
+needs to touch the filesystem or network. An image that cannot be embedded (its file
+is missing, remote, or not an image) is left out of the reader-facing output — its
+caption and the surrounding prose stay — and reported in the export report, with the
+section, the reference, and the file that carries it.
 
 This is a clean reading edition, not a pixel-perfect reconstruction of the
 publisher's layout.
@@ -27,18 +31,14 @@ publisher's layout.
 
 from __future__ import annotations
 
-import base64
 import json
-import mimetypes
 import os
-import re
 import time
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from html import escape, unescape
+from html import escape
 from pathlib import Path
-from urllib.parse import unquote
 
 from markdown_it import MarkdownIt
 from markdown_it.token import Token
@@ -46,10 +46,9 @@ from markdown_it.token import Token
 from bookgraph.assets import asset_reference, resolve_asset_path
 from bookgraph.books import read_book_bookmarks
 from bookgraph.documents import read_document
+from bookgraph.exports.images import AssetCounter, AssetOrigin, ImageEmbedder
 from bookgraph.exports.models import (
     ASSET_MISSING,
-    ASSET_REMOTE,
-    ASSET_UNSUPPORTED,
     TRANSLATION_EMPTY,
     TRANSLATION_MISSING_ASSETS,
     TRANSLATION_STALE,
@@ -85,28 +84,8 @@ from bookgraph.translations import (
     translation_state,
     validate_lang,
 )
-from bookgraph.utils import is_url, validate_slug_id
+from bookgraph.utils import validate_slug_id
 from bookgraph.workspace import WorkspacePaths
-
-# Image types every supported renderer can draw from a data: URI.
-_EMBEDDABLE_MIME_TYPES = frozenset(
-    {"image/png", "image/jpeg", "image/gif", "image/svg+xml", "image/webp"}
-)
-
-# Raw HTML scanning for ``<img>`` tags, attribute by attribute so a ``src=`` or ``>``
-# inside another attribute's quoted value is never mistaken for the real one.
-_HTML_ATTR = r"""[^\s"'<>/=]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+))?"""
-_HTML_ATTR_RE = re.compile(r"""([^\s"'<>/=]+)(?:\s*=\s*("[^"]*"|'[^']*'|[^\s"'=<>`]+))?""")
-# ``<img`` followed by whitespace, ``/`` or ``>``: not ``\b``, which would also match
-# custom elements such as ``<img-zoom>`` (``\b`` falls between ``g`` and ``-``).
-_IMG_OPEN = r"<img(?=[\s/>])"
-# Alternatives, in order: an HTML comment (left untouched, so a commented-out image is
-# neither embedded nor reported), a well-formed ``<img>`` tag, and a malformed one
-# (reported, so it cannot vanish silently under the CSP).
-_HTML_IMG_SCAN_RE = re.compile(
-    rf"(?P<comment><!--.*?-->)|(?P<img>{_IMG_OPEN}(?:\s+{_HTML_ATTR})*\s*/?>)|(?P<bad>{_IMG_OPEN}[^>]*>)",
-    re.IGNORECASE | re.DOTALL,
-)
 
 # Ingest quality warnings worth repeating in an export report: the section's source
 # prose is mostly captions, so the reader (or translator) should inspect its assets.
@@ -160,17 +139,20 @@ def build_translated_export(
 ) -> TranslatedExport:
     """Assemble the reading edition for ``doc_id`` in ``lang``.
 
-    The book is content-only unless ``show_status``, which also renders the report's
-    export/translation status into it (see the module docstring).
-
     Raises :class:`ExportError` when the sections manifest is missing or invalid,
     and :class:`UntranslatedSectionsError` when ``fallback="fail"`` and any section
     lacks a translation. Missing or unsupported assets never raise: they are
-    rendered as visible placeholders and reported in ``report.warnings``.
+    reported in ``report.warnings`` (with the section, the file carrying the
+    reference, and the reference itself) and left out of the output, keeping their
+    captions — or, with ``show_status``, rendered as visible placeholders.
 
     ``doc_id`` is validated as a slug and ``lang`` is normalised the way the
     translation registry does it (``VI`` → ``vi``), so neither id can traverse out of
     the workspace and ``lang="VI"`` finds the ``vi`` translations.
+
+    ``show_status`` prints status/debug metadata (freshness and fallback notes, TOC
+    status markers, coverage, missing-asset placeholders) on the reading pages; by
+    default it is only in the report.
     """
 
     try:
@@ -199,7 +181,11 @@ def build_translated_export(
     parsed_dir = workspace.sources_parsed / doc_id
     title, blocks = _load_document(parsed_dir, doc_id)
     assembler = _Assembler(
-        workspace=workspace, parsed_dir=parsed_dir, blocks=blocks, show_status=show_status
+        workspace=workspace,
+        parsed_dir=parsed_dir,
+        blocks=blocks,
+        manifest=manifest,
+        show_status=show_status,
     )
 
     outline = build_outline(sections, read_book_bookmarks(workspace, doc_id))
@@ -288,14 +274,10 @@ def _relative(workspace: WorkspacePaths, path: Path | None) -> str | None:
         return str(path)
 
 
-@dataclass
-class _Assembler:
-    workspace: WorkspacePaths
-    parsed_dir: Path
+@dataclass(kw_only=True)
+class _Assembler(ImageEmbedder):
     blocks: dict[str, CanonicalBlock]
-    show_status: bool = False
-    warnings: list[ExportWarning] = field(default_factory=list)
-    _data_uris: dict[Path, str | None] = field(default_factory=dict)
+    manifest: Path
     _md: MarkdownIt = field(
         default_factory=lambda: MarkdownIt("commonmark", {"html": True}).enable(
             ["table", "strikethrough"]
@@ -314,7 +296,7 @@ class _Assembler:
         """The section's report entry and its own HTML (heading + body, no children)."""
 
         section, depth = node.section, node.depth
-        counter = _AssetCounter()
+        counter = AssetCounter()
         translated = self._translated_body(section, depth, state, counter)
         if translated is not None:
             # A body was read, so the status is fresh, stale, or untracked (never
@@ -350,7 +332,7 @@ class _Assembler:
         title: str,
         source: SectionSource,
         artifact: Path | None,
-        counter: _AssetCounter,
+        counter: AssetCounter,
         freshness: TranslationFreshness | None = None,
     ) -> ExportSection:
         return ExportSection(
@@ -367,7 +349,7 @@ class _Assembler:
         )
 
     def _translated_body(
-        self, section: Section, depth: int, state: TranslationState, counter: _AssetCounter
+        self, section: Section, depth: int, state: TranslationState, counter: AssetCounter
     ) -> tuple[str, str, str] | None:
         """Render a registry translation as ``(title, heading_html, body_html)``.
 
@@ -416,7 +398,9 @@ class _Assembler:
         tokens = self._md.parse(body)
         heading_title = _first_heading_text(tokens)
         _shift_headings(tokens, depth)
-        self._rewrite_images(tokens, section.id, [artifact.parent, *self._parsed_bases()], counter)
+        self._rewrite_images(
+            tokens, section.id, [artifact.parent, *self._parsed_bases()], counter, relative
+        )
         fm_title = frontmatter.get("title")
         title = heading_title or (fm_title if isinstance(fm_title, str) and fm_title else None)
         if heading_title is None:
@@ -468,10 +452,12 @@ class _Assembler:
 
         return bool(asset_summaries(self.blocks[b] for b in section.block_ids if b in self.blocks))
 
-    def _original_body(self, section: Section, depth: int, counter: _AssetCounter) -> str:
+    def _original_body(self, section: Section, depth: int, counter: AssetCounter) -> str:
         blocks = [self.blocks[b] for b in section.block_ids if b in self.blocks]
         if not blocks:
-            return self._markdown(section.text, section.id, counter)
+            source = _relative(self.workspace, self.manifest)
+            return self._markdown(section.text, section.id, counter, source)
+        source = _relative(self.workspace, self.parsed_dir / "document.json")
         parts: list[str] = []
         for index, block in enumerate(blocks):
             if block.type == "title":
@@ -480,18 +466,21 @@ class _Assembler:
                 level = max(block.level or depth + 1, depth + 1)
                 parts.append(heading(level, block.text))
             elif block.type in ASSET_BLOCK_TYPES and asset_reference(block):
-                parts.append(self._asset_block(block, section.id, counter))
+                parts.append(self._asset_block(block, section.id, counter, source))
             elif block.type == "equation":
                 parts.append(f'<div class="equation">{escape(block.text)}</div>')
             elif block.text.strip():
-                parts.append(self._markdown(block.text, section.id, counter))
+                parts.append(self._markdown(block.text, section.id, counter, source, block.id))
         return "".join(parts)
 
-    def _asset_block(self, block: CanonicalBlock, section_id: str, counter: _AssetCounter) -> str:
+    def _asset_block(
+        self, block: CanonicalBlock, section_id: str, counter: AssetCounter, source: str | None
+    ) -> str:
         caption = f"<figcaption>{escape(block.text)}</figcaption>" if block.text.strip() else ""
         reference = asset_reference(block)
+        origin = AssetOrigin(source, block.id)
         resolved = resolve_asset_path(self.parsed_dir, block)
-        uri = self._data_uri(Path(resolved), section_id, reference) if resolved else None
+        uri = self._data_uri(Path(resolved), section_id, reference, origin) if resolved else None
         if resolved is None:
             self._warn(
                 ASSET_MISSING,
@@ -499,12 +488,14 @@ class _Assembler:
                 f"{_relative(self.workspace, self.parsed_dir)}",
                 section_id,
                 reference,
+                origin,
             )
         if uri is None:
             counter.missing += 1
             placeholder = self._missing(reference)
-            if not (placeholder or caption):
+            if not placeholder and not caption:
                 return ""
+            # The caption is source prose: it stays even when the figure itself cannot.
             return f'<figure class="asset {block.type}">{placeholder}{caption}</figure>'
         counter.embedded += 1
         alt = escape(block.text, quote=True)
@@ -522,152 +513,17 @@ class _Assembler:
 
     # -- markdown + assets --------------------------------------------------------
 
-    def _markdown(self, text: str, section_id: str, counter: _AssetCounter) -> str:
-        tokens = self._md.parse(text)
-        self._rewrite_images(tokens, section_id, self._parsed_bases(), counter)
-        return str(self._md.renderer.render(tokens, self._md.options, {}))
-
-    def _parsed_bases(self) -> list[Path]:
-        return [self.parsed_dir / "images", self.parsed_dir, self.workspace.root]
-
-    def _rewrite_images(
-        self, tokens: list[Token], section_id: str, bases: list[Path], counter: _AssetCounter
-    ) -> None:
-        """Embed every image as a data: URI, or swap it for a placeholder.
-
-        Covers Markdown ``image`` tokens and raw HTML ``<img>`` tags (artifacts may
-        carry HTML, e.g. MinerU tables): the page's CSP only allows ``data:`` images,
-        so an ``<img>`` left untouched would vanish silently instead of being embedded
-        or reported.
-        """
-
-        for token in tokens:
-            if token.type == "html_block":
-                token.content = self._rewrite_html_images(token.content, section_id, bases, counter)
-            if not token.children:
-                continue
-            for index, child in enumerate(token.children):
-                if child.type == "html_inline":
-                    child.content = self._rewrite_html_images(
-                        child.content, section_id, bases, counter
-                    )
-                    continue
-                if child.type != "image":
-                    continue
-                src = str(child.attrGet("src") or "")
-                uri = self._link_data_uri(src, section_id, bases)
-                if uri is None:
-                    counter.missing += 1
-                    token.children[index] = _html_inline(self._missing(src))
-                else:
-                    counter.embedded += 1
-                    child.attrSet("src", uri)
-
-    def _rewrite_html_images(
-        self, html: str, section_id: str, bases: list[Path], counter: _AssetCounter
+    def _markdown(
+        self,
+        text: str,
+        section_id: str,
+        counter: AssetCounter,
+        source: str | None,
+        block_id: str | None = None,
     ) -> str:
-        def replace(match: re.Match[str]) -> str:
-            if match.group("comment"):
-                return match.group(0)
-            tag = match.group(0)
-            src_attr = _html_src_attr(tag[4:]) if match.group("img") else None
-            if src_attr is None:
-                self._warn(ASSET_MISSING, "HTML <img> tag has no usable src", section_id, tag)
-                counter.missing += 1
-                return self._missing(tag)
-            src, (start, end) = src_attr
-            uri = self._link_data_uri(src, section_id, bases)
-            if uri is None:
-                counter.missing += 1
-                return self._missing(src)
-            counter.embedded += 1
-            start, end = start + 4, end + 4  # offsets are relative to the text after "<img"
-            return f'{tag[:start]}src="{escape(uri, quote=True)}"{tag[end:]}'
-
-        return _HTML_IMG_SCAN_RE.sub(replace, html)
-
-    def _link_data_uri(self, src: str, section_id: str, bases: list[Path]) -> str | None:
-        if not src:
-            self._warn(ASSET_MISSING, "image link has an empty target", section_id, src)
-            return None
-        if src.startswith("data:"):
-            return src
-        if is_url(src):
-            self._warn(
-                ASSET_REMOTE,
-                f"remote image '{src}' is not fetched; exports embed workspace files only",
-                section_id,
-                src,
-            )
-            return None
-        path = self._resolve_link(unquote(src.split("#", 1)[0].split("?", 1)[0]), bases)
-        if path is None:
-            self._warn(
-                ASSET_MISSING,
-                f"image '{src}' was not found inside the workspace",
-                section_id,
-                src,
-            )
-            return None
-        return self._data_uri(path, section_id, src)
-
-    def _resolve_link(self, raw: str, bases: list[Path]) -> Path | None:
-        """Resolve an image link to a regular file that stays inside the workspace."""
-
-        try:
-            root_real = self.workspace.root.resolve()
-        except (OSError, ValueError):
-            return None
-        candidate = Path(raw)
-        options = [candidate] if candidate.is_absolute() else [base / candidate for base in bases]
-        for option in options:
-            try:
-                real = option.resolve()
-                if real.is_relative_to(root_real) and real.is_file():
-                    return real
-            except (OSError, ValueError):
-                continue
-        return None
-
-    def _data_uri(self, path: Path, section_id: str, reference: str) -> str | None:
-        key = path.resolve()
-        if key not in self._data_uris:
-            mime, _ = mimetypes.guess_type(key.name)
-            if mime not in _EMBEDDABLE_MIME_TYPES:
-                self._data_uris[key] = None
-            else:
-                try:
-                    payload = base64.b64encode(key.read_bytes()).decode("ascii")
-                    self._data_uris[key] = f"data:{mime};base64,{payload}"
-                except OSError:
-                    self._data_uris[key] = None
-        uri = self._data_uris[key]
-        if uri is None:
-            self._warn(
-                ASSET_UNSUPPORTED,
-                f"asset '{reference}' is not an embeddable image (png, jpeg, gif, svg, webp)",
-                section_id,
-                reference,
-            )
-        return uri
-
-    def _missing(self, reference: str) -> str:
-        """Where an asset could not be embedded: a visible placeholder only in debug mode."""
-
-        if not self.show_status:
-            return ""
-        return f'<span class="missing-asset">Missing asset: {escape(reference)}</span>'
-
-    def _warn(self, code: str, message: str, section_id: str, reference: str | None = None) -> None:
-        self.warnings.append(
-            ExportWarning(code=code, message=message, section_id=section_id, reference=reference)
-        )
-
-
-@dataclass
-class _AssetCounter:
-    embedded: int = 0
-    missing: int = 0
+        tokens = self._md.parse(text)
+        self._rewrite_images(tokens, section_id, self._parsed_bases(), counter, source, block_id)
+        return str(self._md.renderer.render(tokens, self._md.options, {}))
 
 
 def split_frontmatter(text: str) -> tuple[dict[str, object], str]:
@@ -726,32 +582,6 @@ def _shift_headings(tokens: list[Token], level: int) -> None:
     for token in tokens:
         if token.type in {"heading_open", "heading_close"}:
             token.tag = f"h{max(1, min(int(token.tag[1]) + offset, 6))}"
-
-
-def _html_src_attr(attributes: str) -> tuple[str, tuple[int, int]] | None:
-    """The unescaped ``src`` value of an ``<img>`` tag's attributes, with its span.
-
-    ``attributes`` is the tag text after ``<img``. Attributes are walked one at a
-    time, so only a real ``src`` attribute counts (not ``data-src``, nor ``src=``
-    inside another attribute's quoted value).
-    """
-
-    for attr in _HTML_ATTR_RE.finditer(attributes):
-        if attr.group(1).lower() != "src":
-            continue
-        raw = attr.group(2)
-        if raw is None:
-            return None
-        if raw[:1] in {'"', "'"}:
-            raw = raw[1:-1]
-        return unescape(raw), attr.span()
-    return None
-
-
-def _html_inline(content: str) -> Token:
-    token = Token("html_inline", "", 0)
-    token.content = content
-    return token
 
 
 def report_path_for(output: Path) -> Path:

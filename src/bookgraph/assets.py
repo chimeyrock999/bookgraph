@@ -75,3 +75,19 @@ def resolve_asset_path(parsed_dir: Path, block: CanonicalBlock) -> str | None:
         except (OSError, ValueError):
             continue
     return None
+
+
+def asset_link(parsed_dir: Path, path: str) -> str:
+    """A resolved asset ``path`` relative to ``parsed_dir``, as a POSIX link.
+
+    This is the reference an artifact (a translation) should write for the asset —
+    ``images/fig1.png`` rather than an absolute path — and the one the translated
+    export resolves against the parsed document directory.
+    """
+
+    try:
+        return Path(path).resolve().relative_to(parsed_dir.resolve()).as_posix()
+    except (OSError, ValueError):
+        # ``resolve_asset_path`` only returns files inside ``parsed_dir``; keep the
+        # basename rather than leak an absolute path if that ever changes.
+        return Path(path).name

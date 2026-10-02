@@ -51,12 +51,17 @@ class ExportWarning(BaseModel):
 
     ``reference`` is the raw asset reference (a Markdown image link or a parsed
     block's asset path) for an asset-scoped warning, ``None`` otherwise.
+    ``source_path`` is the workspace-relative file that carries that reference — the
+    translation artifact, or the parsed ``document.json`` for an original section —
+    and ``block_id`` the parsed block when the reference came from one.
     """
 
     code: str
     message: str
     section_id: str | None = None
     reference: str | None = None
+    source_path: str | None = None
+    block_id: str | None = None
 
 
 class ExportSection(BaseModel):

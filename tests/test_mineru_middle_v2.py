@@ -141,7 +141,7 @@ def test_heading_levels_come_from_mineru(tmp_path: Path) -> None:
     assert document.title == "Book"
 
 
-def test_nested_list_table_and_equation_content_is_flattened(tmp_path: Path) -> None:
+def test_nested_list_table_and_equation_content_is_rendered(tmp_path: Path) -> None:
     payload = {
         "schema": "docvortex.middle",
         "schema_version": "2.0",
@@ -198,13 +198,48 @@ def test_nested_list_table_and_equation_content_is_flattened(tmp_path: Path) -> 
     document = MinerUMiddleJsonParser().parse(source, tmp_path)
 
     assert [(block.type, block.text) for block in document.blocks] == [
-        ("list", "first second"),
+        # List items are child blocks; the hyperlink inside one stays a Markdown link.
+        ("list", "first [second](https://x)"),
         ("table", "Table 1 Source: us"),
         ("equation", "E = mc^2"),
         ("text", "A note."),
     ]
     assert document.blocks[1].asset_path == "images/t.jpg"
     assert document.title == "Declared Title"
+
+
+def test_inline_spans_join_verbatim(tmp_path: Path) -> None:
+    payload = {
+        "schema": "docvortex.middle",
+        "schema_version": "2.0",
+        "metadata": {"file_suffix": "pdf"},
+        "pages": [
+            {
+                "page_idx": 0,
+                "blocks": [
+                    {
+                        "type": "text",
+                        "index": 0,
+                        "content": [
+                            _span("See ("),
+                            {"type": "code_inline", "content": "x[0]"},
+                            _span(", "),
+                            {"type": "equation_inline", "content": "a+b"},
+                            _span(") ["),
+                            {"type": "hyperlink", "url": "#ref 3", "content": [_span("3")]},
+                            _span("]."),
+                        ],
+                    }
+                ],
+            }
+        ],
+    }
+    source = tmp_path / "b_middle.json"
+    source.write_text(json.dumps(payload))
+
+    (block,) = MinerUMiddleJsonParser().parse(source, tmp_path).blocks
+
+    assert block.text == "See (`x[0]`, $a+b$) [[3](#ref%203)]."
 
 
 def test_unknown_schema_major_version_fails_loudly(tmp_path: Path) -> None:

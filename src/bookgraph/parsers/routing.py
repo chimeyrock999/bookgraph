@@ -50,8 +50,8 @@ def select_parser_name(source: Path) -> str:
 
     The choice depends only on the source name, never on installed extras, so a
     file routes the same way on every machine. MinerU 4 can also parse EPUB and
-    Office files, but MarkItDown stays their default until the MinerU adapter keeps
-    their tables, links, anchors and provenance (see ``docs/cli/commands.md``).
+    Office files, but only when chosen explicitly (``parse-book`` on a registered
+    EPUB/DOCX); MarkItDown stays their default (see ``docs/cli/commands.md``).
 
     Two source types are refused on purpose rather than guessed:
 

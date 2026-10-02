@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
@@ -34,20 +35,27 @@ from bookgraph.parsers.mineru_profiles import (
     reject_removed_options,
     resolve_mineru_options,
 )
-from bookgraph.parsers.mineru_runner import MinerUNotInstalledError, MinerURunError, MinerURunner
+from bookgraph.parsers.mineru_runner import (
+    FLASH_ONLY_TIER,
+    MinerUNotInstalledError,
+    MinerURunError,
+    MinerURunner,
+    is_flash_only_source,
+)
+from bookgraph.parsers.mineru_source_map import SOURCE_MAP_SUFFIX
 from bookgraph.workspace import WorkspacePaths
 
 
 @app.command("add-book")
 def add_book(
     workspace_path: Annotated[Path, typer.Argument(help="BookGraph workspace/output root path.")],
-    pdf_path: Annotated[Path, typer.Argument(help="PDF book path to register.")],
+    pdf_path: Annotated[Path, typer.Argument(help="PDF, EPUB or DOCX book path to register.")],
     dry_run: Annotated[
         bool,
         typer.Option("--dry-run", help="Print the registration contract without writing files."),
     ] = False,
 ) -> None:
-    """Register a PDF book in the workspace without running parsers or segmenters."""
+    """Register a PDF, EPUB or DOCX book in the workspace without running parsers or segmenters."""
 
     workspace = WorkspacePaths(workspace_path.expanduser().resolve())
     try:
@@ -186,7 +194,11 @@ def parse_book(
         typer.Option("--dry-run", help="Print the interface contract without writing files."),
     ] = False,
 ) -> None:
-    """Run the registered-book parse pipeline: raw PDF runner then parser."""
+    """Run the registered-book parse pipeline: MinerU on the raw source, then the parser.
+
+    A registered EPUB or DOCX is the explicit MinerU path for non-PDF input: MinerU
+    parses it natively with the ``flash`` tier, and a page range is refused.
+    """
 
     workspace = WorkspacePaths(workspace_path.expanduser().resolve())
     config = load_config(workspace)
@@ -216,6 +228,9 @@ def parse_book(
         )
     except (UnknownMinerUProfileError, RemovedMinerUOptionError) as exc:
         raise typer.BadParameter(str(exc)) from exc
+    original_source = _registered_original_path(workspace, resolved_book_id, book_manifest)
+    if is_flash_only_source(original_source):
+        options = _flash_only_options(options, explicit_tier=tier, source=original_source)
     _validate_mineru_options(options, pages=pages, needs_url=profile_needs_url(resolved_profile))
     resolved_timeout = config.mineru.timeout_seconds if timeout_seconds is None else timeout_seconds
     if resolved_timeout is not None and resolved_timeout < 0:
@@ -224,7 +239,6 @@ def parse_book(
     parser_name = _validate_plugin_name(
         default_parser_registry(), parser or config.parsers.default_pdf
     )
-    original_source = _registered_original_path(workspace, resolved_book_id, book_manifest)
     parsed_dir = workspace.sources_parsed / resolved_book_id
     middle_json = parsed_dir / f"{resolved_book_id}_middle.json"
     log_path = _parse_book_log_path(workspace, resolved_book_id)
@@ -260,6 +274,10 @@ def parse_book(
         "outputs": {"document": str(parsed_dir / "document.json")},
         "backend_not_run": True,
     }
+    if is_flash_only_source(original_source):
+        intermediate = payload["intermediate_outputs"]
+        assert isinstance(intermediate, dict)
+        intermediate["source_map"] = str(parsed_dir / f"{resolved_book_id}{SOURCE_MAP_SUFFIX}")
     if dry_run:
         path = _write_placeholder(workspace, f"parse-book-{resolved_book_id}", payload)
         _print_placeholder("parse-book", path)
@@ -353,6 +371,29 @@ def _registered_pdf_pages(book_manifest: Path) -> int | None:
         return None
     pages = pdf.get("pages")
     return pages if isinstance(pages, int) and pages > 0 else None
+
+
+def _flash_only_options(
+    options: MinerUOptions, *, explicit_tier: str | None, source: Path
+) -> MinerUOptions:
+    """Options for a source MinerU parses natively: ``flash`` tier, whole document.
+
+    A tier from the profile or ``[mineru].tier`` is meant for PDFs and gives way to
+    ``flash``; a tier asked for on the command line, or a page range, is refused.
+    """
+
+    suffix = source.suffix.lower()
+    if explicit_tier is not None and explicit_tier != FLASH_ONLY_TIER:
+        raise typer.BadParameter(
+            f"MinerU parses {suffix} sources with --tier {FLASH_ONLY_TIER} only; "
+            f"drop --tier {explicit_tier}."
+        )
+    if options.start_page is not None or options.end_page is not None:
+        raise typer.BadParameter(
+            f"MinerU parses {suffix} sources whole; --start-page/--end-page (and "
+            "[mineru].start_page/end_page) apply to PDFs only."
+        )
+    return replace(options, tier=FLASH_ONLY_TIER)
 
 
 def _validate_mineru_options(

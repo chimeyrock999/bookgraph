@@ -1,0 +1,184 @@
+{
+  "metadata": {
+    "file_suffix": "epub",
+    "producer": {
+      "name": "mineru",
+      "version": "4.0.10"
+    },
+    "document": {
+      "title": "Sample Book",
+      "languages": [
+        "en"
+      ],
+      "identifiers": [
+        "sample-epub"
+      ],
+      "modified_at": "2026-01-01T00:00:00Z",
+      "page_count": 2,
+      "page_count_kind": "spine"
+    }
+  },
+  "extensions": {
+    "mineru": {
+      "tier": "flash",
+      "parse_mode": "txt"
+    }
+  },
+  "pages": [
+    {
+      "page_idx": 0,
+      "blocks": [
+        {
+          "type": "doc_title",
+          "index": 0,
+          "content": [
+            {
+              "type": "text",
+              "content": "Chapter One"
+            }
+          ],
+          "anchor": "epub-deaff4be739109577ad8",
+          "level": 1
+        },
+        {
+          "type": "text",
+          "index": 1,
+          "content": [
+            {
+              "type": "text",
+              "content": "Read "
+            },
+            {
+              "type": "hyperlink",
+              "url": "#epub-a652b1f1fec799e1a325",
+              "content": [
+                {
+                  "type": "text",
+                  "content": "replication"
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "content": " later, see Figure 1 and "
+            },
+            {
+              "type": "hyperlink",
+              "url": "https://example.com/",
+              "content": [
+                {
+                  "type": "text",
+                  "content": "the site"
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "content": " (Example 5-2) [3]."
+            }
+          ],
+          "anchor": "epub-60e9ef05336bc7d9323b"
+        },
+        {
+          "type": "image",
+          "index": 2,
+          "content": [
+            {
+              "type": "image_body",
+              "index": 2,
+              "image_path": "images/page_0_image_2.png",
+              "content": ""
+            },
+            {
+              "type": "image_caption",
+              "index": 3,
+              "content": [
+                {
+                  "type": "text",
+                  "content": "Figure 1. A red box."
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "table",
+          "index": 4,
+          "content": [
+            {
+              "type": "table_body",
+              "index": 4,
+              "content": "<table><tr><th rowspan=\"2\">Region</th><th colspan=\"2\">Sales</th></tr><tr><td>Q1</td><td>Q2</td></tr><tr><td>North</td><td>10<table><tr><td>inner</td></tr></table></td><td>12</td></tr></table>"
+            },
+            {
+              "type": "table_caption",
+              "index": 5,
+              "content": [
+                {
+                  "type": "text",
+                  "content": "Table 1. Sales"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "page_idx": 1,
+      "blocks": [
+        {
+          "type": "doc_title",
+          "index": 0,
+          "content": [
+            {
+              "type": "text",
+              "content": "Chapter Two"
+            }
+          ],
+          "anchor": "epub-fcb10bcbb8a0f0d3610b",
+          "level": 1
+        },
+        {
+          "type": "paragraph_title",
+          "index": 1,
+          "content": [
+            {
+              "type": "text",
+              "content": "Replication"
+            }
+          ],
+          "anchor": "epub-a652b1f1fec799e1a325",
+          "level": 2
+        },
+        {
+          "type": "text",
+          "index": 2,
+          "content": [
+            {
+              "type": "text",
+              "content": "Back to "
+            },
+            {
+              "type": "hyperlink",
+              "url": "#epub-60e9ef05336bc7d9323b",
+              "content": [
+                {
+                  "type": "text",
+                  "content": "the intro"
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "content": "."
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "is_full_document": true,
+  "schema": "docvortex.middle",
+  "schema_version": "2.0"
+}

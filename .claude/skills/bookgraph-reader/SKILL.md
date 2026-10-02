@@ -119,7 +119,9 @@ chat), reuse the cache instead of retranslating:
    unit merge paragraphs; the same id in consecutive units splits one. Headings,
    figures and code may share a unit with their prose or be left out. The bilingual
    export then interleaves paragraph by paragraph. Foreign ids or units out of order
-   are refused; `alignment_issues` lists text blocks you left untranslated.
+   are refused; `alignment_issues` lists text blocks you left untranslated and units
+   that do not start a Markdown block of their own (start each unit with a new
+   paragraph, list, heading or fence — not a list-item continuation).
 3. Translate content, preserve structural Markdown: translate prose, captions, and
    link labels, but keep link destinations and fragment ids
    (`(ch03.html#sec_x)`, `(#fig_y)`), image and file paths, reference-style

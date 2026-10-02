@@ -703,10 +703,10 @@ every client at connect time, so the contract binds any agent, not only one that
 loaded a `bookgraph-reader` skill:
 
 - Artifacts hold book content only. Translated text goes in
-  `write_section_translation(units=...)` (block-aligned) or `(content=...)`, with figures/tables linked by
-  `AssetRef.link` (relative). QA/terminology remarks go in `notes`. `MEDIA:` markers
-  and progress lines go in the agent's final chat reply. Export status stays in the
-  export report.
+  `write_section_translation(units=...)` (block-aligned) or `content=...`, with
+  figures/tables linked by `AssetRef.link` (relative). QA/terminology remarks go in
+  `notes`. `MEDIA:` markers and progress lines go in the agent's final chat reply.
+  Export status stays in the export report.
 - The translation registry is the only translation store: check
   `get_section_translation` first, and save only with `write_section_translation`.
   Translation files written anywhere else (under `translations/` by hand, or in an
@@ -743,9 +743,10 @@ docstrings (`write_section_translation`, `mark_read`) and both skills repeat the
 - `get_section(doc_id, section_id, include_assets=True, include_blocks=False)` → one
   section's full reading content (with `include_blocks`, also `blocks`: its parsed
   source blocks `{id, type, text, level, code}` in reading order, the ids a
-  block-aligned translation references), its `<section_id>.md` path, its figure/table `assets` (each
-  `{block_id, type, path, link, caption, order, page_idx, type_confidence,
-  suggested_type}`), and its `warnings`. `path` is the absolute file to open; `link`
+  block-aligned translation references; empty without `document.json`), its
+  `<section_id>.md` path, its figure/table `assets` (each `{block_id, type, path,
+  link, caption, order, page_idx, type_confidence, suggested_type}`), and its
+  `warnings`. `path` is the absolute file to open; `link`
   is the same file relative to `sources/parsed/<doc_id>/` (e.g. `images/fig1.png`),
   the reference to write into a translation. `type_confidence` scores the parser's
   classification against the caption's label and `suggested_type` is set only when
@@ -889,8 +890,9 @@ docstrings (`write_section_translation`, `mark_read`) and both skills repeat the
   translation: a list of `{source_block_ids, content}`, one per translated unit in
   reading order, joined one blank line apart into the body, with each unit's span
   recorded in the sidecar. A unit without content or ids, an id outside the section,
-  or units out of source order is refused; source text blocks no unit translates are
-  reported in `alignment_issues` (see *Block-aligned translations* in
+  or units out of source order is refused; source text blocks no unit translates, and
+  units that do not start a Markdown block of their own, are reported in
+  `alignment_issues` (see *Block-aligned translations* in
   `artifacts.md`). Passing both `content` and `units` is refused.
 - `list_section_artifacts(doc_id=None, lang=None, type="translation")` → every
   cached translation (filtered by `doc_id` / `lang`) with its status, including
@@ -981,9 +983,10 @@ Issue codes (`blocking` unless noted):
   or rewrote a link destination, image path, reference definition, HTML anchor, or
   heading id of the section; the message lists the changes. Translate labels and
   prose only and rewrite it (see the structure rule in `artifacts.md`).
-- `translation_alignment_gaps` — non-blocking; a block-aligned translation leaves
-  source text blocks without a unit (the bilingual export shows them on the left
-  only).
+- `translation_alignment_gaps` — non-blocking; a block-aligned translation has
+  alignment warnings: source text blocks without a unit (the bilingual export shows
+  them on the left only), or a unit that continues the previous unit's Markdown block
+  (it shares that unit's row).
 - `translation_alignment_invalid` — non-blocking; the stored block alignment no longer
   fits the section (a re-segment moved its blocks), so the bilingual export pairs the
   section as a whole. An unaligned translation is valid and reports nothing.
@@ -1305,11 +1308,14 @@ bookgraph export translated-pdf /path/to/workspace ddia --check           # cove
     `alignment_status: "aligned"`; see *Block-aligned translations* in
     `artifacts.md`) is interleaved paragraph by paragraph: after a row with both
     headings, one row per unit, its source blocks on the left and its translation on
-    the right. Units that split one block share a row, and source blocks no unit
-    translates (a figure passed through, a gap) get rows of their own with an empty
-    right column. Every other translation — unaligned, or an alignment that no longer
-    fits the section — and every fallback row stays one row per section. Figures, tables and code appear in the
-    column whose content carries them (the original's figures on the left, the
+    the right. Units that split one block share a row, so does a unit whose Markdown
+    continues the previous unit's block (`unit_not_a_block`), and source blocks no
+    unit translates (a figure passed through, a gap) get rows of their own with an
+    empty right column. Every other translation — unaligned, an alignment that no
+    longer fits the section, or a section whose original is rebuilt from
+    `Section.text` because `document.json` is missing — and every fallback row stays
+    one row per section. Figures, tables and code appear in the column whose content
+    carries them (the original's figures on the left, the
     translation's own image links and code on the right); an untranslated section
     shows the original in both columns. HTML anchors (`id`, and `name` on `<a>`) are
     kept only in the right column, so every id on the page is unique and in-page links

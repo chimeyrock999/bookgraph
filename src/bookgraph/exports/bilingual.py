@@ -26,7 +26,7 @@ from markdown_it.token import Token
 from bookgraph.exports.html_attrs import HTML_ATTR_RE, HTML_START_TAG_RE
 from bookgraph.exports.models import ExportReport, ExportSection
 from bookgraph.models import AlignedUnit
-from bookgraph.translation_alignment import AlignmentCheck
+from bookgraph.translation_alignment import AlignmentCheck, unit_blocks
 
 # Added to the page style in bilingual mode: two columns need a landscape page and a
 # smaller type size.
@@ -70,24 +70,20 @@ def block_marker(block_id: str) -> str:
 def mark_units(tokens: list[Token], body: str, units: Sequence[AlignedUnit]) -> list[Token]:
     """``tokens`` (parsed from ``body``) with a mark before each aligned unit's first block.
 
-    Units are found by the source line their top-level blocks start on. A unit whose
-    Markdown runs into the next one (an unclosed fence) has no block of its own, gets
-    no mark, and shares the previous unit's row.
+    A unit whose Markdown continues the previous unit's block (``unit_not_a_block``)
+    gets no mark; :func:`bilingual_section` folds it into the previous unit's row.
     """
 
     if not units:
         return tokens
-    starts = [body.count("\n", 0, unit.start) for unit in units]
     marked: list[Token] = []
     current = -1
-    for token in tokens:
-        if token.level == 0 and token.nesting >= 0 and token.map is not None:
-            unit = max((i for i, line in enumerate(starts) if line <= token.map[0]), default=0)
-            if unit > current:
-                mark = Token("html_block", "", 0)
-                mark.content = f"<!--bg:unit={unit}-->\n"
-                marked.append(mark)
-                current = unit
+    for token, unit in zip(tokens, unit_blocks(tokens, body, units), strict=True):
+        if unit > current:
+            mark = Token("html_block", "", 0)
+            mark.content = f"<!--bg:unit={unit}-->\n"
+            marked.append(mark)
+            current = unit
         marked.append(token)
     return marked
 
@@ -119,7 +115,9 @@ def bilingual_section(
     html, embedded, missing = original
     pairs = (
         _aligned_pairs(html, mixed, alignment.units, block_ids)
-        if alignment is not None and alignment.status == "aligned"
+        # An original rebuilt from ``Section.text`` (no parsed blocks) has no block marks
+        # to set beside the units: keep the section row.
+        if alignment is not None and alignment.status == "aligned" and _BLOCK_MARK_RE.search(html)
         else [(strip_marks(html), strip_marks(mixed))]
     )
     entry = entry.model_copy(
@@ -150,9 +148,10 @@ def _aligned_pairs(
 ) -> list[tuple[str, str]]:
     """The ``(original, mixed)`` cells of an aligned section, one row per unit.
 
-    The first row holds both headings. Units that share a block (a split) share a row;
-    a row's original cell runs from its first source block to its last, and source
-    blocks no unit references fill rows of their own, with an empty mixed cell.
+    The first row holds both headings. Units that share a block (a split) share a row,
+    and so does a unit that rendered inside the previous one (no mark of its own); a
+    row's original cell runs from its first source block to its last, and source blocks
+    no unit references fill rows of their own, with an empty mixed cell.
     """
 
     original_head, blocks = _split_marks(_UNIT_MARK_RE.sub("", original), _BLOCK_MARK_RE)
@@ -160,7 +159,9 @@ def _aligned_pairs(
     position = {block_id: index for index, block_id in enumerate(block_ids)}
     groups: list[tuple[list[str], list[int]]] = []
     for index, unit in enumerate(units):
-        if groups and set(unit.source_block_ids) & set(groups[-1][0]):
+        if groups and (
+            str(index) not in translated or set(unit.source_block_ids) & set(groups[-1][0])
+        ):
             groups[-1][0].extend(unit.source_block_ids)
             groups[-1][1].append(index)
         else:

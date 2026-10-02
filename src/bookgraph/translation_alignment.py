@@ -17,7 +17,11 @@ An alignment is checked against the section (:func:`check_alignment`):
   this, after the body or the section changed);
 - a source text block that no unit references is a gap (``unaligned_block``), a
   warning only. Headings, figures, tables, equations and code are passed through
-  untranslated, so leaving them out is not a gap.
+  untranslated, so leaving them out is not a gap;
+- a unit whose Markdown does not start a top-level block of its own — a list-item
+  continuation, an unclosed fence, an HTML block running across the blank line —
+  renders as part of the previous unit (``unit_not_a_block``), a warning only: the
+  bilingual export folds it into the previous unit's row (:func:`unit_blocks`).
 
 The section content hash and staleness rules ignore the alignment: it is provenance,
 not content. See ``docs/cli/artifacts.md``.
@@ -27,6 +31,9 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+
+from markdown_it import MarkdownIt
+from markdown_it.token import Token
 
 from bookgraph.models import (
     AlignedUnit,
@@ -43,6 +50,10 @@ UNIT_SEPARATOR = "\n\n"
 
 # Source block types a translation is expected to cover; the rest pass through.
 _TEXT_BLOCK_TYPES = frozenset({"text", "list", "unknown"})
+# Issues that leave an alignment usable.
+_WARNING_CODES = frozenset({"unaligned_block", "unit_not_a_block"})
+# The export's Markdown dialect, so a unit's blocks are found as the export renders them.
+_MARKDOWN = MarkdownIt("commonmark", {"html": True}).enable(["table", "strikethrough"])
 
 
 @dataclass(frozen=True)
@@ -158,8 +169,45 @@ def check_alignment(
                 message=f"the body continues after the last unit (offset {previous_end})",
             )
         )
+    if not any(issue.code == "bad_range" for issue in issues):
+        issues.extend(_merged_units(units, body))
     issues.extend(_gaps(section, blocks, referenced))
     return issues
+
+
+def unit_blocks(tokens: Sequence[Token], body: str, units: Sequence[AlignedUnit]) -> list[int]:
+    """For each top-level block token of ``body``, the index of the unit it starts in.
+
+    ``tokens`` are ``body`` parsed (the export may drop a leading heading first); a
+    token that is not a top-level block gets ``-1``. A unit is found by the line its
+    span starts on, so a unit whose Markdown continues the previous unit's block owns
+    no token.
+    """
+
+    starts = [body.count("\n", 0, unit.start) for unit in units]
+    owners: list[int] = []
+    for token in tokens:
+        if token.level == 0 and token.nesting >= 0 and token.map is not None:
+            line = token.map[0]
+            owners.append(max((i for i, start in enumerate(starts) if start <= line), default=0))
+        else:
+            owners.append(-1)
+    return owners
+
+
+def _merged_units(units: Sequence[AlignedUnit], body: str) -> list[TranslationAlignmentIssue]:
+    owned = set(unit_blocks(_MARKDOWN.parse(body), body, units))
+    return [
+        TranslationAlignmentIssue(
+            code="unit_not_a_block",
+            unit=index,
+            message=f"unit {index} does not start a Markdown block of its own (it continues "
+            "the previous unit's list, fence or HTML block), so it renders with the "
+            "previous unit",
+        )
+        for index in range(1, len(units))
+        if index not in owned
+    ]
 
 
 def _gaps(
@@ -191,7 +239,7 @@ def alignment_errors(
 ) -> list[TranslationAlignmentIssue]:
     """The issues that make an alignment invalid (everything but gaps)."""
 
-    return [issue for issue in issues if issue.code != "unaligned_block"]
+    return [issue for issue in issues if issue.code not in _WARNING_CODES]
 
 
 def describe_alignment_issues(issues: Sequence[TranslationAlignmentIssue]) -> str:

@@ -185,3 +185,41 @@ def test_markdown_book_through_parse_segment_translate_export(tmp_path: Path) ->
     assert "First paragraph." in rows[1][0] and "Đoạn một." in rows[1][1]
     assert "Second paragraph." in rows[2][0] and "Đoạn hai." in rows[2][1]
     assert "<li>one</li>" in rows[3][0] and "<li>một</li>" in rows[3][1]
+
+
+def test_a_sections_only_original_keeps_the_section_row(workspace: WorkspacePaths) -> None:
+    _write_units(workspace, *_UNITS)
+    # Without document.json the original is rebuilt from Section.text: no source blocks
+    # to set beside the units.
+    (workspace.sources_parsed / DOC / "document.json").unlink()
+
+    export = _bilingual(workspace)
+
+    ((left, right),) = _rows(export.html, CHAPTER)
+    assert "Intro prose in English." in left and "Phần mở đầu" in right
+    entry = _entry(export, CHAPTER)
+    assert (entry.alignment, entry.bilingual_rows) == ("aligned", 1)
+
+
+def test_a_unit_without_a_block_of_its_own_joins_the_previous_row(
+    workspace: WorkspacePaths,
+) -> None:
+    written = service.write_section_translation(
+        workspace,
+        DOC,
+        CHAPTER,
+        "vi",
+        units=[
+            _unit("b0", "b1", content="# Chương Một\n\n- Mục một"),
+            _unit("b3", content="  Mục một tiếp theo"),  # a list-item continuation
+        ],
+    )
+
+    rows = _rows(_bilingual(workspace).html, CHAPTER)
+
+    assert [(i.code, i.unit) for i in written.alignment_issues] == [("unit_not_a_block", 1)]
+    assert len(rows) == 2
+    left, right = rows[1]
+    # b3's source sits beside its translation, in the row of the unit it rendered in.
+    assert "Intro prose in English." in left and "Prose after the figure." in left
+    assert "Mục một tiếp theo" in right

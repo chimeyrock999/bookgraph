@@ -658,6 +658,11 @@ final newline), and stores each unit's span of it in the sidecar
 - Gaps (reported, not refused): a source `text`/`list`/`unknown` block with text that
   no unit references (`unaligned_block`). Headings, figures, tables, equations, and
   code blocks are passed through untranslated, so leaving them out is not a gap.
+- Merged units (reported, not refused): a unit after the first whose Markdown does not
+  start a top-level block of its own — a list-item continuation, an unclosed fence, an
+  HTML block running across the blank line — renders as part of the previous unit
+  (`unit_not_a_block`); the bilingual export gives both units, and their source
+  blocks, one row.
 - Alignment is provenance, not content: neither `source_section_hash` nor the
   staleness rules look at it. `content_hash` still binds the sidecar, alignment
   included, to the body: an edited body reads as `untracked` and unaligned.

@@ -366,7 +366,8 @@ class SectionArtifactView(BaseModel):
     ``structure_issues``: see :mod:`bookgraph.mcp.translation_structure`.
     ``alignment_status`` says whether the body is mapped back to the section's source
     blocks: ``aligned`` (``aligned_units`` units; ``alignment_issues`` lists source text
-    blocks no unit translates), ``unaligned`` (written as plain ``content`` — valid, the
+    blocks no unit translates, and units that continue the previous unit's Markdown
+    block), ``unaligned`` (written as plain ``content`` — valid, the
     bilingual export pairs it at section level), or ``invalid`` (the stored alignment no
     longer fits the section; ``alignment_issues`` says why — rewrite it with ``units``).
     ``None`` when there is no body.

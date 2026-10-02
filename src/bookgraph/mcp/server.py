@@ -441,7 +441,8 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
         each with the link to add. Pass
         ``current_section_hash`` back to write_section_translation to pin your write.
         ``alignment_status`` is 'aligned' (written with units; alignment_issues lists
-        source text blocks no unit translates), 'unaligned' (plain content — valid, the
+        source text blocks no unit translates and units that merged into the previous
+        one), 'unaligned' (plain content — valid, the
         bilingual export pairs it per section), or 'invalid' (the stored alignment no
         longer fits the section; rewrite it with units).
         """
@@ -496,7 +497,9 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
         joined into the Markdown body, and the alignment lets the bilingual export set
         each paragraph beside its translation. A unit without content or ids, an id
         outside the section, or units out of source order is refused; a source text
-        block no unit translates is reported in alignment_issues.
+        block no unit translates, or a unit that continues the previous unit's list or
+        fence instead of starting its own Markdown block, is reported in
+        alignment_issues.
         """
 
         try:

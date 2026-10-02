@@ -66,7 +66,8 @@ class BatchRequirements(BaseModel):
       not ``stale`` in the translation registry (an ``untracked`` body only warns), and
       keeps the section's link destinations, image paths, reference definitions, HTML
       anchors, and heading ids unchanged. A block alignment that no longer fits the
-      section, or leaves source text blocks untranslated, only warns.
+      section, or has warnings (untranslated source text blocks, merged units), only
+      warns.
     - ``artifacts``: extra workspace-relative path templates that must exist and be
       non-empty per section; ``{doc_id}``, ``{section_id}`` and ``{plan_id}`` expand.
     """
@@ -506,7 +507,7 @@ def _translation_issues(workspace: WorkspacePaths, lang: str, section: Section) 
         problem = (
             "has an alignment that no longer fits the section"
             if invalid
-            else "leaves source text blocks without a translated unit"
+            else "has block-alignment warnings"
         )
         issues.append(
             BatchIssue(

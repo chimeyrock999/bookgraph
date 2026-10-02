@@ -207,10 +207,16 @@ class MissingTranslationAsset(BaseModel):
 # the section's blocks or the body — read as unaligned).
 AlignmentStatus = Literal["aligned", "unaligned", "invalid"]
 
-# ``unaligned_block`` is a warning (a source text block no unit translates); the others
+# ``unaligned_block`` (a source text block no unit translates) and ``unit_not_a_block``
+# (a unit whose Markdown continues the previous unit's block) are warnings; the others
 # make an alignment invalid, and are refused on write.
 AlignmentIssueCode = Literal[
-    "unaligned_block", "empty_unit", "foreign_block", "out_of_order", "bad_range"
+    "unaligned_block",
+    "unit_not_a_block",
+    "empty_unit",
+    "foreign_block",
+    "out_of_order",
+    "bad_range",
 ]
 
 

@@ -83,7 +83,8 @@ Optional translation cache tools (when the user wants sections translated):
   paragraphs, the same id in consecutive units splits one; headings, figures and code
   may share a unit or be left out). The bilingual export then interleaves paragraph
   by paragraph. Foreign ids or units out of order are refused; `alignment_issues`
-  lists text blocks left untranslated.
+  lists text blocks left untranslated and units that do not start a Markdown block of
+  their own (start each unit with a new paragraph, list, heading or fence).
   Translate content, preserve structural Markdown: translate prose, captions, and
   link labels, but keep link destinations and fragment ids, image and file paths,
   reference-style identifiers, HTML `id`/`name` anchors, and `{#id}` heading ids

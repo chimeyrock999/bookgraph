@@ -184,8 +184,9 @@ def write_section_translation(
     order. The units are joined (one blank line apart) into the body, and their spans
     are recorded in the sidecar so the bilingual export can interleave paragraph by
     paragraph. A unit with no content or no block id, a block id outside the section,
-    or units out of source order is refused; a source text block no unit translates is
-    reported in ``alignment_issues``, not refused.
+    or units out of source order is refused; a source text block no unit translates,
+    or a unit that continues the previous unit's Markdown block, is reported in
+    ``alignment_issues``, not refused.
     """
 
     resolved_doc_id = _validate_id(doc_id, "doc_id")

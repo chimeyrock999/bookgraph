@@ -125,6 +125,12 @@ A self-serve agent drives an entire session with these tools alone:
      source_section_hash=<current_section_hash>)`.
      `list_section_artifacts(doc_id, lang)` lists every cached translation with its
      status, so a job can redo the `stale` ones after a re-segment.
+   - **Keep artifacts publication-clean.** A translation body, annotation summary or
+     gloss is book content only. `MEDIA:/path` markers, `Đã lưu cache/enrich và mark
+     read: …` footers, QA/checker notes, export status labels, and absolute asset
+     paths go in your chat reply or job log — the write tools refuse them, and
+     `complete_reading_batch` blocks on them (`*_contaminated`). Link figures
+     relatively (`images/fig1.png`); `MEDIA:` is for the final chat reply only.
    - `mark_read(plan_id)` — mark the section read (defaults to the next unread) and
      persist progress.
 4. `list_plans()` — resume or report progress across sessions (`completed`/`total`/`done`).

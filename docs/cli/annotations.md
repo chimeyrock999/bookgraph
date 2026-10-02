@@ -76,6 +76,11 @@ annotations/<doc_id>/<section_id>.json
     title, and the first non-empty gloss for that slug wins.
 - `summary`: the agent's explanation of the section. May be empty. Surfaced immediately
   by `get_context`.
+- `summary` and every `gloss` are book explanation only: a write carrying job
+  diagnostics (a `MEDIA:` marker, a cache/mark-read footer, a QA/checker note, an
+  export label) is **rejected**, and a stored annotation that carries them blocks
+  `complete_reading_batch` (`annotation_contaminated`). See *Artifact hygiene* in
+  `artifacts.md`.
 - `model`: optional identifier of the model that produced the annotation.
 - `created_at`: optional ISO-8601 timestamp.
 

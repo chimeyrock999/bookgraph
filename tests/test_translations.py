@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from bookgraph import translations
+from bookgraph.artifact_hygiene import ArtifactHygieneError
 from bookgraph.models import Section, SectionArtifact
 from bookgraph.translations import (
     body_content_hash,
@@ -268,3 +269,20 @@ def test_sidecar_is_read_as_utf8_bytes_regardless_of_locale(
 
     assert state.status == "fresh"
     assert state.artifact is not None and state.artifact.model == "mô-hình"
+
+
+def test_write_refuses_a_body_carrying_job_diagnostics(tmp_path: Path) -> None:
+    workspace = WorkspacePaths(tmp_path)
+    section = _section()
+    write_translation(workspace, section, "vi", "Bản cũ.")
+    paths = translation_paths(workspace, "vi", section.doc_id, section.id)
+    before = (paths.body.read_bytes(), paths.metadata.read_bytes())
+
+    with pytest.raises(ArtifactHygieneError) as excinfo:
+        write_translation(
+            workspace, section, "vi", "Bản mới.\n\nĐã lưu cache/enrich và mark read: x\n"
+        )
+
+    assert [f.code for f in excinfo.value.findings] == ["progress_footer"]
+    # Refused before anything is touched: the previous translation stays registered.
+    assert (paths.body.read_bytes(), paths.metadata.read_bytes()) == before

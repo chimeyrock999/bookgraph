@@ -22,6 +22,7 @@ from bookgraph.annotations import (
     read_annotation,
     write_annotation,
 )
+from bookgraph.artifact_hygiene import ArtifactHygieneError
 from bookgraph.assets import asset_reference, resolve_asset_path
 from bookgraph.concept_hygiene import (
     DEFAULT_MERGE_THRESHOLD,
@@ -1521,6 +1522,11 @@ def write_section_translation(
     write is refused so a translation of old content is never registered as fresh.
     ``includes_assets`` declares whether the section's figures/tables were carried into
     the translation.
+
+    ``content`` must be the translated book content only: a write carrying a
+    ``MEDIA:`` delivery marker, a cache/mark-read progress footer, a QA/checker note,
+    an export status label, or an absolute asset link is refused (link parsed assets
+    relatively; keep diagnostics in the reply or job log).
     """
 
     resolved_doc_id = _validate_id(doc_id, "doc_id")
@@ -1535,15 +1541,18 @@ def write_section_translation(
             f"(translated {source_section_hash}, current {current_hash}); "
             "re-fetch it with get_section and translate the current content"
         )
-    write_translation(
-        workspace,
-        section,
-        resolved_lang,
-        content,
-        includes_assets=includes_assets,
-        model=model,
-        created_at=datetime.now(UTC).isoformat(),
-    )
+    try:
+        write_translation(
+            workspace,
+            section,
+            resolved_lang,
+            content,
+            includes_assets=includes_assets,
+            model=model,
+            created_at=datetime.now(UTC).isoformat(),
+        )
+    except ArtifactHygieneError as exc:
+        raise ReadingServiceError(str(exc)) from exc
     state = translation_state(workspace, resolved_lang, resolved_doc_id, section.id, current_hash)
     return _artifact_view(workspace, state, section, include_content=False)
 

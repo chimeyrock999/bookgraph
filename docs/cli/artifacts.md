@@ -592,6 +592,36 @@ not `mkstemp`'s 0600). A crash or a racing writer between the steps leaves an
 annotations, the cache is **not** rebuildable from sources (regenerating it costs
 model calls), so `index build`, `segment`, and `wiki` never delete it.
 
+### Artifact hygiene
+
+A translation body (and an annotation's `summary`/`gloss`) is **publication-clean
+book content**: it is reused by later jobs and printed in reading PDFs. Job
+diagnostics belong in the chat reply, the job log, or a report JSON — never in the
+artifact. `bookgraph.artifact_hygiene` recognises them, line by line outside fenced
+code blocks (a code listing quoting `WARNING: …` is content):
+
+| Code | Example |
+| --- | --- |
+| `media_marker` | `MEDIA:/Users/me/exports/ddia.vi-progress.pdf` — a chat delivery marker, valid only in the final reply. |
+| `progress_footer` | `Đã lưu cache/enrich và mark read: ddia.ch1`, `called mark_read`, `Marked read: …` |
+| `qa_note` | `QA: …`, `**QA note:** …`, `Checker: …`, `Internal validation: …`, `Ghi chú QA: …`, `[QA] …` |
+| `export_status` | `Translation status unknown`, `Untranslated — original text`, `Missing asset: …`, a heading or line ending in `(original)` / `(tracked)` / `(untracked)` / `(may be outdated)` |
+| `export_warning` | an export warning code (`asset_missing`, `translation_stale`, …) or `Renderer warning: …` |
+| `absolute_asset_link` | `![…](/Users/…/fig1.png)`, `file:` or `C:\` targets, `<img src="/…">` — link parsed assets relatively (e.g. `images/fig1.png`). |
+
+Enforcement:
+
+- `write_translation` / `write_section_translation` refuse such a body before
+  touching anything (the previous translation stays registered); `annotate_section`
+  refuses such a summary or gloss.
+- `complete_reading_batch` / `validate_reading_batch` block on a body written by path
+  convention, a stored annotation, or a required `.md`/`.markdown`/`.txt` artifact
+  that carries them (`translation_contaminated`, `annotation_contaminated`,
+  `artifact_contaminated`).
+- `bookgraph export translated-pdf` drops the operational lines (all codes except
+  `absolute_asset_link`, whose image may be real) from the page and reports each as
+  `translation_contaminated`, which `--strict` refuses.
+
 ## Translation bodies as read by `bookgraph export translated-pdf`
 
 The export is a **read-only consumer** of the registry above: it resolves each
@@ -602,9 +632,14 @@ way the registry does it (`VI` → `vi`). Per section:
 | Registry status | Export |
 | --- | --- |
 | `fresh` | Rendered. `freshness: "fresh"`. |
-| `stale` | Rendered with a *Translation may be outdated* note (and a `(may be outdated)` TOC marker); `freshness: "stale"` + `translation_stale`. |
-| `untracked` | Rendered with a *Translation status unknown — it may be outdated* note (and a `(not tracked)` TOC marker); `freshness: "untracked"` + `translation_untracked`. |
+| `stale` | Rendered; `freshness: "stale"` + `translation_stale`. |
+| `untracked` | Rendered; `freshness: "untracked"` + `translation_untracked`. |
 | `missing` | Untranslated: follows `--fallback`. |
+
+Freshness lives in the report, not on the reading pages. With `--show-status` (a
+debug view) the page also shows it: a *Translation may be outdated* /
+*Translation status unknown — it may be outdated* note under the heading and a
+`(may be outdated)` / `(not tracked)` TOC marker.
 
 Stale and untracked translations count as translated, so `--fallback fail` accepts
 them. `--strict` refuses `translation_stale` (known outdated) but not
@@ -657,11 +692,16 @@ is written beside the export:
      "reference": "t1.png"}
   ],
   "renderer": "playwright",
-  "output": "/path/to/workspace/exports/ddia.vi-progress.pdf"
+  "output": "/path/to/workspace/exports/ddia.vi-progress.pdf",
+  "show_status": false
 }
 ```
 
 - `source` is `translated`, `original`, or `skipped`.
+- The report is where status/debug metadata lives: the reading pages carry the title,
+  the table of contents, and book content only. `show_status` records whether the
+  export was made with `--show-status`, which also prints coverage, freshness and
+  fallback notes, TOC status markers, and *Missing asset* placeholders on the pages.
 - `freshness` is the translation's registry status (`fresh`, `stale`, or
   `untracked`) for a `translated` section, `null` otherwise.
 - `generated_at` follows `SOURCE_DATE_EPOCH` when it is set. With unchanged inputs and
@@ -670,12 +710,15 @@ is written beside the export:
   - `asset_missing`, `asset_remote`, `asset_unsupported`: an asset is not in the
     export. `--strict` refuses these.
   - `translation_stale`: the source section changed after the translation was
-    registered. Rendered with a note; `--strict` refuses it.
+    registered. Rendered (with a note under `--show-status`); `--strict` refuses it.
   - `translation_missing_assets`: a registered prose-only translation
     (`includes_assets: false`) of a section that has figures/tables. `--strict`
     refuses it.
   - `translation_untracked`: no valid registry record, or the body was edited after
-    registration. Rendered with a note; never refused.
+    registration. Rendered (with a note under `--show-status`); never refused.
+  - `translation_contaminated`: the body carried job diagnostics (see *Artifact
+    hygiene*); `reference` is the dropped line. The line is left out of the page;
+    `--strict` refuses it until the artifact is rewritten clean.
   - `translation_empty`, `translation_unreadable`: the section falls back.
   - `asset_captions_only` / `asset_text_sparse`: ingest quality warnings, passed
     through for rendered sections whose source prose is mostly captions.

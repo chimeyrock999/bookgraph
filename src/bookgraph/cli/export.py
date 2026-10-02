@@ -74,7 +74,17 @@ def export_translated_pdf(
         typer.Option(
             "--strict",
             help="Fail instead of exporting when an asset is missing, a translation is "
-            "stale, or a translation left out the section's figures/tables.",
+            "stale or carries job diagnostics, or a translation left out the section's "
+            "figures/tables.",
+        ),
+    ] = False,
+    show_status: Annotated[
+        bool,
+        typer.Option(
+            "--show-status",
+            help="Debug: also print translation status, fallback notes, coverage and "
+            "missing-asset placeholders on the reading pages (by default they are only "
+            "in the report).",
         ),
     ] = False,
     check: Annotated[
@@ -114,7 +124,11 @@ def export_translated_pdf(
 
     try:
         export = build_translated_export(
-            workspace, resolved_doc_id, lang=resolved_lang, fallback=policy
+            workspace,
+            resolved_doc_id,
+            lang=resolved_lang,
+            fallback=policy,
+            show_status=show_status,
         )
     except UntranslatedSectionsError as exc:
         _print_report(exc.report)

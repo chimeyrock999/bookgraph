@@ -5,8 +5,14 @@ The original sections manifest is the skeleton: sections are emitted in
 translation registry (:mod:`bookgraph.translations`) for the requested language, or —
 per the fallback policy — from the original parsed content, a placeholder, or not at
 all. The export only reads the registry: a translation's freshness (``fresh`` /
-``stale`` / ``untracked``) is reported per section and flagged in the PDF, so a
-progress edition never presents an outdated translation as current.
+``stale`` / ``untracked``) is reported per section in the report.
+
+The reading pages carry book content only. Status and debug metadata — freshness
+labels, "untranslated" notes, coverage, missing-asset placeholders — go to the report
+JSON, and are printed on the pages only with ``show_status`` (``--show-status``). Job
+diagnostics that leaked into a translation body (``MEDIA:`` markers, progress footers,
+QA notes; see :mod:`bookgraph.artifact_hygiene`) are dropped from the page and
+reported as ``translation_contaminated``.
 
 Original sections are rebuilt from their parsed ``document.json`` blocks (via
 ``Section.block_ids``) when available, so figures, tables and equations land next
@@ -36,12 +42,14 @@ from urllib.parse import unquote
 from markdown_it import MarkdownIt
 from markdown_it.token import Token
 
+from bookgraph.artifact_hygiene import strip_operational_lines
 from bookgraph.assets import asset_reference, resolve_asset_path
 from bookgraph.documents import read_document
 from bookgraph.exports.models import (
     ASSET_MISSING,
     ASSET_REMOTE,
     ASSET_UNSUPPORTED,
+    TRANSLATION_CONTAMINATED,
     TRANSLATION_EMPTY,
     TRANSLATION_MISSING_ASSETS,
     TRANSLATION_STALE,
@@ -140,6 +148,7 @@ def build_translated_export(
     lang: str,
     fallback: FallbackPolicy = "original",
     generated_at: str | None = None,
+    show_status: bool = False,
 ) -> TranslatedExport:
     """Assemble the reading edition for ``doc_id`` in ``lang``.
 
@@ -151,6 +160,10 @@ def build_translated_export(
     ``doc_id`` is validated as a slug and ``lang`` is normalised the way the
     translation registry does it (``VI`` → ``vi``), so neither id can traverse out of
     the workspace and ``lang="VI"`` finds the ``vi`` translations.
+
+    ``show_status`` prints status/debug metadata (freshness and fallback notes, TOC
+    status markers, coverage, missing-asset placeholders) on the reading pages; by
+    default it is only in the report.
     """
 
     try:
@@ -170,7 +183,9 @@ def build_translated_export(
 
     parsed_dir = workspace.sources_parsed / doc_id
     title, blocks = _load_document(parsed_dir, doc_id)
-    assembler = _Assembler(workspace=workspace, parsed_dir=parsed_dir, blocks=blocks)
+    assembler = _Assembler(
+        workspace=workspace, parsed_dir=parsed_dir, blocks=blocks, show_status=show_status
+    )
 
     rendered = [
         assembler.render_section(
@@ -188,6 +203,7 @@ def build_translated_export(
         generated_at or default_generated_at(),
         [entry for entry, _ in rendered],
         assembler.warnings,
+        show_status,
     )
     # Checked after rendering, not on artifact existence: an empty or unreadable
     # artifact falls back too, and must count as untranslated under ``fail``. Stale and
@@ -207,6 +223,7 @@ def _report(
     generated_at: str,
     entries: list[ExportSection],
     warnings: list[ExportWarning],
+    show_status: bool,
 ) -> ExportReport:
     translated = sum(1 for entry in entries if entry.source == "translated")
     total = len(entries)
@@ -221,6 +238,7 @@ def _report(
         coverage=round(translated / total, 4) if total else 0.0,
         sections=entries,
         warnings=warnings,
+        show_status=show_status,
     )
 
 
@@ -252,6 +270,7 @@ class _Assembler:
     workspace: WorkspacePaths
     parsed_dir: Path
     blocks: dict[str, CanonicalBlock]
+    show_status: bool = False
     warnings: list[ExportWarning] = field(default_factory=list)
     _data_uris: dict[Path, str | None] = field(default_factory=dict)
     _md: MarkdownIt = field(
@@ -279,22 +298,19 @@ class _Assembler:
             entry = self._entry(
                 section, title, "translated", state.paths.body, counter, freshness=freshness
             )
-            return entry, _section_html(
-                section, "translated", heading + _FRESHNESS_NOTES.get(freshness, "") + body
-            )
+            note = _FRESHNESS_NOTES.get(freshness, "") if self.show_status else ""
+            return entry, _section_html(section, "translated", heading + note + body)
         if fallback == "skip":
-            body = (
-                _heading(section.level, section.title)
-                + '<p class="placeholder">Not translated yet — omitted from this export.</p>'
-            )
+            body = _heading(section.level, section.title)
+            if self.show_status:
+                body += '<p class="placeholder">Not translated yet — omitted from this export.</p>'
             return self._entry(section, section.title, "skipped", None, counter), (
                 _section_html(section, "skipped", body)
             )
-        body = (
-            _heading(section.level, section.title)
-            + '<p class="source-note">Untranslated — original text</p>'
-            + self._original_body(section, counter)
-        )
+        body = _heading(section.level, section.title)
+        if self.show_status:
+            body += '<p class="source-note">Untranslated — original text</p>'
+        body += self._original_body(section, counter)
         self._quality_warnings(section, source="original")
         return self._entry(section, section.title, "original", None, counter), (
             _section_html(section, "original", body)
@@ -360,6 +376,16 @@ class _Assembler:
             )
             return None
         frontmatter, body = split_frontmatter(raw)
+        body, dropped = strip_operational_lines(body)
+        for finding in dropped:
+            self._warn(
+                TRANSLATION_CONTAMINATED,
+                f"translation artifact {relative} carries job diagnostics ({finding.code}) "
+                "that were left out of the export; remove them and rewrite it with "
+                "write_section_translation",
+                section.id,
+                finding.excerpt,
+            )
         if not body.strip():
             self._warn(
                 TRANSLATION_EMPTY,
@@ -457,7 +483,10 @@ class _Assembler:
             )
         if uri is None:
             counter.missing += 1
-            return f'<figure class="asset {block.type}">{_missing(reference)}{caption}</figure>'
+            placeholder = self._missing(reference)
+            if not (placeholder or caption):
+                return ""
+            return f'<figure class="asset {block.type}">{placeholder}{caption}</figure>'
         counter.embedded += 1
         alt = escape(block.text, quote=True)
         return f'<figure class="asset {block.type}"><img src="{uri}" alt="{alt}">{caption}</figure>'
@@ -510,7 +539,7 @@ class _Assembler:
                 uri = self._link_data_uri(src, section_id, bases)
                 if uri is None:
                     counter.missing += 1
-                    token.children[index] = _html_inline(_missing(src))
+                    token.children[index] = _html_inline(self._missing(src))
                 else:
                     counter.embedded += 1
                     child.attrSet("src", uri)
@@ -526,12 +555,12 @@ class _Assembler:
             if src_attr is None:
                 self._warn(ASSET_MISSING, "HTML <img> tag has no usable src", section_id, tag)
                 counter.missing += 1
-                return _missing(tag)
+                return self._missing(tag)
             src, (start, end) = src_attr
             uri = self._link_data_uri(src, section_id, bases)
             if uri is None:
                 counter.missing += 1
-                return _missing(src)
+                return self._missing(src)
             counter.embedded += 1
             start, end = start + 4, end + 4  # offsets are relative to the text after "<img"
             return f'{tag[:start]}src="{escape(uri, quote=True)}"{tag[end:]}'
@@ -602,6 +631,13 @@ class _Assembler:
                 reference,
             )
         return uri
+
+    def _missing(self, reference: str) -> str:
+        """Where an asset could not be embedded: a visible placeholder only in debug mode."""
+
+        if not self.show_status:
+            return ""
+        return f'<span class="missing-asset">Missing asset: {escape(reference)}</span>'
 
     def _warn(self, code: str, message: str, section_id: str, reference: str | None = None) -> None:
         self.warnings.append(
@@ -699,8 +735,6 @@ def _html_inline(content: str) -> Token:
     return token
 
 
-def _missing(reference: str) -> str:
-    return f'<span class="missing-asset">Missing asset: {escape(reference)}</span>'
 
 
 def _heading(level: int, title: str) -> str:
@@ -770,20 +804,24 @@ _FRESHNESS_LABELS = {"stale": "may be outdated", "untracked": "not tracked"}
 
 def _document_html(report: ExportReport, bodies: list[str]) -> str:
     percent = f"{report.coverage * 100:.1f}%"
+    details = (
+        (
+            "<dl>"
+            f"<dt>doc_id</dt><dd>{escape(report.doc_id)}</dd>"
+            f"<dt>language</dt><dd>{escape(report.lang)}</dd>"
+            f"<dt>generated</dt><dd>{escape(report.generated_at)}</dd>"
+            f"<dt>coverage</dt><dd>{report.translated_sections}/{report.total_sections} "
+            f"sections translated ({percent})</dd>"
+            f"<dt>fallback</dt><dd>{escape(report.fallback)}</dd>"
+            "</dl>"
+            '<p class="notice">Generated by BookGraph from section-level artifacts. A reading '
+            "edition in progress — not a reproduction of the original page layout.</p>"
+        )
+        if report.show_status
+        else ""
+    )
     frontmatter = (
-        '<header class="frontmatter">'
-        f"<h1>{escape(report.title)}</h1>"
-        "<dl>"
-        f"<dt>doc_id</dt><dd>{escape(report.doc_id)}</dd>"
-        f"<dt>language</dt><dd>{escape(report.lang)}</dd>"
-        f"<dt>generated</dt><dd>{escape(report.generated_at)}</dd>"
-        f"<dt>coverage</dt><dd>{report.translated_sections}/{report.total_sections} "
-        f"sections translated ({percent})</dd>"
-        f"<dt>fallback</dt><dd>{escape(report.fallback)}</dd>"
-        "</dl>"
-        '<p class="notice">Generated by BookGraph from section-level artifacts. A reading '
-        "edition in progress — not a reproduction of the original page layout.</p>"
-        "</header>\n"
+        f'<header class="frontmatter"><h1>{escape(report.title)}</h1>{details}</header>\n'
     )
     toc_items = []
     for entry in report.sections:
@@ -791,6 +829,8 @@ def _document_html(report: ExportReport, bodies: list[str]) -> str:
         status = _STATUS_LABELS.get(entry.source)
         if entry.freshness is not None:
             status = _FRESHNESS_LABELS.get(entry.freshness, status)
+        if not report.show_status:
+            status = None
         marker = f' <span class="status">({status})</span>' if status else ""
         toc_items.append(
             f'<li style="padding-left: {indent}pt"><a href="#{escape(entry.section_id)}">'

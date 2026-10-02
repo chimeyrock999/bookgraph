@@ -812,7 +812,10 @@ telling the user to `uv sync --extra mcp`.
   replacing any previous translation; returns the entry (status `fresh`, no
   `content`). Empty `content` is rejected. When `source_section_hash` is given and
   differs from the section's current hash the write is refused, so a translation of
-  outdated content is never registered as fresh.
+  outdated content is never registered as fresh. `content` must be the translated
+  book content only: a body carrying a `MEDIA:` marker, a cache/mark-read footer, a
+  QA/checker note, an export status label, or an absolute asset link is refused (see
+  *Artifact hygiene* in `artifacts.md`).
 - `list_section_artifacts(doc_id=None, lang=None, type="translation")` → every
   cached translation (filtered by `doc_id` / `lang`) with its status, including
   `orphaned` ones whose section no longer exists; no bodies. Only
@@ -853,7 +856,7 @@ empty list is rejected. Each requirement applies to every section of the batch:
 | `require_assets` | `true` | Every figure/table of the section whose file resolves (the `assets` of `get_section`) is listed by `block_id` in `inspected_assets` — the caller's declaration that it opened/embedded it. |
 | `inspected_assets` | `[]` | Block ids the caller inspected. |
 | `translation_lang` | `null` | When set (a slug such as `vi`, `pt-br`; lowercased), the section's cached translation `translations/<lang>/<doc_id>/<section_id>.md` exists, is non-empty, and is not `stale` in the translation registry (see `artifacts.md`). An `untracked` body (no valid registry sidecar) passes with a warning. |
-| `artifacts` | `[]` | Extra workspace-relative path templates that must exist and be non-empty per section. `{doc_id}`, `{section_id}`, `{plan_id}` expand; an absolute path, a `..` segment, an unknown field, or a path resolving outside the workspace is rejected as a request error. |
+| `artifacts` | `[]` | Extra workspace-relative path templates that must exist and be non-empty per section; a `.md`/`.markdown`/`.txt` one must also be free of job diagnostics. `{doc_id}`, `{section_id}`, `{plan_id}` expand; an absolute path, a `..` segment, an unknown field, or a path resolving outside the workspace is rejected as a request error. |
 
 Both return a report:
 
@@ -898,6 +901,11 @@ Issue codes (`blocking` unless noted):
   the section; re-translate with `write_section_translation`.
 - `translation_untracked` — non-blocking; the body has no registry record, so its
   freshness is unknown.
+- `translation_contaminated`, `annotation_contaminated`, `artifact_contaminated` —
+  the translation body, the annotation's summary/glosses, or a required text
+  artifact carries job diagnostics (`MEDIA:` markers, progress footers, QA notes,
+  export labels, absolute asset links; see *Artifact hygiene* in `artifacts.md`).
+  The message names the first offending lines; rewrite the artifact clean.
 
 Request errors — unknown/invalid `plan_id`, an unsegmented document, an empty
 `section_ids`, a plan that is already complete when `section_ids` is omitted, an
@@ -1056,8 +1064,8 @@ bookgraph export translated-pdf /path/to/workspace ddia --check           # cove
   (lowercased, so `VI` and `pt-BR` work).
 - `--fallback original|skip|fail` (default `original`). This controls what happens to
   a section that has no translation:
-  - `original` renders the original section, labelled *Untranslated — original text*;
-  - `skip` renders the title with a *Not translated yet* placeholder;
+  - `original` renders the original section;
+  - `skip` renders the title only;
   - `fail` exits `1` and lists every untranslated section. Nothing is written. A
     `stale` or `untracked` translation counts as translated (use `--strict` to refuse
     stale ones).
@@ -1068,9 +1076,16 @@ bookgraph export translated-pdf /path/to/workspace ddia --check           # cove
   backend, trying `weasyprint` first and then `playwright`. Naming a backend that is
   not installed is an error.
 - `--strict`: exit `1` without writing anything if any asset is missing, remote, or
-  unsupported, a translation is `stale` (`translation_stale`), or a registered
-  translation left out its section's figures/tables (`translation_missing_assets`).
+  unsupported, a translation is `stale` (`translation_stale`) or carries job
+  diagnostics (`translation_contaminated`), or a registered translation left out its
+  section's figures/tables (`translation_missing_assets`).
   An `untracked` translation only warns.
+- `--show-status`: debug view. Also print status metadata on the reading pages:
+  coverage/doc_id/fallback on the title page, TOC status markers (`(original)`,
+  `(may be outdated)`, `(not tracked)`, `(skipped)`), the *Untranslated — original
+  text* / *Not translated yet* / freshness notes, and *Missing asset* placeholders.
+  Without it that metadata is only in the report and the CLI output, so a reading
+  edition carries book content only.
 - `--check`: preflight only. Prints coverage and warnings and writes nothing. With
   `--strict`, it exits `1` whenever the real export would be refused.
 - The `--out` suffix must match the renderer: `.pdf` for `weasyprint`/`playwright`,
@@ -1087,8 +1102,10 @@ bookgraph export translated-pdf /path/to/workspace ddia --check           # cove
 - Translations, through the translation registry (`bookgraph.translations`) only:
   `translations/<lang>/<doc_id>/<section_id>.md` plus its `.json` sidecar, which
   decides the section's `fresh` / `stale` / `untracked` status (the sidecar is never
-  rendered). Stale and untracked translations render with a visible note and a
-  warning; see `artifacts.md`. `translation_cache/` is not read.
+  rendered). Stale and untracked translations render with a warning (and a visible
+  note under `--show-status`); see `artifacts.md`. Job diagnostics in a body
+  (`MEDIA:` markers, progress footers, QA notes) are dropped from the page and
+  reported as `translation_contaminated`. `translation_cache/` is not read.
 
 ### Asset handling
 
@@ -1101,8 +1118,9 @@ All images are embedded as `data:` URIs, so the output is self-contained.
   workspace.
 - Original asset blocks use the shared `bookgraph.assets.resolve_asset_path` resolver.
 - A link is rejected if it leaves the workspace (including through symlinks), is a
-  remote URL, or is not a png/jpeg/gif/svg/webp file. A rejected link is replaced by a
-  visible *Missing asset* placeholder and reported. It does not crash the export
+  remote URL, or is not a png/jpeg/gif/svg/webp file. A rejected link is left out of
+  the page (a block's caption stays) and reported; `--show-status` shows a *Missing
+  asset* placeholder in its place. It does not crash the export
   unless `--strict` is set.
 - The page carries a CSP that allows only `data:` images and inline styles, and both
   PDF backends refuse any URL that is not `data:`. Rendering never reads the network

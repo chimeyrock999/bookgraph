@@ -472,3 +472,54 @@ def test_explicit_section_ids_take_precedence_over_the_boundary(tmp_path: Path) 
     )
 
     assert report.section_ids == ["deep-work.ch2"]
+
+
+def test_contaminated_translation_blocks_the_batch(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path, _section(A), daily=1)
+    reqs = NOTHING.model_copy(update={"translation_lang": "vi"})
+    # Written by path convention, bypassing the registry's write check.
+    target = workspace.root / "translations" / "vi" / DOC / f"{A}.md"
+    target.parent.mkdir(parents=True)
+    target.write_text("Bản dịch.\n\nĐã lưu cache/enrich và mark read: deep-work.a\n")
+
+    report = complete_reading_batch(workspace, "daily", requirements=reqs)
+
+    assert not report.committed
+    assert [(i.code, i.section_id, i.blocking) for i in report.issues] == [
+        ("translation_contaminated", A, True)
+    ]
+    assert "progress_footer" in report.issues[0].message
+    assert _plan(workspace).completed == []
+
+    service.write_section_translation(workspace, DOC, A, "vi", "Bản dịch.\n")
+    assert complete_reading_batch(workspace, "daily", requirements=reqs).committed
+
+
+def test_contaminated_annotation_blocks_the_batch(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path, _section(A), daily=1)
+    reqs = NOTHING.model_copy(update={"require_annotation": True})
+    _annotate(workspace, A)
+    path = workspace.annotations_root / DOC / f"{A}.json"
+    payload = json.loads(path.read_text())
+    payload["summary"] = "Tóm tắt. QA note: checker passed. Đã lưu cache/enrich."
+    path.write_text(json.dumps(payload))
+
+    report = validate_reading_batch(workspace, "daily", requirements=reqs)
+
+    assert [(i.code, i.blocking) for i in report.issues] == [("annotation_contaminated", True)]
+
+
+def test_contaminated_text_artifact_blocks_the_batch(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path, _section(A), daily=1)
+    reqs = NOTHING.model_copy(
+        update={"artifacts": ["notes/{section_id}.md", "notes/{section_id}.json"]}
+    )
+    notes = workspace.root / "notes"
+    notes.mkdir()
+    (notes / f"{A}.md").write_text("Ghi chú.\nMEDIA:/tmp/out.pdf\n")
+    (notes / f"{A}.json").write_text('{"log": "MEDIA:/tmp/out.pdf"}')  # not read as text
+
+    report = validate_reading_batch(workspace, "daily", requirements=reqs)
+
+    assert [(i.code, i.section_id) for i in report.issues] == [("artifact_contaminated", A)]
+    assert f"notes/{A}.md" in report.issues[0].message

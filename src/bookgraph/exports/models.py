@@ -28,6 +28,7 @@ TranslationFreshness = Literal["fresh", "stale", "untracked"]
 ASSET_MISSING = "asset_missing"
 ASSET_REMOTE = "asset_remote"
 ASSET_UNSUPPORTED = "asset_unsupported"
+TRANSLATION_CONTAMINATED = "translation_contaminated"
 TRANSLATION_EMPTY = "translation_empty"
 TRANSLATION_MISSING_ASSETS = "translation_missing_assets"
 TRANSLATION_STALE = "translation_stale"
@@ -37,10 +38,13 @@ TRANSLATION_UNTRACKED = "translation_untracked"
 # Warning codes that mean "an asset the reader should see is not in the export".
 ASSET_WARNING_CODES: frozenset[str] = frozenset({ASSET_MISSING, ASSET_REMOTE, ASSET_UNSUPPORTED})
 
-# ``--strict`` refuses to write an export carrying any of these: a missing asset, or a
-# translation known to be outdated or to have left out the section's figures/tables.
-# ``translation_untracked`` only warns — its freshness is unknown, not known-bad.
+# ``--strict`` refuses to write an export carrying any of these: a missing asset, a
+# translation known to be outdated or to have left out the section's figures/tables,
+# or one carrying job diagnostics (dropped from the page, but the artifact needs a
+# rewrite). ``translation_untracked`` only warns — its freshness is unknown, not
+# known-bad.
 STRICT_WARNING_CODES: frozenset[str] = ASSET_WARNING_CODES | {
+    TRANSLATION_CONTAMINATED,
     TRANSLATION_MISSING_ASSETS,
     TRANSLATION_STALE,
 }
@@ -81,6 +85,8 @@ class ExportReport(BaseModel):
 
     ``coverage`` is ``translated_sections / total_sections`` (``0.0`` for an empty
     document). ``output``/``renderer`` stay ``None`` for a preflight-only run.
+    ``show_status`` records whether status/debug metadata was also printed on the
+    reading pages (``--show-status``); by default it lives only in this report.
     """
 
     doc_id: str
@@ -95,6 +101,7 @@ class ExportReport(BaseModel):
     warnings: list[ExportWarning] = Field(default_factory=list)
     renderer: str | None = None
     output: str | None = None
+    show_status: bool = False
 
     @property
     def untranslated(self) -> list[str]:

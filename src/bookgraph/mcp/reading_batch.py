@@ -23,7 +23,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from bookgraph.annotations import annotation_path, read_annotation
+from bookgraph.annotations import annotation_hygiene_findings, annotation_path, read_annotation
+from bookgraph.artifact_hygiene import HygieneFinding, scan_artifact_text, summarize_findings
 from bookgraph.index import default_index_backend
 from bookgraph.mcp.service import (
     ReadingServiceError,
@@ -63,6 +64,12 @@ class BatchRequirements(BaseModel):
       not ``stale`` in the translation registry (an ``untracked`` body only warns).
     - ``artifacts``: extra workspace-relative path templates that must exist and be
       non-empty per section; ``{doc_id}``, ``{section_id}`` and ``{plan_id}`` expand.
+
+    Whatever is checked must also be publication-clean (:mod:`bookgraph.artifact_hygiene`):
+    an annotation, translation, or Markdown/text artifact carrying job diagnostics — a
+    ``MEDIA:`` marker, a progress footer, a QA note, an export label, an absolute asset
+    link — blocks with ``annotation_contaminated`` / ``translation_contaminated`` /
+    ``artifact_contaminated``.
     """
 
     require_annotation: bool = True
@@ -325,7 +332,8 @@ def _evaluate(
 
         for template in templates:
             relative_path = _render_template(template, plan.plan_id, section)
-            if not _non_empty_file(_inside_workspace(workspace, relative_path)):
+            artifact_path = _inside_workspace(workspace, relative_path)
+            if not _non_empty_file(artifact_path):
                 issues.append(
                     BatchIssue(
                         code="artifact_missing",
@@ -333,6 +341,14 @@ def _evaluate(
                         message=f"Required artifact '{relative_path}' is missing or empty.",
                     )
                 )
+            elif artifact_path.suffix.lower() in _TEXT_ARTIFACT_SUFFIXES:
+                findings = _text_findings(artifact_path)
+                if findings:
+                    issues.append(
+                        _contamination_issue(
+                            "artifact_contaminated", section, relative_path, findings
+                        )
+                    )
 
     for block_id in sorted(inspected - seen_assets):
         issues.append(
@@ -387,6 +403,11 @@ def _check_annotation(
         reason = f"is unreadable ({exc.__class__.__name__})"
     else:
         if annotation.doc_id == section.doc_id and annotation.section_id == section.id:
+            findings = annotation_hygiene_findings(annotation)
+            if findings:
+                issues.append(
+                    _contamination_issue("annotation_contaminated", section, str(path), findings)
+                )
             return annotation
         reason = "names a different document/section"
     issues.append(
@@ -457,6 +478,9 @@ def _translation_issue(workspace: WorkspacePaths, lang: str, section: Section) -
                 "re-translate it with write_section_translation."
             ),
         )
+    findings = scan_artifact_text(state.body.decode("utf-8", errors="replace"))
+    if findings:
+        return _contamination_issue("translation_contaminated", section, str(relative), findings)
     if state.status == "untracked":
         return BatchIssue(
             code="translation_untracked",
@@ -468,6 +492,32 @@ def _translation_issue(workspace: WorkspacePaths, lang: str, section: Section) -
             ),
         )
     return None
+
+
+# Required artifacts read as text for the hygiene check; other files (JSON, images)
+# are only checked for existence.
+_TEXT_ARTIFACT_SUFFIXES = frozenset({".md", ".markdown", ".txt"})
+
+
+def _text_findings(path: Path) -> list[HygieneFinding]:
+    try:
+        return scan_artifact_text(path.read_bytes().decode("utf-8", errors="replace"))
+    except OSError:
+        return []
+
+
+def _contamination_issue(
+    code: str, section: Section, where: str, findings: list[HygieneFinding]
+) -> BatchIssue:
+    return BatchIssue(
+        code=code,
+        section_id=section.id,
+        message=(
+            f"'{where}' contains job diagnostics that do not belong in a reusable "
+            f"artifact ({summarize_findings(findings)}); remove them (keep them in the "
+            "reply or job log) and rewrite it."
+        ),
+    )
 
 
 def _validate_lang(lang: str | None) -> str | None:

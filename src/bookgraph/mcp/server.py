@@ -190,8 +190,11 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
         figure/table file was inspected — list their block ids in inspected_assets
         (require_assets); the cached translation for translation_lang exists and is not
         stale in the translation registry; and each artifacts path template exists ({doc_id},
-        {section_id}, {plan_id} expand). If any blocking issue is found, nothing is
-        written: committed=false and issues lists every reason to fix before retrying.
+        {section_id}, {plan_id} expand). The annotation, the translation, and every
+        Markdown/text artifact must also be clean of job diagnostics (MEDIA: markers,
+        cache/mark-read footers, QA notes, export labels, absolute asset paths). If any
+        blocking issue is found, nothing is written: committed=false and issues lists
+        every reason to fix before retrying.
         section_ids defaults to the plan's current batch, resolved exactly like
         get_next_section: if you read with stop_at_boundary=True (and a chapter_level),
         pass the same values here so sections past the chapter boundary are not marked.
@@ -368,7 +371,9 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
         is {title, slug?, gloss?}. The concepts argument has three intents: omit it
         (null) to leave the section's auto concepts untouched (e.g. a summary-only
         annotation); pass [] to prune the section's concepts; pass a list to replace
-        them with the agent's authoritative set.
+        them with the agent's authoritative set. Summary and glosses are book
+        explanation only: progress footers, QA/checker notes and MEDIA: markers are
+        refused.
         """
 
         try:
@@ -416,7 +421,10 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
         the section content it was made from, replacing any earlier translation. Set
         includes_assets=True when the translation carries the section's figures/
         tables. Pass source_section_hash (the current_section_hash you saw) to refuse
-        the write if the section changed while you were translating.
+        the write if the section changed while you were translating. content must be
+        the translated book content only — no MEDIA: delivery markers, cache/mark-read
+        footers, QA/checker notes, export status labels, or absolute asset paths (link
+        parsed assets relatively); such a write is refused.
         """
 
         try:

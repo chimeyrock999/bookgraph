@@ -226,3 +226,31 @@ def test_get_serves_the_body_it_validated_not_a_second_read(
 
     assert view.status == "fresh"
     assert view.content == "Bản A"
+
+
+def test_write_refuses_media_markers_and_absolute_asset_paths(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path, _section("deep-work.a"))
+
+    for body in (
+        "# Bản dịch\n\nMEDIA:/Users/me/exports/deep-work.pdf\n",
+        "# Bản dịch\n\n![Hình 1](/Users/me/ws/sources/parsed/deep-work/images/f1.png)\n",
+    ):
+        with pytest.raises(ReadingServiceError, match="operational text"):
+            service.write_section_translation(workspace, "deep-work", "deep-work.a", "vi", body)
+
+    view = service.get_section_translation(workspace, "deep-work", "deep-work.a", "vi")
+    assert view.status == "missing"
+
+
+def test_annotate_section_refuses_progress_footers(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path, _section("deep-work.a"))
+
+    with pytest.raises(ReadingServiceError, match="annotation summary"):
+        service.annotate_section(
+            workspace,
+            "deep-work",
+            "deep-work.a",
+            summary="Tóm tắt.\n\nĐã lưu cache/enrich và mark read: deep-work.a",
+        )
+
+    assert not (workspace.annotations_root / "deep-work" / "deep-work.a.json").exists()

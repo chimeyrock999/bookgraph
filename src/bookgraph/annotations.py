@@ -21,6 +21,11 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
+from bookgraph.artifact_hygiene import (
+    HygieneFinding,
+    ensure_clean_artifact,
+    scan_artifact_text,
+)
 from bookgraph.concepts import extract_concepts
 from bookgraph.models import AnnotatedConcept, Section, SectionAnnotation
 from bookgraph.utils import slugify, validate_slug_id
@@ -80,9 +85,19 @@ def build_annotation(
     When a list is given, concepts are deduplicated by slug: the first occurrence wins
     its title and the first non-empty gloss for a slug wins. Free-text gloss/summary/
     title are normalised to a single line so they cannot corrupt rendered Markdown.
+
+    The summary and glosses are book explanation, reused and rendered later, so a
+    progress footer, QA note, or delivery marker in them raises
+    :class:`~bookgraph.artifact_hygiene.ArtifactHygieneError` (a ``ValueError``). They
+    are checked before whitespace is collapsed, so line-anchored rules still apply.
     """
 
     validate_slug_id(doc_id, field_name="doc_id")
+    ensure_clean_artifact(summary, "annotation summary")
+    if concepts is not None:
+        concepts = list(concepts)
+        for raw in concepts:
+            ensure_clean_artifact(raw.gloss, f"gloss of concept '{raw.title}'")
 
     resolved_concepts: list[AnnotatedConcept] | None
     if concepts is None:
@@ -106,6 +121,17 @@ def build_annotation(
         model=model,
         created_at=created_at,
     )
+
+
+def annotation_hygiene_findings(annotation: SectionAnnotation) -> list[HygieneFinding]:
+    """Hygiene findings in a stored annotation's summary and glosses.
+
+    For annotations written before writes were checked (or by hand): the reading batch
+    boundary refuses to mark such a section read.
+    """
+
+    texts = [annotation.summary, *(concept.gloss for concept in annotation.concepts or [])]
+    return [finding for text in texts for finding in scan_artifact_text(text)]
 
 
 def annotation_path(annotations_root: Path, doc_id: str, section_id: str) -> Path:

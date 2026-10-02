@@ -140,7 +140,7 @@ def test_export_check_strict_fails_like_the_real_export(tmp_path: Path) -> None:
     )
 
     assert result.exit_code == 1
-    assert "asset problem(s) in strict mode" in result.output
+    assert "problem(s) in strict mode" in result.output
     assert not paths.exports_root.exists()
 
 

@@ -1,9 +1,12 @@
 """Assemble a partially translated book into one reading edition (HTML, then PDF).
 
 The original sections manifest is the skeleton: sections are emitted in
-``sections.jsonl`` reading order, and each one is filled from the first
-translation artifact found for the requested language, or — per the fallback
-policy — from the original parsed content, a placeholder, or not at all.
+``sections.jsonl`` reading order, and each one is filled from its translation in the
+translation registry (:mod:`bookgraph.translations`) for the requested language, or —
+per the fallback policy — from the original parsed content, a placeholder, or not at
+all. The export only reads the registry: a translation's freshness (``fresh`` /
+``stale`` / ``untracked``) is reported per section and flagged in the PDF, so a
+progress edition never presents an outdated translation as current.
 
 Original sections are rebuilt from their parsed ``document.json`` blocks (via
 ``Section.block_ids``) when available, so figures, tables and equations land next
@@ -40,12 +43,16 @@ from bookgraph.exports.models import (
     ASSET_REMOTE,
     ASSET_UNSUPPORTED,
     TRANSLATION_EMPTY,
+    TRANSLATION_MISSING_ASSETS,
+    TRANSLATION_STALE,
     TRANSLATION_UNREADABLE,
+    TRANSLATION_UNTRACKED,
     ExportReport,
     ExportSection,
     ExportWarning,
     FallbackPolicy,
     SectionSource,
+    TranslationFreshness,
 )
 from bookgraph.exports.renderers import ExportRenderer
 from bookgraph.models import ASSET_BLOCK_TYPES, CanonicalBlock, Section
@@ -56,6 +63,12 @@ from bookgraph.quality import (
     section_warnings,
 )
 from bookgraph.sections import read_sections
+from bookgraph.translations import (
+    TranslationState,
+    section_content_hash,
+    translation_state,
+    validate_lang,
+)
 from bookgraph.utils import is_url, validate_slug_id
 from bookgraph.workspace import WorkspacePaths
 
@@ -108,33 +121,6 @@ class TranslatedExport:
     report: ExportReport
 
 
-def translation_artifact_candidates(
-    workspace: WorkspacePaths, doc_id: str, section_id: str, lang: str
-) -> list[Path]:
-    """Where a section's translation may live, in lookup priority order.
-
-    ``translations/<lang>/<doc_id>/<section_id>.md`` is the curated artifact;
-    ``translation_cache/<doc_id>/<section_id>.<lang>.md`` is the cache a
-    translation run leaves behind.
-    """
-
-    return [
-        workspace.translations_root / lang / doc_id / f"{section_id}.md",
-        workspace.translation_cache_root / doc_id / f"{section_id}.{lang}.md",
-    ]
-
-
-def find_translation_artifact(
-    workspace: WorkspacePaths, doc_id: str, section_id: str, lang: str
-) -> Path | None:
-    """The first existing translation artifact for a section, or ``None``."""
-
-    for candidate in translation_artifact_candidates(workspace, doc_id, section_id, lang):
-        if candidate.is_file():
-            return candidate
-    return None
-
-
 def default_generated_at() -> str:
     """UTC timestamp for the export frontmatter, honouring ``SOURCE_DATE_EPOCH``.
 
@@ -162,14 +148,14 @@ def build_translated_export(
     lacks a translation. Missing or unsupported assets never raise: they are
     rendered as visible placeholders and reported in ``report.warnings``.
 
-    ``doc_id`` and ``lang`` are validated as lowercase slugs (as the CLI does), so an
-    API caller gets an error for ``lang="VI"`` instead of an export that silently
-    finds no translations, and neither id can traverse out of the workspace.
+    ``doc_id`` is validated as a slug and ``lang`` is normalised the way the
+    translation registry does it (``VI`` → ``vi``), so neither id can traverse out of
+    the workspace and ``lang="VI"`` finds the ``vi`` translations.
     """
 
     try:
         validate_slug_id(doc_id, field_name="doc_id")
-        validate_slug_id(lang, field_name="lang")
+        lang = validate_lang(lang)
     except ValueError as exc:
         raise ExportError(str(exc)) from exc
     manifest = workspace.sources_sections / doc_id / "sections.jsonl"
@@ -186,12 +172,13 @@ def build_translated_export(
     title, blocks = _load_document(parsed_dir, doc_id)
     assembler = _Assembler(workspace=workspace, parsed_dir=parsed_dir, blocks=blocks)
 
-    artifacts = {
-        section.id: find_translation_artifact(workspace, doc_id, section.id, lang)
-        for section in sections
-    }
     rendered = [
-        assembler.render_section(section, artifacts[section.id], fallback) for section in sections
+        assembler.render_section(
+            section,
+            translation_state(workspace, lang, doc_id, section.id, section_content_hash(section)),
+            fallback,
+        )
+        for section in sections
     ]
     report = _report(
         doc_id,
@@ -203,7 +190,9 @@ def build_translated_export(
         assembler.warnings,
     )
     # Checked after rendering, not on artifact existence: an empty or unreadable
-    # artifact falls back too, and must count as untranslated under ``fail``.
+    # artifact falls back too, and must count as untranslated under ``fail``. Stale and
+    # untracked translations are rendered, so they count as translated here; they are
+    # flagged by warnings instead (and ``--strict`` refuses stale ones).
     if fallback == "fail" and report.untranslated:
         raise UntranslatedSectionsError(report)
     html = _document_html(report, [body for _, body in rendered])
@@ -274,17 +263,25 @@ class _Assembler:
     # -- sections -----------------------------------------------------------------
 
     def render_section(
-        self, section: Section, artifact: Path | None, fallback: FallbackPolicy
+        self, section: Section, state: TranslationState, fallback: FallbackPolicy
     ) -> tuple[ExportSection, str]:
         counter = _AssetCounter()
-        if artifact is not None:
-            translated = self._translated_body(section, artifact, counter)
-            if translated is not None:
-                title, body = translated
-                self._quality_warnings(section, source="translated")
-                return self._entry(section, title, "translated", artifact, counter), (
-                    _section_html(section, "translated", body)
-                )
+        translated = self._translated_body(section, state, counter)
+        if translated is not None:
+            # A body was read, so the status is fresh, stale, or untracked (never
+            # missing, and never orphaned: the section exists).
+            freshness: TranslationFreshness = (
+                state.status if state.status in ("fresh", "stale") else "untracked"
+            )
+            title, heading, body = translated
+            self._freshness_warnings(section, state, freshness)
+            self._quality_warnings(section, source="translated")
+            entry = self._entry(
+                section, title, "translated", state.paths.body, counter, freshness=freshness
+            )
+            return entry, _section_html(
+                section, "translated", heading + _FRESHNESS_NOTES.get(freshness, "") + body
+            )
         if fallback == "skip":
             body = (
                 _heading(section.level, section.title)
@@ -310,6 +307,8 @@ class _Assembler:
         source: SectionSource,
         artifact: Path | None,
         counter: _AssetCounter,
+        *,
+        freshness: TranslationFreshness | None = None,
     ) -> ExportSection:
         return ExportSection(
             section_id=section.id,
@@ -317,22 +316,46 @@ class _Assembler:
             level=section.level,
             source=source,
             artifact=_relative(self.workspace, artifact),
+            freshness=freshness,
             assets_embedded=counter.embedded,
             assets_missing=counter.missing,
         )
 
     def _translated_body(
-        self, section: Section, artifact: Path, counter: _AssetCounter
-    ) -> tuple[str, str] | None:
-        """Render a translation artifact, or ``None`` to fall back to the original."""
+        self, section: Section, state: TranslationState, counter: _AssetCounter
+    ) -> tuple[str, str, str] | None:
+        """Render a registry translation as ``(title, heading_html, body_html)``.
 
+        ``None`` means there is no usable translation and the fallback policy applies.
+        The body is the exact bytes the registry status was decided on, never a re-read.
+        """
+
+        artifact = state.paths.body
+        relative = _relative(self.workspace, artifact)
+        if state.body is None:
+            # ``translation_state`` reads an unreadable body as missing; a file that is
+            # there but cannot be read is still worth reporting. Re-read only to recover
+            # the cause for the message — these bytes are never rendered.
+            if state.status == "missing" and artifact.exists():
+                try:
+                    artifact.read_bytes()
+                    reason = "exists but could not be read"
+                except OSError as exc:
+                    reason = str(exc)
+                self._warn(
+                    TRANSLATION_UNREADABLE,
+                    f"translation artifact {relative} is unreadable ({reason}); "
+                    "using the fallback policy instead",
+                    section.id,
+                )
+            return None
         try:
-            raw = artifact.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError) as exc:
+            raw = state.body.decode("utf-8")
+        except UnicodeDecodeError as exc:
             self._warn(
                 TRANSLATION_UNREADABLE,
-                f"translation artifact {_relative(self.workspace, artifact)} is unreadable "
-                f"({exc}); using the fallback policy instead",
+                f"translation artifact {relative} is unreadable ({exc}); "
+                "using the fallback policy instead",
                 section.id,
             )
             return None
@@ -340,8 +363,7 @@ class _Assembler:
         if not body.strip():
             self._warn(
                 TRANSLATION_EMPTY,
-                f"translation artifact {_relative(self.workspace, artifact)} is empty; "
-                "using the fallback policy instead",
+                f"translation artifact {relative} is empty; using the fallback policy instead",
                 section.id,
             )
             return None
@@ -350,12 +372,56 @@ class _Assembler:
         heading_title = _first_heading_text(tokens)
         _shift_headings(tokens, section.level)
         self._rewrite_images(tokens, section.id, [artifact.parent, *self._parsed_bases()], counter)
-        html = self._md.renderer.render(tokens, self._md.options, {})
         fm_title = frontmatter.get("title")
         title = heading_title or (fm_title if isinstance(fm_title, str) and fm_title else None)
         if heading_title is None:
-            html = _heading(section.level, title or section.title) + html
-        return title or section.title, html
+            heading = _heading(section.level, title or section.title)
+        else:
+            # Render the leading heading on its own so a freshness note can follow it.
+            heading_end = next(i for i, t in enumerate(tokens) if t.type == "heading_close") + 1
+            heading = self._md.renderer.render(tokens[:heading_end], self._md.options, {})
+            tokens = tokens[heading_end:]
+        html = self._md.renderer.render(tokens, self._md.options, {})
+        return title or section.title, heading, html
+
+    def _freshness_warnings(
+        self, section: Section, state: TranslationState, freshness: TranslationFreshness
+    ) -> None:
+        relative = _relative(self.workspace, state.paths.body)
+        if freshness == "stale":
+            self._warn(
+                TRANSLATION_STALE,
+                f"translation {relative} was made from an older version of the section; "
+                "rendered with a 'may be outdated' note",
+                section.id,
+            )
+        elif freshness == "untracked":
+            self._warn(
+                TRANSLATION_UNTRACKED,
+                f"translation {relative} has no registry record (or was edited after "
+                "registration), so its freshness is unknown; register it with "
+                "write_section_translation",
+                section.id,
+            )
+        # The registry's reuse rule: a translation is complete only when it carried the
+        # section's figures/tables, or the section has none. Untracked bodies have no
+        # ``includes_assets`` record to check.
+        if (
+            state.artifact is not None
+            and not state.artifact.includes_assets
+            and self._has_assets(section)
+        ):
+            self._warn(
+                TRANSLATION_MISSING_ASSETS,
+                f"translation {relative} is prose-only (includes_assets=false) but the "
+                "section has figures/tables; they are not in this export",
+                section.id,
+            )
+
+    def _has_assets(self, section: Section) -> bool:
+        """Whether the section owns any figure/table asset block (staged or not)."""
+
+        return bool(asset_summaries(self.blocks[b] for b in section.block_ids if b in self.blocks))
 
     def _original_body(self, section: Section, counter: _AssetCounter) -> str:
         blocks = [self.blocks[b] for b in section.block_ids if b in self.blocks]
@@ -690,6 +756,17 @@ _CSP = "default-src 'none'; img-src data:; style-src 'unsafe-inline'"
 
 _STATUS_LABELS = {"original": "original", "skipped": "skipped"}
 
+# Shown under the heading of a translated section whose freshness is not ``fresh``,
+# like the "Untranslated — original text" label of a fallback section.
+_FRESHNESS_NOTES = {
+    "stale": '<p class="source-note">Translation may be outdated — the original section '
+    "changed after it was translated</p>",
+    "untracked": '<p class="source-note">Translation status unknown — it may be outdated</p>',
+}
+
+# TOC markers for the same states, so the overview shows every non-fresh translation.
+_FRESHNESS_LABELS = {"stale": "may be outdated", "untracked": "not tracked"}
+
 
 def _document_html(report: ExportReport, bodies: list[str]) -> str:
     percent = f"{report.coverage * 100:.1f}%"
@@ -712,6 +789,8 @@ def _document_html(report: ExportReport, bodies: list[str]) -> str:
     for entry in report.sections:
         indent = (max(1, min(entry.level, 6)) - 1) * 12
         status = _STATUS_LABELS.get(entry.source)
+        if entry.freshness is not None:
+            status = _FRESHNESS_LABELS.get(entry.freshness, status)
         marker = f' <span class="status">({status})</span>' if status else ""
         toc_items.append(
             f'<li style="padding-left: {indent}pt"><a href="#{escape(entry.section_id)}">'
@@ -747,15 +826,16 @@ def write_translated_export(
 ) -> ExportReport:
     """Render ``export`` to ``output`` and write its report beside it.
 
-    With ``strict`` any missing, remote, or unsupported asset aborts before anything
-    is written. The output is rendered to a temporary sibling and moved into place,
+    With ``strict`` any missing, remote, or unsupported asset, stale translation, or
+    prose-only translation of a section with assets aborts before anything is
+    written. The output is rendered to a temporary sibling and moved into place,
     so a failed render never leaves a truncated file at ``output``.
     """
 
-    if strict and export.report.asset_warnings:
+    if strict and export.report.strict_warnings:
         raise ExportError(
-            f"{len(export.report.asset_warnings)} asset problem(s) in strict mode: "
-            + "; ".join(w.message for w in export.report.asset_warnings)
+            f"{len(export.report.strict_warnings)} problem(s) in strict mode: "
+            + "; ".join(w.message for w in export.report.strict_warnings)
         )
     output.parent.mkdir(parents=True, exist_ok=True)
     partial = output.with_name(f".{output.name}.partial")

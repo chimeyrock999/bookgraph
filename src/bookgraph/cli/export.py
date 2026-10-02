@@ -22,6 +22,7 @@ from bookgraph.exports.translated import (
     report_path_for,
     write_translated_export,
 )
+from bookgraph.translations import validate_lang
 from bookgraph.workspace import WorkspacePaths
 
 
@@ -70,7 +71,11 @@ def export_translated_pdf(
     ] = AUTO_RENDERER,
     strict: Annotated[
         bool,
-        typer.Option("--strict", help="Fail instead of exporting when any asset is missing."),
+        typer.Option(
+            "--strict",
+            help="Fail instead of exporting when an asset is missing, a translation is "
+            "stale, or a translation left out the section's figures/tables.",
+        ),
     ] = False,
     check: Annotated[
         bool,
@@ -81,7 +86,10 @@ def export_translated_pdf(
 
     workspace = WorkspacePaths(workspace_path.expanduser().resolve())
     resolved_doc_id = _validate_id(doc_id, "doc_id")
-    resolved_lang = _validate_id(lang, "lang")
+    try:
+        resolved_lang = validate_lang(lang)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc), param_hint="--lang") from exc
     if fallback not in FALLBACK_POLICIES:
         raise typer.BadParameter(
             f"--fallback must be one of: {', '.join(FALLBACK_POLICIES)}", param_hint="--fallback"
@@ -119,9 +127,9 @@ def export_translated_pdf(
     if check:
         typer.echo("export: (check only, not written)")
         # A preflight must fail exactly when the real export would be refused.
-        if strict and export.report.asset_warnings:
+        if strict and export.report.strict_warnings:
             typer.echo(
-                f"error: {len(export.report.asset_warnings)} asset problem(s) in strict mode",
+                f"error: {len(export.report.strict_warnings)} problem(s) in strict mode",
                 err=True,
             )
             raise typer.Exit(code=1)

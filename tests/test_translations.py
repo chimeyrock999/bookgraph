@@ -244,3 +244,27 @@ def test_state_carries_the_body_bytes_it_hashed(tmp_path: Path) -> None:
     state = translation_state(workspace, "vi", "deep-work", section.id, current)
 
     assert state.body == "Xin chào.".encode()
+
+
+def test_sidecar_is_read_as_utf8_bytes_regardless_of_locale(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A non-ASCII model name is stored as raw UTF-8; reading it through the locale
+    # encoding (read_text) would garble it or turn a valid registration into untracked.
+    workspace = WorkspacePaths(tmp_path)
+    section = _section()
+    write_translation(workspace, section, "vi", "Xin chào.", model="mô-hình")
+    metadata = translation_paths(workspace, "vi", "deep-work", section.id).metadata
+    real_read_text = Path.read_text
+
+    def guarded_read_text(self: Path, *args: object, **kwargs: object) -> str:
+        if self == metadata:
+            raise AssertionError("sidecar must be decoded as UTF-8 bytes, not locale text")
+        return real_read_text(self, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "read_text", guarded_read_text)
+    current = section_content_hash(section)
+    state = translation_state(workspace, "vi", "deep-work", section.id, current)
+
+    assert state.status == "fresh"
+    assert state.artifact is not None and state.artifact.model == "mô-hình"

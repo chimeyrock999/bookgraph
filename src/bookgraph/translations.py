@@ -170,7 +170,8 @@ def _read_metadata(
     if not paths.metadata.is_file():
         return None
     try:
-        artifact = SectionArtifact.model_validate_json(paths.metadata.read_text())
+        # Bytes, not read_text(): the sidecar is UTF-8 whatever the locale encoding is.
+        artifact = SectionArtifact.model_validate_json(paths.metadata.read_bytes())
     except (OSError, ValueError):
         return None
     if (artifact.lang, artifact.doc_id, artifact.section_id) != (lang, doc_id, section_id):

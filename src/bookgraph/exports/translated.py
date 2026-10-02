@@ -33,6 +33,7 @@ publisher's layout.
 from __future__ import annotations
 
 import os
+import re
 import time
 from collections import Counter
 from dataclasses import dataclass, field
@@ -281,6 +282,54 @@ def _relative(workspace: WorkspacePaths, path: Path | None) -> str | None:
         return path.relative_to(workspace.root).as_posix()
     except ValueError:
         return str(path)
+
+
+def table_text_to_html(text: str) -> str | None:
+    """Render parser table text that lost its Markdown separator row as HTML.
+
+    Some parsers store table blocks as newline-separated pipe rows but omit Markdown's
+    ``---`` separator. markdown-it therefore treats them as a paragraph, which breaks
+    original-column tables in bilingual exports. Keep normal Markdown/HTML tables on
+    their existing path; this helper is only for plain pipe row text.
+    """
+
+    rows = _parse_pipe_table_rows(text)
+    if rows is None:
+        return None
+    header, *body = rows
+    head = "".join(f"<th>{escape(cell)}</th>" for cell in header)
+    body_rows = "".join(
+        "<tr>" + "".join(f"<td>{escape(cell)}</td>" for cell in row) + "</tr>"
+        for row in body
+    )
+    return f"<table>\n<thead><tr>{head}</tr></thead>\n<tbody>{body_rows}</tbody>\n</table>"
+
+
+def _parse_pipe_table_rows(text: str) -> list[list[str]] | None:
+    lines = [line.strip() for line in text.strip().splitlines() if line.strip()]
+    if len(lines) < 2 or any("|" not in line for line in lines):
+        return None
+    rows = [_split_pipe_row(line) for line in lines]
+    widths = {len(row) for row in rows}
+    if len(widths) != 1 or next(iter(widths)) < 2:
+        return None
+    if _is_table_separator(rows[0]):
+        return None
+    if len(rows) > 1 and _is_table_separator(rows[1]):
+        rows.pop(1)
+    return rows
+
+
+def _split_pipe_row(line: str) -> list[str]:
+    if line.startswith("|"):
+        line = line[1:]
+    if line.endswith("|"):
+        line = line[:-1]
+    return [cell.strip() for cell in line.split("|")]
+
+
+def _is_table_separator(row: list[str]) -> bool:
+    return all(re.fullmatch(r":?-{3,}:?", cell.strip()) for cell in row)
 
 
 @dataclass(kw_only=True)
@@ -573,6 +622,8 @@ class _Assembler(ImageEmbedder):
                 parts.append(heading(level, block.text))
             elif block.type in ASSET_BLOCK_TYPES and asset_reference(block):
                 parts.append(self._asset_block(block, section.id, counter, source))
+            elif block.type == "table":
+                parts.append(self._table_block(block, section.id, counter, source))
             elif block.type == "equation":
                 parts.append(f'<div class="equation">{escape(block.text)}</div>')
             elif block.text.strip():
@@ -614,6 +665,16 @@ class _Assembler(ImageEmbedder):
         counter.embedded += 1
         alt = escape(block.text, quote=True)
         return f'<figure class="asset {block.type}"><img src="{uri}" alt="{alt}">{caption}</figure>'
+
+    def _table_block(
+        self, block: CanonicalBlock, section_id: str, counter: AssetCounter, source: str | None
+    ) -> str:
+        """Render a parsed table without an image asset as an HTML table when possible."""
+
+        rendered = table_text_to_html(block.text)
+        if rendered is not None:
+            return rendered
+        return self._markdown(block.text, section_id, counter, source, block.id)
 
     def _quality_warnings(self, section: Section, *, source: SectionSource) -> None:
         if not self.blocks:

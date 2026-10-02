@@ -117,6 +117,41 @@ def test_original_fallback_keeps_assets_and_equations_in_block_order(
     assert "<figcaption>Table 1. Lost table.</figcaption>" in html
 
 
+def test_original_pipe_table_block_renders_as_html_table(tmp_path: Path) -> None:
+    paths = WorkspacePaths(tmp_path)
+    from bookgraph.documents import write_document
+    from bookgraph.models import CanonicalBlock, Document
+    from bookgraph.segmenters.heading import HeadingSegmenter
+
+    document = Document(
+        doc_id=DOC,
+        title="Tiny Table Book",
+        blocks=[
+            CanonicalBlock(id="b0", type="title", text="Chapter One", level=1),
+            CanonicalBlock(id="b1", type="text", text="Before."),
+            CanonicalBlock(
+                id="b2",
+                type="table",
+                text=(
+                    "Property | Operational systems (OLTP) | Analytical systems (OLAP)\n"
+                    "Main read pattern | Point queries | Aggregate over records\n"
+                    "Main write pattern | Create/update/delete | Bulk import"
+                ),
+            ),
+            CanonicalBlock(id="b3", type="text", text="After."),
+        ],
+    )
+    write_document(document, paths.sources_parsed / DOC)
+    write_sections(HeadingSegmenter(target_level=2).segment(document), paths.sources_sections / DOC)
+
+    html = build_translated_export(paths, DOC, lang="vi", mode="bilingual").html
+
+    assert "Property | Operational systems" not in html
+    assert "<table>" in html
+    assert "<th>Property</th>" in html
+    assert "<td>Main read pattern</td>" in html
+
+
 def test_translated_headings_are_relevelled_to_the_section_level(
     workspace: WorkspacePaths,
 ) -> None:

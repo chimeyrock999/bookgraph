@@ -55,13 +55,17 @@ def test_build_server_registers_the_reading_and_query_tools(tmp_path: Path) -> N
         "get_context",
         "get_next_section",
         "get_outline",
+        "get_plan_progress",
         "get_related",
         "get_section",
+        "get_section_translation",
         "get_section_tree",
         "list_documents",
         "list_plans",
+        "list_section_artifacts",
         "mark_read",
         "search",
+        "write_section_translation",
     ]
 
 
@@ -74,6 +78,19 @@ def test_get_next_section_tool_returns_section_content(tmp_path: Path) -> None:
     assert payload["doc_id"] == "deep-work"
     assert [section["id"] for section in payload["sections"]] == ["deep-work.a"]
     assert payload["sections"][0]["text"] == "hello world"
+
+
+def test_get_plan_progress_tool_reports_chapter_progress(tmp_path: Path) -> None:
+    server = build_server(_workspace(tmp_path))
+
+    result = asyncio.run(server.call_tool("get_plan_progress", {"plan_id": "daily"}))
+
+    payload = result.structured_content
+    assert payload["remaining"] == 1
+    assert payload["chapter"]["section"]["id"] == "deep-work.a"
+    assert payload["chapter"]["remaining"] == 1
+    assert payload["chapter"]["next_boundary"] is None
+    assert [ref["id"] for ref in payload["next_sections"]] == ["deep-work.a"]
 
 
 def test_search_tool_ranks_sections(tmp_path: Path) -> None:
@@ -127,3 +144,27 @@ def test_scoped_outline_tools_return_section_tree_and_chapter(tmp_path: Path) ->
     assert chapter["current_section_id"] == "deep-work.a"
     assert [node["read"] for node in chapter["nodes"]] == [False]
     assert (chapter["completed"], chapter["total"], chapter["plan_total"]) == (0, 1, 1)
+
+
+def test_translation_tools_round_trip_through_the_cache(tmp_path: Path) -> None:
+    server = build_server(_workspace(tmp_path))
+    key = {"doc_id": "deep-work", "section_id": "deep-work.a", "lang": "vi"}
+
+    missing = asyncio.run(server.call_tool("get_section_translation", key)).structured_content
+    asyncio.run(
+        server.call_tool(
+            "write_section_translation",
+            {
+                **key,
+                "content": "xin chào thế giới",
+                "source_section_hash": missing["current_section_hash"],
+            },
+        )
+    )
+    cached = asyncio.run(server.call_tool("get_section_translation", key)).structured_content
+    listing = asyncio.run(server.call_tool("list_section_artifacts", {})).structured_content
+
+    assert missing["status"] == "missing"
+    assert cached["status"] == "fresh"
+    assert cached["content"] == "xin chào thế giới"
+    assert [a["status"] for a in listing["artifacts"]] == ["fresh"]

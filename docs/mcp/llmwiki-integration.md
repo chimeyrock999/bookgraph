@@ -25,7 +25,7 @@ BookGraph MCP owns BookGraph's **canonical reading graph and stateful reading lo
 - `reading_plans/<plan_id>.json` — per-plan progress
 - `annotations/<doc_id>/<section_id>.json` — Tier-2 agent annotations
 
-and exposes the stateful, source-grounded tools that drive a reading session: `list_documents`, `create_plan`, `get_next_section`, `get_context`, `get_concept`, `get_related`, `get_outline`, `get_section_tree`, `get_chapter_outline`, `search`, `annotate_section`, `mark_read`, `list_plans` (see [`docs/cli/commands.md`](../cli/commands.md#bookgraph-mcp) and [`reading-agent.md`](reading-agent.md)).
+and exposes the stateful, source-grounded tools that drive a reading session: `list_documents`, `create_plan`, `get_next_section`, `get_context`, `get_concept`, `get_related`, `get_outline`, `get_section_tree`, `get_chapter_outline`, `search`, `annotate_section`, `mark_read`, `list_plans`, `get_plan_progress` (see [`docs/cli/commands.md`](../cli/commands.md#bookgraph-mcp) and [`reading-agent.md`](reading-agent.md)).
 
 **BookGraph MCP never reads the generated wiki pages and never depends on llmwiki being installed.** Its source of truth is `sections.jsonl` + `indexes/bookgraph.db` + `reading_plans/*.json`, and that boundary is deliberate.
 

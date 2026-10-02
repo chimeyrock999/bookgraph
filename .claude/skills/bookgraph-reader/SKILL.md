@@ -60,6 +60,10 @@ Operational details live in `docs/cli/parse-book-large-pdfs.md`.
 4. **Advance** — once the user is done with a section, `mark_read(plan_id)` (marks
    the next unread by default) so progress persists. Then loop to step 3.
 5. **Report** — when the user pauses, `list_plans()` to show `completed/total`.
+   For "how many sections until the end of this chapter?", use
+   `get_plan_progress(plan_id)` (or the `chapter` field of `get_next_section`) —
+   don't pull the whole outline. Pass `chapter_level=2` when chapters sit under parts (a lone `# Book Title`
+   root is skipped automatically).
 
 ## Navigating and connecting
 
@@ -83,6 +87,22 @@ Operational details live in `docs/cli/parse-book-large-pdfs.md`.
 - `get_concept(concept)` — the cross-book "where else is this discussed" view. Use it
   whenever a concept recurs, to build the user's mental graph across books.
 
+## Translating sections
+
+When the user wants sections translated (e.g. read in Vietnamese, or delivered to a
+chat), reuse the cache instead of retranslating:
+
+1. `get_section_translation(doc_id, section_id, lang)` — reuse its `content` as-is
+   only when `status` is `fresh` **and** (`includes_assets` or not
+   `section_has_assets`). A fresh translation with `includes_assets` false on a
+   section that has assets left out figures/tables; mention that or redo it.
+2. Otherwise (`missing`, `stale`, or `untracked` you don't trust) translate the
+   section's real text, then `write_section_translation(doc_id, section_id, lang,
+   content, includes_assets=..., source_section_hash=<current_section_hash>)` so
+   the next run reuses it.
+3. `list_section_artifacts(doc_id, lang)` shows every cached translation and which
+   are `stale` after a re-segment.
+
 ## Behavior
 
 - **Follow the plan, but stay flexible** — if the user asks about something ahead,
@@ -97,8 +117,8 @@ Operational details live in `docs/cli/parse-book-large-pdfs.md`.
 
 ## Notes
 
-- Only `create_plan` and `mark_read` change state (the reading plan); everything
-  else is read-only.
+- Only `create_plan` and `mark_read` (the reading plan), `annotate_section`, and
+  `write_section_translation` change state; everything else is read-only.
 - Concepts require `bookgraph index build`; `search` and the graph tools also work
   before indexing (live scan), just with rougher ranking.
 - Full tool reference: `docs/cli/commands.md`; setup + client config:

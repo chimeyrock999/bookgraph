@@ -491,7 +491,7 @@ def test_raw_html_img_scanning_is_attribute_aware(workspace: WorkspacePaths) -> 
     # Custom elements named ``img-*`` are not images.
     assert '<img-zoom src="x"></img-zoom>' in html
     assert "<img-comparison-slider>" in html
-    assert [w for w in export.report.warnings if w.section_id == chapter] == []
+    assert [w for w in export.report.asset_warnings if w.section_id == chapter] == []
     assert export.report.sections[0].assets_embedded == 2
     assert export.report.sections[0].assets_missing == 0
 

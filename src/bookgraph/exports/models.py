@@ -7,7 +7,7 @@ treat them as stable strings, not display text.
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -116,6 +116,29 @@ class ExportReport(BaseModel):
     renderer: str | None = None
     output: str | None = None
 
+    @classmethod
+    def from_sections(
+        cls, sections: list[ExportSection], *, mode: ExportMode, **fields: Any
+    ) -> ExportReport:
+        """A report for ``sections`` with its coverage and fallback counts filled in."""
+
+        translated = sum(1 for entry in sections if entry.source == "translated")
+        total = len(sections)
+        return cls(
+            mode=mode,
+            sections=sections,
+            total_sections=total,
+            translated_sections=translated,
+            original_sections=sum(1 for entry in sections if entry.source == "original"),
+            skipped_sections=sum(1 for entry in sections if entry.source == "skipped"),
+            unpaired_sections=total - translated if mode == "bilingual" else 0,
+            assets_missing=sum(
+                entry.assets_missing + (entry.original_assets_missing or 0) for entry in sections
+            ),
+            coverage=round(translated / total, 4) if total else 0.0,
+            **fields,
+        )
+
     @property
     def untranslated(self) -> list[str]:
         return [entry.section_id for entry in self.sections if entry.source != "translated"]
@@ -127,3 +150,4 @@ class ExportReport(BaseModel):
     @property
     def strict_warnings(self) -> list[ExportWarning]:
         return [warning for warning in self.warnings if warning.code in STRICT_WARNING_CODES]
+

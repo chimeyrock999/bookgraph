@@ -15,10 +15,7 @@ available falls back to its ``Section.text``. Every image is embedded as a
 ``data:`` URI, so the assembled HTML is self-contained and a PDF renderer never
 needs to touch the filesystem or network.
 
-In ``bilingual`` mode every section becomes one two-column row: the original section
-on the left and, on the right, exactly what ``translated`` mode renders for it (the
-translation, or the fallback). Rows align at section level; translations are free
-Markdown with no block ids, so finer alignment is not attempted.
+``bilingual`` mode sets each section beside its original (:mod:`.bilingual`).
 
 This is a clean reading edition, not a pixel-perfect reconstruction of the
 publisher's layout.
@@ -43,6 +40,8 @@ from markdown_it.token import Token
 
 from bookgraph.assets import asset_reference, resolve_asset_path
 from bookgraph.documents import read_document
+from bookgraph.exports.bilingual import bilingual_section, columns_legend, page_style
+from bookgraph.exports.html_attrs import HTML_ATTR, HTML_ATTR_RE
 from bookgraph.exports.models import (
     ASSET_MISSING,
     ASSET_REMOTE,
@@ -83,10 +82,7 @@ _EMBEDDABLE_MIME_TYPES = frozenset(
     {"image/png", "image/jpeg", "image/gif", "image/svg+xml", "image/webp"}
 )
 
-# Raw HTML scanning for ``<img>`` tags, attribute by attribute so a ``src=`` or ``>``
-# inside another attribute's quoted value is never mistaken for the real one.
-_HTML_ATTR = r"""[^\s"'<>/=]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+))?"""
-_HTML_ATTR_RE = re.compile(r"""([^\s"'<>/=]+)(?:\s*=\s*("[^"]*"|'[^']*'|[^\s"'=<>`]+))?""")
+# Raw HTML scanning for ``<img>`` tags, attribute by attribute (see ``html_attrs``).
 # ``<img`` followed by whitespace, ``/`` or ``>``: not ``\b``, which would also match
 # custom elements such as ``<img-zoom>`` (``\b`` falls between ``g`` and ``-``).
 _IMG_OPEN = r"<img(?=[\s/>])"
@@ -94,15 +90,8 @@ _IMG_OPEN = r"<img(?=[\s/>])"
 # neither embedded nor reported), a well-formed ``<img>`` tag, and a malformed one
 # (reported, so it cannot vanish silently under the CSP).
 _HTML_IMG_SCAN_RE = re.compile(
-    rf"(?P<comment><!--.*?-->)|(?P<img>{_IMG_OPEN}(?:\s+{_HTML_ATTR})*\s*/?>)|(?P<bad>{_IMG_OPEN}[^>]*>)",
+    rf"(?P<comment><!--.*?-->)|(?P<img>{_IMG_OPEN}(?:\s+{HTML_ATTR})*\s*/?>)|(?P<bad>{_IMG_OPEN}[^>]*>)",
     re.IGNORECASE | re.DOTALL,
-)
-
-# Any start tag (attribute-aware, like ``_HTML_IMG_SCAN_RE``), with HTML comments
-# matched first so a commented-out tag is left alone.
-_HTML_START_TAG_RE = re.compile(
-    rf"(?P<comment><!--.*?-->)|<(?P<name>[A-Za-z][\w:-]*)(?P<attrs>(?:\s+{_HTML_ATTR})*)\s*(?P<end>/?>)",
-    re.DOTALL,
 )
 
 # Ingest quality warnings worth repeating in an export report: the section's source
@@ -157,8 +146,7 @@ def build_translated_export(
 ) -> TranslatedExport:
     """Assemble the reading edition for ``doc_id`` in ``lang``.
 
-    ``mode="translated"`` renders each section's translation or its fallback;
-    ``mode="bilingual"`` renders the original section beside that same rendering.
+    ``mode="bilingual"`` puts the original beside each section (see ``bilingual``).
 
     Raises :class:`ExportError` when the sections manifest is missing or invalid,
     and :class:`UntranslatedSectionsError` when ``fallback="fail"`` and any section
@@ -196,25 +184,18 @@ def build_translated_export(
         state = translation_state(workspace, lang, doc_id, section.id, content_hash)
         entry, body = assembler.render_section(section, state, fallback)
         if mode == "bilingual":
-            original, counter = assembler.original_column(section)
-            entry = entry.model_copy(
-                update={
-                    "original_assets_embedded": counter.embedded,
-                    "original_assets_missing": counter.missing,
-                }
-            )
-            body = _bilingual_row(original, body, lang)
+            entry, body = bilingual_section(entry, body, assembler.original_column(section), lang)
         entries.append(entry)
         bodies.append(_section_html(section, entry.source, body))
-    report = _report(
-        doc_id,
-        title,
-        lang,
-        mode,
-        fallback,
-        generated_at or default_generated_at(),
+    report = ExportReport.from_sections(
         entries,
-        assembler.warnings,
+        mode=mode,
+        doc_id=doc_id,
+        title=title,
+        lang=lang,
+        fallback=fallback,
+        generated_at=generated_at or default_generated_at(),
+        warnings=assembler.warnings,
     )
     # Checked after rendering, not on artifact existence: an empty or unreadable
     # artifact falls back too, and must count as untranslated under ``fail``. Stale and
@@ -224,39 +205,6 @@ def build_translated_export(
         raise UntranslatedSectionsError(report)
     html = _document_html(report, bodies)
     return TranslatedExport(html=html, report=report)
-
-
-def _report(
-    doc_id: str,
-    title: str,
-    lang: str,
-    mode: ExportMode,
-    fallback: FallbackPolicy,
-    generated_at: str,
-    entries: list[ExportSection],
-    warnings: list[ExportWarning],
-) -> ExportReport:
-    translated = sum(1 for entry in entries if entry.source == "translated")
-    total = len(entries)
-    return ExportReport(
-        doc_id=doc_id,
-        title=title,
-        lang=lang,
-        mode=mode,
-        fallback=fallback,
-        generated_at=generated_at,
-        total_sections=total,
-        translated_sections=translated,
-        original_sections=sum(1 for entry in entries if entry.source == "original"),
-        skipped_sections=sum(1 for entry in entries if entry.source == "skipped"),
-        unpaired_sections=total - translated if mode == "bilingual" else 0,
-        assets_missing=sum(
-            entry.assets_missing + (entry.original_assets_missing or 0) for entry in entries
-        ),
-        coverage=round(translated / total, 4) if total else 0.0,
-        sections=entries,
-        warnings=warnings,
-    )
 
 
 def _load_document(parsed_dir: Path, doc_id: str) -> tuple[str, dict[str, CanonicalBlock]]:
@@ -289,9 +237,8 @@ class _Assembler:
     blocks: dict[str, CanonicalBlock]
     warnings: list[ExportWarning] = field(default_factory=list)
     _data_uris: dict[Path, str | None] = field(default_factory=dict)
-    # Rendered original bodies with their asset counts, by section id: a bilingual
-    # fallback row shows the original twice, but it is rendered (and warned about) once.
-    _originals: dict[str, tuple[str, int, int]] = field(default_factory=dict)
+    # Rendered originals by section id: a bilingual fallback row renders (and warns) once.
+    _originals: dict[str, tuple[str, _AssetCounter]] = field(default_factory=dict)
     _md: MarkdownIt = field(
         default_factory=lambda: MarkdownIt("commonmark", {"html": True}).enable(
             ["table", "strikethrough"]
@@ -303,10 +250,7 @@ class _Assembler:
     def render_section(
         self, section: Section, state: TranslationState, fallback: FallbackPolicy
     ) -> tuple[ExportSection, str]:
-        """The section's report entry and its mixed body: translation, else fallback.
-
-        The body is the section's inner HTML; the caller wraps it in its ``<section>``.
-        """
+        """The report entry and inner HTML of the section: translation, else fallback."""
 
         counter = _AssetCounter()
         translated = self._translated_body(section, state, counter)
@@ -337,14 +281,12 @@ class _Assembler:
         self._quality_warnings(section, source="original")
         return self._entry(section, section.title, "original", None, counter), body
 
-    def original_column(self, section: Section) -> tuple[str, _AssetCounter]:
-        """The bilingual left column: the original section under its source title."""
+    def original_column(self, section: Section) -> tuple[str, int, int]:
+        """The bilingual left column under its source title, with its asset counts."""
 
         counter = _AssetCounter()
         body = _heading(section.level, section.title) + self._original_body(section, counter)
-        # The mixed column carries the same anchors (a translation keeps them; a fallback
-        # row repeats the original), so only it keeps ids and in-page links land there.
-        return _strip_anchor_ids(body), counter
+        return body, counter.embedded, counter.missing
 
     def _entry(
         self,
@@ -470,14 +412,12 @@ class _Assembler:
         return bool(asset_summaries(self.blocks[b] for b in section.block_ids if b in self.blocks))
 
     def _original_body(self, section: Section, counter: _AssetCounter) -> str:
-        cached = self._originals.get(section.id)
-        if cached is None:
+        if section.id not in self._originals:
             own = _AssetCounter()
-            cached = (self._render_original(section, own), own.embedded, own.missing)
-            self._originals[section.id] = cached
-        html, embedded, missing = cached
-        counter.embedded += embedded
-        counter.missing += missing
+            self._originals[section.id] = (self._render_original(section, own), own)
+        html, own = self._originals[section.id]
+        counter.embedded += own.embedded
+        counter.missing += own.missing
         return html
 
     def _render_original(self, section: Section, counter: _AssetCounter) -> str:
@@ -738,7 +678,7 @@ def _html_src_attr(attributes: str) -> tuple[str, tuple[int, int]] | None:
     inside another attribute's quoted value).
     """
 
-    for attr in _HTML_ATTR_RE.finditer(attributes):
+    for attr in HTML_ATTR_RE.finditer(attributes):
         if attr.group(1).lower() != "src":
             continue
         raw = attr.group(2)
@@ -763,44 +703,6 @@ def _missing(reference: str) -> str:
 def _heading(level: int, title: str) -> str:
     tag = f"h{max(1, min(level, 6))}"
     return f"<{tag}>{escape(title)}</{tag}>"
-
-
-def _strip_anchor_ids(html: str) -> str:
-    """Drop ``id`` attributes, and ``name`` on ``<a>``, from every start tag in ``html``.
-
-    Link targets (``href``) are untouched; only the anchors they point at go.
-    """
-
-    def replace(match: re.Match[str]) -> str:
-        if match.group("comment"):
-            return match.group(0)
-        tag = match.group("name")
-        dropped = {"id", "name"} if tag.lower() == "a" else {"id"}
-        attrs = "".join(
-            f" {attr.group(0)}"
-            for attr in _HTML_ATTR_RE.finditer(match.group("attrs"))
-            if attr.group(1).lower() not in dropped
-        )
-        return f"<{tag}{attrs}{match.group('end')}"
-
-    return _HTML_START_TAG_RE.sub(replace, html)
-
-
-def _bilingual_row(original: str, mixed: str, lang: str) -> str:
-    """One section as a two-column row: original left, mixed reading edition right.
-
-    A table, not grid/flex: both PDF backends paginate table rows reliably, and the
-    fixed layout keeps the columns at equal width whatever their content.
-    """
-
-    return (
-        '<table class="bilingual"><tr>'
-        # No source language is stored, so the original is "undetermined" rather than
-        # inheriting the page's target language.
-        f'<td class="column column-original" data-column="original" lang="und">{original}</td>'
-        f'<td class="column column-mixed" data-column="mixed" lang="{escape(lang, quote=True)}">'
-        f"{mixed}</td></tr></table>"
-    )
 
 
 def _section_html(section: Section, source: SectionSource, body: str) -> str:
@@ -845,25 +747,6 @@ pre, code { font-family: "DejaVu Sans Mono", Menlo, monospace; font-size: 9pt; }
 pre { white-space: pre-wrap; background: #f5f5f5; padding: 6pt; }
 """
 
-# Added in bilingual mode: two columns need a landscape page and a smaller type size.
-_BILINGUAL_STYLE = """
-@page { size: A4 landscape; margin: 16mm 14mm 18mm 14mm; }
-html { font-size: 10pt; }
-.columns-legend { color: #555; font-size: 9.5pt; }
-table.bilingual { width: 100%; table-layout: fixed; border-collapse: collapse; margin: 0;
-  font-size: inherit; }
-table.bilingual td.column { width: 50%; border: none; padding: 0 8pt; vertical-align: top;
-  overflow-wrap: break-word; }
-table.bilingual td.column-original { border-right: 1px solid #ccc; padding-left: 0; }
-table.bilingual td.column-mixed { padding-right: 0; }
-td.column pre, td.column code, td.column a { overflow-wrap: anywhere; }
-/* A nested table is held to its column: words wrap at boundaries and only a word
-   wider than its cell breaks, instead of the table running into the other column. */
-td.column table { width: 100%; table-layout: fixed; font-size: 8pt; }
-td.column img { max-width: 100%; height: auto; max-height: 160mm; }
-td.column-original :is(h1, h2, h3, h4, h5, h6) { bookmark-level: none; }
-"""
-
 # Self-contained page: images are data: URIs and nothing else may load or run, so a
 # script or remote reference inside a translation artifact stays inert in any viewer.
 _CSP = "default-src 'none'; img-src data:; style-src 'unsafe-inline'"
@@ -882,23 +765,8 @@ _FRESHNESS_NOTES = {
 _FRESHNESS_LABELS = {"stale": "may be outdated", "untracked": "not tracked"}
 
 
-# How the bilingual legend describes untranslated rows. ``fail`` never writes an export.
-_LEGEND_FALLBACK = {
-    "original": "Untranslated sections repeat the original text.",
-    "skip": "Untranslated sections are left out.",
-    "fail": "",
-}
-
-
 def _document_html(report: ExportReport, bodies: list[str]) -> str:
     percent = f"{report.coverage * 100:.1f}%"
-    bilingual = report.mode == "bilingual"
-    legend = (
-        '<p class="columns-legend">Left column: original text. Right column: '
-        f"{escape(report.lang)} reading edition. {_LEGEND_FALLBACK[report.fallback]}</p>"
-        if bilingual
-        else ""
-    )
     frontmatter = (
         '<header class="frontmatter">'
         f"<h1>{escape(report.title)}</h1>"
@@ -911,7 +779,7 @@ def _document_html(report: ExportReport, bodies: list[str]) -> str:
         f"sections translated ({percent})</dd>"
         f"<dt>fallback</dt><dd>{escape(report.fallback)}</dd>"
         "</dl>"
-        + legend
+        + columns_legend(report)
         + '<p class="notice">Generated by BookGraph from section-level artifacts. A reading '
         "edition in progress — not a reproduction of the original page layout.</p>"
         "</header>\n"
@@ -934,7 +802,7 @@ def _document_html(report: ExportReport, bodies: list[str]) -> str:
         f'<meta http-equiv="Content-Security-Policy" content="{_CSP}">\n'
         f'<meta name="generator" content="bookgraph export translated-pdf">\n'
         f"<title>{escape(report.title)}</title>\n"
-        f"<style>{_STYLE}{_BILINGUAL_STYLE if bilingual else ''}</style>\n</head>\n<body>\n"
+        f"<style>{_STYLE}{page_style(report)}</style>\n</head>\n<body>\n"
         + frontmatter
         + toc
         + "<main>\n"

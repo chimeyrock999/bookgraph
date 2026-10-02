@@ -239,6 +239,8 @@ src/bookgraph/
   assets.py                 # one asset-reference resolver (shared by MCP + quality)
   exports/
     translated.py           # partially translated reading edition (HTML assembly + report)
+    bilingual.py            # bilingual (original | translated) row layout and styles
+    html_attrs.py           # attribute-aware HTML tag scanning shared by exports
     renderers.py            # ExportRenderer port: weasyprint / playwright / html
   index/
     base.py                 # IndexBackend port + hits/concept models + tokenizer

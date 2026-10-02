@@ -13,7 +13,10 @@ Original sections are rebuilt from their parsed ``document.json`` blocks (via
 to the prose that surrounds them in the source; a section whose blocks are not
 available falls back to its ``Section.text``. Every image is embedded as a
 ``data:`` URI, so the assembled HTML is self-contained and a PDF renderer never
-needs to touch the filesystem or network.
+needs to touch the filesystem or network. An image that cannot be embedded (its file
+is missing, remote, or not an image) is left out of the reader-facing output — its
+caption and the surrounding prose stay — and reported in the export report; a debug
+export renders a visible *Missing asset* placeholder in its place instead.
 
 This is a clean reading edition, not a pixel-perfect reconstruction of the
 publisher's layout.
@@ -140,13 +143,16 @@ def build_translated_export(
     lang: str,
     fallback: FallbackPolicy = "original",
     generated_at: str | None = None,
+    debug_assets: bool = False,
 ) -> TranslatedExport:
     """Assemble the reading edition for ``doc_id`` in ``lang``.
 
     Raises :class:`ExportError` when the sections manifest is missing or invalid,
     and :class:`UntranslatedSectionsError` when ``fallback="fail"`` and any section
     lacks a translation. Missing or unsupported assets never raise: they are
-    rendered as visible placeholders and reported in ``report.warnings``.
+    reported in ``report.warnings`` (with the section, the file carrying the
+    reference, and the reference itself) and left out of the output, keeping their
+    captions — or, with ``debug_assets``, rendered as visible placeholders.
 
     ``doc_id`` is validated as a slug and ``lang`` is normalised the way the
     translation registry does it (``VI`` → ``vi``), so neither id can traverse out of
@@ -170,7 +176,13 @@ def build_translated_export(
 
     parsed_dir = workspace.sources_parsed / doc_id
     title, blocks = _load_document(parsed_dir, doc_id)
-    assembler = _Assembler(workspace=workspace, parsed_dir=parsed_dir, blocks=blocks)
+    assembler = _Assembler(
+        workspace=workspace,
+        parsed_dir=parsed_dir,
+        blocks=blocks,
+        manifest=manifest,
+        debug_assets=debug_assets,
+    )
 
     rendered = [
         assembler.render_section(
@@ -188,6 +200,7 @@ def build_translated_export(
         generated_at or default_generated_at(),
         [entry for entry, _ in rendered],
         assembler.warnings,
+        debug_assets=debug_assets,
     )
     # Checked after rendering, not on artifact existence: an empty or unreadable
     # artifact falls back too, and must count as untranslated under ``fail``. Stale and
@@ -207,6 +220,8 @@ def _report(
     generated_at: str,
     entries: list[ExportSection],
     warnings: list[ExportWarning],
+    *,
+    debug_assets: bool = False,
 ) -> ExportReport:
     translated = sum(1 for entry in entries if entry.source == "translated")
     total = len(entries)
@@ -219,6 +234,7 @@ def _report(
         total_sections=total,
         translated_sections=translated,
         coverage=round(translated / total, 4) if total else 0.0,
+        debug_assets=debug_assets,
         sections=entries,
         warnings=warnings,
     )
@@ -252,6 +268,8 @@ class _Assembler:
     workspace: WorkspacePaths
     parsed_dir: Path
     blocks: dict[str, CanonicalBlock]
+    manifest: Path
+    debug_assets: bool = False
     warnings: list[ExportWarning] = field(default_factory=list)
     _data_uris: dict[Path, str | None] = field(default_factory=dict)
     _md: MarkdownIt = field(
@@ -371,7 +389,9 @@ class _Assembler:
         tokens = self._md.parse(body)
         heading_title = _first_heading_text(tokens)
         _shift_headings(tokens, section.level)
-        self._rewrite_images(tokens, section.id, [artifact.parent, *self._parsed_bases()], counter)
+        self._rewrite_images(
+            tokens, section.id, [artifact.parent, *self._parsed_bases()], counter, relative
+        )
         fm_title = frontmatter.get("title")
         title = heading_title or (fm_title if isinstance(fm_title, str) and fm_title else None)
         if heading_title is None:
@@ -426,7 +446,9 @@ class _Assembler:
     def _original_body(self, section: Section, counter: _AssetCounter) -> str:
         blocks = [self.blocks[b] for b in section.block_ids if b in self.blocks]
         if not blocks:
-            return self._markdown(section.text, section.id, counter)
+            source = _relative(self.workspace, self.manifest)
+            return self._markdown(section.text, section.id, counter, source)
+        source = _relative(self.workspace, self.parsed_dir / "document.json")
         parts: list[str] = []
         for index, block in enumerate(blocks):
             if block.type == "title":
@@ -435,18 +457,21 @@ class _Assembler:
                 level = max(block.level or section.level + 1, section.level + 1)
                 parts.append(_heading(level, block.text))
             elif block.type in ASSET_BLOCK_TYPES and asset_reference(block):
-                parts.append(self._asset_block(block, section.id, counter))
+                parts.append(self._asset_block(block, section.id, counter, source))
             elif block.type == "equation":
                 parts.append(f'<div class="equation">{escape(block.text)}</div>')
             elif block.text.strip():
-                parts.append(self._markdown(block.text, section.id, counter))
+                parts.append(self._markdown(block.text, section.id, counter, source, block.id))
         return "".join(parts)
 
-    def _asset_block(self, block: CanonicalBlock, section_id: str, counter: _AssetCounter) -> str:
+    def _asset_block(
+        self, block: CanonicalBlock, section_id: str, counter: _AssetCounter, source: str | None
+    ) -> str:
         caption = f"<figcaption>{escape(block.text)}</figcaption>" if block.text.strip() else ""
         reference = asset_reference(block)
+        origin = _Origin(source, block.id)
         resolved = resolve_asset_path(self.parsed_dir, block)
-        uri = self._data_uri(Path(resolved), section_id, reference) if resolved else None
+        uri = self._data_uri(Path(resolved), section_id, reference, origin) if resolved else None
         if resolved is None:
             self._warn(
                 ASSET_MISSING,
@@ -454,10 +479,15 @@ class _Assembler:
                 f"{_relative(self.workspace, self.parsed_dir)}",
                 section_id,
                 reference,
+                origin,
             )
         if uri is None:
             counter.missing += 1
-            return f'<figure class="asset {block.type}">{_missing(reference)}{caption}</figure>'
+            placeholder = self._unavailable(reference)
+            if not placeholder and not caption:
+                return ""
+            # The caption is source prose: it stays even when the figure itself cannot.
+            return f'<figure class="asset {block.type}">{placeholder}{caption}</figure>'
         counter.embedded += 1
         alt = escape(block.text, quote=True)
         return f'<figure class="asset {block.type}"><img src="{uri}" alt="{alt}">{caption}</figure>'
@@ -474,49 +504,81 @@ class _Assembler:
 
     # -- markdown + assets --------------------------------------------------------
 
-    def _markdown(self, text: str, section_id: str, counter: _AssetCounter) -> str:
+    def _markdown(
+        self,
+        text: str,
+        section_id: str,
+        counter: _AssetCounter,
+        source: str | None,
+        block_id: str | None = None,
+    ) -> str:
         tokens = self._md.parse(text)
-        self._rewrite_images(tokens, section_id, self._parsed_bases(), counter)
+        self._rewrite_images(
+            tokens, section_id, self._parsed_bases(), counter, source, block_id
+        )
         return str(self._md.renderer.render(tokens, self._md.options, {}))
 
     def _parsed_bases(self) -> list[Path]:
         return [self.parsed_dir / "images", self.parsed_dir, self.workspace.root]
 
     def _rewrite_images(
-        self, tokens: list[Token], section_id: str, bases: list[Path], counter: _AssetCounter
+        self,
+        tokens: list[Token],
+        section_id: str,
+        bases: list[Path],
+        counter: _AssetCounter,
+        source: str | None,
+        block_id: str | None = None,
     ) -> None:
-        """Embed every image as a data: URI, or swap it for a placeholder.
+        """Embed every image as a data: URI, or drop it (a placeholder when debugging).
 
         Covers Markdown ``image`` tokens and raw HTML ``<img>`` tags (artifacts may
         carry HTML, e.g. MinerU tables): the page's CSP only allows ``data:`` images,
         so an ``<img>`` left untouched would vanish silently instead of being embedded
-        or reported.
+        or reported. A paragraph left with nothing but the dropped image is hidden, so
+        the reader sees the caption that follows it and no empty gap.
         """
 
-        for token in tokens:
+        origin = _Origin(source, block_id)
+        for position, token in enumerate(tokens):
             if token.type == "html_block":
-                token.content = self._rewrite_html_images(token.content, section_id, bases, counter)
+                token.content = self._rewrite_html_images(
+                    token.content, section_id, bases, counter, origin
+                )
             if not token.children:
                 continue
-            for index, child in enumerate(token.children):
+            children: list[Token] = []
+            dropped = False
+            for child in token.children:
                 if child.type == "html_inline":
                     child.content = self._rewrite_html_images(
-                        child.content, section_id, bases, counter
+                        child.content, section_id, bases, counter, origin
                     )
-                    continue
-                if child.type != "image":
-                    continue
-                src = str(child.attrGet("src") or "")
-                uri = self._link_data_uri(src, section_id, bases)
-                if uri is None:
-                    counter.missing += 1
-                    token.children[index] = _html_inline(_missing(src))
-                else:
-                    counter.embedded += 1
-                    child.attrSet("src", uri)
+                elif child.type == "image":
+                    src = str(child.attrGet("src") or "")
+                    uri = self._link_data_uri(src, section_id, bases, origin)
+                    if uri is None:
+                        counter.missing += 1
+                        placeholder = self._unavailable(src)
+                        if not placeholder:
+                            dropped = True
+                            continue
+                        child = _html_inline(placeholder)
+                    else:
+                        counter.embedded += 1
+                        child.attrSet("src", uri)
+                children.append(child)
+            token.children = children
+            if dropped and not any(_has_content(child) for child in children):
+                _hide_paragraph(tokens, position)
 
     def _rewrite_html_images(
-        self, html: str, section_id: str, bases: list[Path], counter: _AssetCounter
+        self,
+        html: str,
+        section_id: str,
+        bases: list[Path],
+        counter: _AssetCounter,
+        origin: _Origin,
     ) -> str:
         def replace(match: re.Match[str]) -> str:
             if match.group("comment"):
@@ -524,23 +586,27 @@ class _Assembler:
             tag = match.group(0)
             src_attr = _html_src_attr(tag[4:]) if match.group("img") else None
             if src_attr is None:
-                self._warn(ASSET_MISSING, "HTML <img> tag has no usable src", section_id, tag)
+                self._warn(
+                    ASSET_MISSING, "HTML <img> tag has no usable src", section_id, tag, origin
+                )
                 counter.missing += 1
-                return _missing(tag)
+                return self._unavailable(tag)
             src, (start, end) = src_attr
-            uri = self._link_data_uri(src, section_id, bases)
+            uri = self._link_data_uri(src, section_id, bases, origin)
             if uri is None:
                 counter.missing += 1
-                return _missing(src)
+                return self._unavailable(src)
             counter.embedded += 1
             start, end = start + 4, end + 4  # offsets are relative to the text after "<img"
             return f'{tag[:start]}src="{escape(uri, quote=True)}"{tag[end:]}'
 
         return _HTML_IMG_SCAN_RE.sub(replace, html)
 
-    def _link_data_uri(self, src: str, section_id: str, bases: list[Path]) -> str | None:
+    def _link_data_uri(
+        self, src: str, section_id: str, bases: list[Path], origin: _Origin
+    ) -> str | None:
         if not src:
-            self._warn(ASSET_MISSING, "image link has an empty target", section_id, src)
+            self._warn(ASSET_MISSING, "image link has an empty target", section_id, src, origin)
             return None
         if src.startswith("data:"):
             return src
@@ -550,6 +616,7 @@ class _Assembler:
                 f"remote image '{src}' is not fetched; exports embed workspace files only",
                 section_id,
                 src,
+                origin,
             )
             return None
         path = self._resolve_link(unquote(src.split("#", 1)[0].split("?", 1)[0]), bases)
@@ -559,9 +626,10 @@ class _Assembler:
                 f"image '{src}' was not found inside the workspace",
                 section_id,
                 src,
+                origin,
             )
             return None
-        return self._data_uri(path, section_id, src)
+        return self._data_uri(path, section_id, src, origin)
 
     def _resolve_link(self, raw: str, bases: list[Path]) -> Path | None:
         """Resolve an image link to a regular file that stays inside the workspace."""
@@ -581,7 +649,9 @@ class _Assembler:
                 continue
         return None
 
-    def _data_uri(self, path: Path, section_id: str, reference: str) -> str | None:
+    def _data_uri(
+        self, path: Path, section_id: str, reference: str, origin: _Origin
+    ) -> str | None:
         key = path.resolve()
         if key not in self._data_uris:
             mime, _ = mimetypes.guess_type(key.name)
@@ -600,12 +670,35 @@ class _Assembler:
                 f"asset '{reference}' is not an embeddable image (png, jpeg, gif, svg, webp)",
                 section_id,
                 reference,
+                origin,
             )
         return uri
 
-    def _warn(self, code: str, message: str, section_id: str, reference: str | None = None) -> None:
+    def _unavailable(self, reference: str) -> str:
+        """What stands in for an asset that cannot be embedded: nothing, unless debugging.
+
+        The warning is what tells the operator; the reader-facing edition stays clean.
+        """
+
+        return _missing(reference) if self.debug_assets else ""
+
+    def _warn(
+        self,
+        code: str,
+        message: str,
+        section_id: str,
+        reference: str | None = None,
+        origin: _Origin | None = None,
+    ) -> None:
         self.warnings.append(
-            ExportWarning(code=code, message=message, section_id=section_id, reference=reference)
+            ExportWarning(
+                code=code,
+                message=message,
+                section_id=section_id,
+                reference=reference,
+                source_path=origin.source_path if origin else None,
+                block_id=origin.block_id if origin else None,
+            )
         )
 
 
@@ -613,6 +706,16 @@ class _Assembler:
 class _AssetCounter:
     embedded: int = 0
     missing: int = 0
+
+
+@dataclass(frozen=True)
+class _Origin:
+    """Where an asset reference was read from, for its warning: a workspace-relative
+    file (translation artifact, ``document.json`` or ``sections.jsonl``) and, for a
+    reference inside a parsed block, that block's id."""
+
+    source_path: str | None
+    block_id: str | None = None
 
 
 def split_frontmatter(text: str) -> tuple[dict[str, object], str]:
@@ -691,6 +794,26 @@ def _html_src_attr(attributes: str) -> tuple[str, tuple[int, int]] | None:
             raw = raw[1:-1]
         return unescape(raw), attr.span()
     return None
+
+
+def _has_content(token: Token) -> bool:
+    """Whether an inline child renders anything a reader would see."""
+
+    if token.type in {"softbreak", "hardbreak"}:
+        return False
+    return token.type != "text" or bool(token.content.strip())
+
+
+def _hide_paragraph(tokens: list[Token], inline_index: int) -> None:
+    """Drop the ``<p>`` wrapper around an inline token that rendered empty."""
+
+    if (
+        0 < inline_index < len(tokens) - 1
+        and tokens[inline_index - 1].type == "paragraph_open"
+        and tokens[inline_index + 1].type == "paragraph_close"
+    ):
+        tokens[inline_index - 1].hidden = True
+        tokens[inline_index + 1].hidden = True
 
 
 def _html_inline(content: str) -> Token:

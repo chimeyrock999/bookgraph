@@ -51,12 +51,17 @@ class ExportWarning(BaseModel):
 
     ``reference`` is the raw asset reference (a Markdown image link or a parsed
     block's asset path) for an asset-scoped warning, ``None`` otherwise.
+    ``source_path`` is the workspace-relative file that carries that reference — the
+    translation artifact, or the parsed ``document.json`` for an original section —
+    and ``block_id`` the parsed block when the reference came from one.
     """
 
     code: str
     message: str
     section_id: str | None = None
     reference: str | None = None
+    source_path: str | None = None
+    block_id: str | None = None
 
 
 class ExportSection(BaseModel):
@@ -81,6 +86,8 @@ class ExportReport(BaseModel):
 
     ``coverage`` is ``translated_sections / total_sections`` (``0.0`` for an empty
     document). ``output``/``renderer`` stay ``None`` for a preflight-only run.
+    ``debug_assets`` records whether an asset that could not be embedded was rendered
+    as a visible placeholder (debug) or left out of the reader-facing output.
     """
 
     doc_id: str
@@ -91,6 +98,7 @@ class ExportReport(BaseModel):
     total_sections: int
     translated_sections: int
     coverage: float
+    debug_assets: bool = False
     sections: list[ExportSection] = Field(default_factory=list)
     warnings: list[ExportWarning] = Field(default_factory=list)
     renderer: str | None = None

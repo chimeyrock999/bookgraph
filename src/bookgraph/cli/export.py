@@ -35,7 +35,10 @@ def _print_report(report: ExportReport) -> None:
         f"({report.coverage * 100:.1f}%)"
     )
     for warning in report.warnings:
-        typer.echo(f"warning: {warning.code}: {warning.section_id}: {warning.message}")
+        line = f"warning: {warning.code}: {warning.section_id}: {warning.message}"
+        if warning.source_path:
+            line += f" (in {warning.source_path})"
+        typer.echo(line)
 
 
 @export_app.command("translated-pdf")
@@ -81,6 +84,15 @@ def export_translated_pdf(
         bool,
         typer.Option("--check", help="Preflight only: print coverage and warnings, write nothing."),
     ] = False,
+    debug_assets: Annotated[
+        bool,
+        typer.Option(
+            "--debug-assets",
+            help="Render a visible 'Missing asset' placeholder for every image that could "
+            "not be embedded. By default such images are left out (captions kept) and only "
+            "reported.",
+        ),
+    ] = False,
 ) -> None:
     """Export a partially translated book as one reading PDF with original-text fallback."""
 
@@ -114,7 +126,11 @@ def export_translated_pdf(
 
     try:
         export = build_translated_export(
-            workspace, resolved_doc_id, lang=resolved_lang, fallback=policy
+            workspace,
+            resolved_doc_id,
+            lang=resolved_lang,
+            fallback=policy,
+            debug_assets=debug_assets,
         )
     except UntranslatedSectionsError as exc:
         _print_report(exc.report)

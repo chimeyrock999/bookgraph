@@ -89,13 +89,15 @@ class AssetSummary:
     document directory (see :func:`bookgraph.assets.resolve_asset_path`). An
     unresolved asset still counts as an asset — its caption is in the section text and
     its content is not — but it is reported as missing rather than as something the
-    reader can open.
+    reader can open. ``reference`` is the parser's raw asset reference, so that report
+    names the exact path the parsed document points at.
     """
 
     block_id: str
     type: str
     caption: str = ""
     resolved: bool = True
+    reference: str = ""
 
 
 @dataclass(frozen=True)
@@ -118,12 +120,14 @@ class SectionWarning(BaseModel):
 
     ``code`` is the stable machine-readable kind; ``message`` is the human/agent
     sentence. ``block_id`` is set for an asset-scoped warning and ``None`` for a
-    section-scoped one.
+    section-scoped one; ``reference`` is the raw asset reference of an
+    ``asset_file_missing`` warning, ``None`` otherwise.
     """
 
     code: str
     message: str
     block_id: str | None = None
+    reference: str | None = None
 
 
 class DocumentWarning(BaseModel):
@@ -133,6 +137,7 @@ class DocumentWarning(BaseModel):
     code: str
     message: str
     block_id: str | None = None
+    reference: str | None = None
 
 
 class QualityReport(BaseModel):
@@ -218,6 +223,7 @@ def asset_summaries(
             type=block.type,
             caption=block.text,
             resolved=parsed_dir is None or resolve_asset_path(parsed_dir, block) is not None,
+            reference=asset_reference(block),
         )
         for block in blocks
         if block.type in ASSET_BLOCK_TYPES and asset_reference(block)
@@ -320,11 +326,14 @@ def _asset_warnings(
                 SectionWarning(
                     code=ASSET_FILE_MISSING,
                     message=(
-                        f"asset {asset.block_id} references a file that is not available "
-                        "under the parsed document directory (never staged, remote, or "
-                        "outside the workspace); its content is lost to the reader"
+                        f"asset {asset.block_id} references "
+                        + (f"'{asset.reference}', " if asset.reference else "")
+                        + "a file that is not available under the parsed document directory "
+                        "(never staged, remote, or outside the workspace); its content is "
+                        "lost to the reader — try 'bookgraph assets repair'"
                     ),
                     block_id=asset.block_id,
+                    reference=asset.reference or None,
                 )
             )
             continue

@@ -187,7 +187,11 @@ def test_original_fallback_keeps_assets_and_equations_in_block_order(
     assert [(w.section_id, w.reference) for w in missing] == [
         (second_entry.section_id, "missing-table.png")
     ]
-    assert "Missing asset: missing-table.png" in html
+    assert missing[0].source_path == "sources/parsed/tiny/document.json"
+    assert missing[0].block_id == "b6"
+    # A reader-facing edition keeps the lost table's caption but no placeholder.
+    assert "Missing asset" not in html
+    assert "<figcaption>Table 1. Lost table.</figcaption>" in html
 
 
 def test_translated_headings_are_relevelled_to_the_section_level(
@@ -257,7 +261,15 @@ def test_broken_remote_and_escaping_image_links_are_reported_not_embedded(
     assert export.report.sections[0].assets_missing == 5
     assert 'src="https://' not in export.html
     assert f'src="{outside}"' not in export.html
-    assert "Missing asset: https://example.com/x.png" in export.html
+    assert "Missing asset" not in export.html
+    assert "<p></p>" not in export.html  # paragraphs left empty by a dropped image vanish
+
+    debug = build_translated_export(
+        workspace, DOC, lang="vi", generated_at=GENERATED_AT, debug_assets=True
+    )
+    assert debug.report.debug_assets is True
+    assert "Missing asset: https://example.com/x.png" in debug.html
+    assert "Missing asset: images/nope.png" in debug.html
 
 
 def test_empty_translation_falls_back_with_a_warning(workspace: WorkspacePaths) -> None:

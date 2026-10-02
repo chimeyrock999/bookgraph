@@ -513,6 +513,7 @@ def _section_assets(
                 type=block.type,
                 caption=block.text,
                 resolved=path is not None,
+                reference=asset_reference(block),
             )
         )
         if path is None:

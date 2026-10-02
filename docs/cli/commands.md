@@ -1073,6 +1073,8 @@ bookgraph export translated-pdf /path/to/workspace ddia --check           # cove
   An `untracked` translation only warns.
 - `--check`: preflight only. Prints coverage and warnings and writes nothing. With
   `--strict`, it exits `1` whenever the real export would be refused.
+- `--debug-assets`: render a visible *Missing asset* placeholder wherever an asset
+  could not be embedded. Off by default, so the reading edition stays clean.
 - The `--out` suffix must match the renderer: `.pdf` for `weasyprint`/`playwright`,
   `.html`/`.htm` for `html`. A mismatch, or a suffix that `auto` cannot map to a
   format, exits `2`.
@@ -1101,9 +1103,13 @@ All images are embedded as `data:` URIs, so the output is self-contained.
   workspace.
 - Original asset blocks use the shared `bookgraph.assets.resolve_asset_path` resolver.
 - A link is rejected if it leaves the workspace (including through symlinks), is a
-  remote URL, or is not a png/jpeg/gif/svg/webp file. A rejected link is replaced by a
-  visible *Missing asset* placeholder and reported. It does not crash the export
-  unless `--strict` is set.
+  remote URL, or is not a png/jpeg/gif/svg/webp file. A rejected link, or an asset
+  block whose file is missing, is left out of the output and reported with its
+  section, reference, and the file carrying it. The caption and surrounding prose
+  stay, and a paragraph that held nothing but the image is dropped. With
+  `--debug-assets` it is replaced by a visible *Missing asset* placeholder instead.
+  It does not crash the export unless `--strict` is set. To get the figure back, run
+  `bookgraph assets repair`.
 - The page carries a CSP that allows only `data:` images and inline styles, and both
   PDF backends refuse any URL that is not `data:`. Rendering never reads the network
   or arbitrary files, and scripts in artifact HTML never run.
@@ -1122,7 +1128,8 @@ All images are embedded as `data:` URIs, so the output is self-contained.
 ### Prints
 
 - `doc_id`, `lang`, `fallback`, and `coverage: <translated>/<total> (<pct>%)`.
-- One `warning: <code>: <section_id>: <message>` line per warning.
+- One `warning: <code>: <section_id>: <message>` line per warning, followed by
+  ` (in <source_path>)` when the warning names the file carrying the reference.
 - `renderer`, `export`, and `report` paths. With `--check` it prints
   `export: (check only, not written)` instead.
 
@@ -1143,6 +1150,74 @@ All images are embedded as `data:` URIs, so the output is self-contained.
 | `weasyprint` | `uv sync --extra pdf` (also needs the Pango system library, e.g. `brew install pango`) |
 | `playwright` | `uv sync --extra pdf-chromium && uv run playwright install chromium` |
 | `html` | built in |
+
+## `bookgraph assets repair`
+
+**Status:** Implemented.
+
+Recover image/table files that a parsed document references but never staged (the
+`asset_file_missing` quality warning, `asset_missing` in an export).
+
+```bash
+bookgraph assets repair /path/to/workspace ddia --dry-run
+bookgraph assets repair /path/to/workspace ddia
+bookgraph assets repair /path/to/workspace ddia --from ~/ddia-figures
+```
+
+### Inputs
+
+- `workspace_path`, `doc_id`: workspace root and a parsed document id (slug-validated).
+- `--from DIR` (repeatable): extra directories to search after the parser output.
+- `--dry-run`: report what would be recovered and write nothing.
+- `--json`: print the repair report as JSON instead of lines.
+
+### Behavior
+
+Every asset block whose reference does not resolve (through the shared
+`bookgraph.assets.resolve_asset_path`) is looked up, in order, in:
+
+1. the parser output: any file under `sources/parsed/<doc_id>/` whose path ends with
+   the reference, else whose basename matches it (hidden directories and symlinks
+   are skipped);
+2. the source EPUB (`document.metadata.source_path`), when there is one, matched like
+   the parse-time EPUB stager matches members;
+3. each `--from` directory, matched like the parser output.
+
+The first source with exactly one match wins. Byte-identical copies count as one
+match. When several different files match, the asset is reported as `ambiguous` and
+left alone, because guessing could show the wrong figure. A recovered file is copied
+into `sources/parsed/<doc_id>/images/` under a link-safe, non-clashing name, and its
+block is repointed there (see *Repaired asset blocks* in `artifacts.md`). Remote and
+absolute references are not repair candidates.
+
+### Writes
+
+- `sources/parsed/<doc_id>/images/<name>` for each recovered file.
+- `sources/parsed/<doc_id>/document.json`, atomically, only when something was
+  recovered.
+- `sources/sections/<doc_id>/quality.json`, re-checked against the repaired document,
+  when a sections manifest exists and something was recovered.
+
+### Must not do
+
+- Must not change block text, ids, or order, sections, or translation artifacts.
+- Must not rewrite a reference it could not recover. The export already leaves
+  such an asset out and keeps its caption.
+- Must not fetch remote assets.
+
+### Prints
+
+- `doc_id`, `missing: <n>`, `recovered: <n>`.
+- One line per missing asset: `recovered: <block_id> [<section_ids>]: <reference> ->
+  images/<name> (from <source>)`, `ambiguous: … <n> candidate files, none used: …`,
+  or `unrecoverable: <block_id> [<section_ids>]: <reference>`.
+- `quality: <path> (refreshed)` when the quality report was rewritten, and
+  `repair: (dry run, nothing written)` with `--dry-run`.
+
+### Errors
+
+- Exit `2` when `document.json` is missing, the sections manifest is invalid, or a
+  `--from` path is not a directory. An unrecoverable asset is not an error.
 
 ## Book-level parse / wiki compile contracts
 

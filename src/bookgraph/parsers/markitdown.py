@@ -387,7 +387,12 @@ def _unique_name(name: str, used_names: set[str]) -> str:
 
 
 def clean_asset_reference(source_ref: str) -> str:
-    """Drop URL fragment/query and percent-decode so the path can match a zip member."""
+    """Drop URL fragment/query and percent-decode so the path can match a zip member.
+
+    Still needed with MarkItDown 0.1.8: it now decodes manifest hrefs to find chapters, but
+    keeps each ``<img>`` src percent-encoded in the Markdown (``Figure%201.png``), while zip
+    member names are stored decoded (``Figure 1.png``).
+    """
 
     path = source_ref.split("#", 1)[0].split("?", 1)[0]
     return unquote(path).strip()

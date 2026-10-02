@@ -1238,6 +1238,8 @@ All images are embedded as `data:` URIs, so the output is self-contained.
 - `doc_id`, `lang`, `mode`, `fallback`, and `coverage: <translated>/<total> (<pct>%)`.
 - One `warning: <code>: <section_id>: <message>` line per warning, followed by
   ` (in <source_path>)` when the warning names the file carrying the reference.
+  In `bilingual` mode the message is prefixed with `[original column] ` when the
+  warning's `column` is `original`.
 - `renderer`, `export`, and `report` paths. With `--check` it prints
   `export: (check only, not written)` instead.
 

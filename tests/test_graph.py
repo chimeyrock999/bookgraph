@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from bookgraph.graph import build_section_graph, resolve_chapter
+from bookgraph.graph import build_section_graph, chapter_span, resolve_chapter
 from bookgraph.models import Section
 
 
@@ -91,3 +91,25 @@ def test_resolve_chapter_works_on_graph_nodes() -> None:
     assert resolve_chapter(nodes, "ch1-a").id == "ch1"
     assert resolve_chapter(nodes, "ch1-a", chapter_level=3).id == "ch1-a"
     assert resolve_chapter(nodes, "book").id == "book"
+
+
+def test_chapter_span_returns_members_and_boundary() -> None:
+    sections = [
+        Section(id=i, doc_id="d", title=i, level=lvl, heading_path=[i], text="")
+        for i, lvl in [("book", 1), ("ch1", 2), ("ch1-a", 3), ("ch2", 2)]
+    ]
+    nodes = build_section_graph("d", sections).nodes
+
+    span = chapter_span(nodes, "ch1-a")
+    assert span.chapter.id == "ch1"
+    assert span.member_ids == ["ch1", "ch1-a"]
+    assert span.boundary is not None and span.boundary.id == "ch2"
+
+    root = chapter_span(nodes, "book")
+    assert root.chapter.id == "book"
+    assert root.member_ids == ["book"]
+    assert root.boundary is not None and root.boundary.id == "ch1"
+
+    whole = chapter_span(nodes, "ch1-a", chapter_level=1)
+    assert whole.member_ids == ["book", "ch1", "ch1-a", "ch2"]
+    assert whole.boundary is None

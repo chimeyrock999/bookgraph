@@ -409,6 +409,9 @@ bookgraph reading-plan progress /path/to/workspace <plan_id> --chapter-level 2
   heading (a `# Book Title` above every chapter, common for Markdown/EPUB), that
   lone root is skipped one level down so the scope is the chapter, not the whole
   book. Pass `--chapter-level` explicitly for part/chapter books or deeper wrappers.
+  While that lone root is itself the next unread section (day 1 of a fresh plan),
+  the scope is the root's own section only and the boundary is its first child, so
+  the first tick does not span the whole book.
 
 #### Writes
 

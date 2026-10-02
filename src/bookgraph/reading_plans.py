@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from bookgraph.graph import build_section_graph, resolve_chapter
+from bookgraph.graph import build_section_graph, chapter_span
 from bookgraph.models import ReadingPlan, Section
 from bookgraph.utils import validate_slug_id
 
@@ -108,7 +108,9 @@ def chapter_progress(
     ``get_outline``. The scope is resolved by :func:`~bookgraph.graph.resolve_chapter`:
     the outermost ancestor of the next unread section (skipping a lone book-title root)
     by default, or the nearest ancestor-or-self whose heading ``level`` is at most
-    ``chapter_level`` (e.g. ``2`` for chapters nested under level-1 parts).
+    ``chapter_level`` (e.g. ``2`` for chapters nested under level-1 parts). Its members
+    and boundary come from :func:`~bookgraph.graph.chapter_span`; while a lone root is
+    itself being read, the scope is that one section and the boundary its first child.
     """
 
     if chapter_level is not None and chapter_level < 1:
@@ -136,25 +138,16 @@ def chapter_progress(
         )
 
     nodes = build_section_graph(plan.doc_id, sections).nodes
-    position = {node.id: index for index, node in enumerate(nodes)}
     current_id = unread[0]
-    if current_id not in position:
+    if not any(node.id == current_id for node in nodes):
         raise ValueError(
             f"reading plan '{plan.plan_id}' references unknown section '{current_id}' "
             f"in document '{plan.doc_id}'"
         )
 
-    chapter = resolve_chapter(nodes, current_id, chapter_level=chapter_level)
-
-    # The chapter's subtree is the contiguous run after it of strictly deeper sections,
-    # mirroring how build_section_graph assigns parents; the first section past it is
-    # the boundary.
-    start = position[chapter.id]
-    end = start + 1
-    while end < len(nodes) and nodes[end].level > chapter.level:
-        end += 1
-    subtree = {node.id for node in nodes[start:end]}
-    boundary = nodes[end] if end < len(nodes) else None
+    span = chapter_span(nodes, current_id, chapter_level=chapter_level)
+    chapter, boundary = span.chapter, span.boundary
+    subtree = set(span.member_ids)
 
     in_chapter = [section_id for section_id in plan.section_ids if section_id in subtree]
     unread_in_chapter = [section_id for section_id in in_chapter if section_id not in completed]

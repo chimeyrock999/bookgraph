@@ -18,6 +18,8 @@ has not been indexed yet.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from pydantic import BaseModel, Field
 
 from bookgraph.models import Section
@@ -98,7 +100,8 @@ def resolve_chapter(
     the outermost ancestor — except that a **lone** top-level root (one ``# Book Title``
     heading above every chapter, common for Markdown/EPUB ingestion) is skipped one level
     down the path, so the scope is the chapter rather than the whole book. The root
-    itself stays the scope while it is the section being read.
+    itself stays the scope while it is the section being read (see
+    :func:`chapter_span` for how far that scope reaches).
 
     Shared by every API that needs "the chapter the reader is in", so they never
     disagree. ``nodes`` come from :func:`build_section_graph` or the persisted index.
@@ -116,5 +119,46 @@ def resolve_chapter(
         return next((node for node in path if node.level <= chapter_level), path[-1])
 
     root = path[-1]
-    lone_root = sum(1 for node in nodes if node.parent_id is None) == 1
-    return path[-2] if lone_root and len(path) > 1 else root
+    return path[-2] if _is_lone_root(nodes, root) and len(path) > 1 else root
+
+
+def _is_lone_root(nodes: list[SectionNode], node: SectionNode) -> bool:
+    """Whether ``node`` is the document's only top-level section."""
+
+    return node.parent_id is None and sum(1 for n in nodes if n.parent_id is None) == 1
+
+
+@dataclass(frozen=True)
+class ChapterSpan:
+    """A resolved chapter: its heading, member section ids, and the boundary after it."""
+
+    chapter: SectionNode
+    member_ids: list[str]
+    boundary: SectionNode | None
+
+
+def chapter_span(
+    nodes: list[SectionNode], section_id: str, *, chapter_level: int | None = None
+) -> ChapterSpan:
+    """Resolve the chapter containing ``section_id`` and the sections it spans.
+
+    The chapter comes from :func:`resolve_chapter`; its members are the chapter and the
+    contiguous run of strictly deeper sections after it (mirroring how
+    :func:`build_section_graph` assigns parents), and ``boundary`` is the first section
+    past that run (``None`` at the end of the document). One exception: while a lone
+    book-title root is itself being read (and no ``chapter_level`` is given), the scope
+    is the root's own section only, with its first child as the boundary — so the first
+    reading tick of a book-rooted document does not span the whole book.
+    """
+
+    chapter = resolve_chapter(nodes, section_id, chapter_level=chapter_level)
+    start = next(index for index, node in enumerate(nodes) if node.id == chapter.id)
+    end = start + 1
+    if not (chapter_level is None and _is_lone_root(nodes, chapter)):
+        while end < len(nodes) and nodes[end].level > chapter.level:
+            end += 1
+    return ChapterSpan(
+        chapter=chapter,
+        member_ids=[node.id for node in nodes[start:end]],
+        boundary=nodes[end] if end < len(nodes) else None,
+    )

@@ -315,10 +315,17 @@ def test_chapter_progress_skips_a_lone_book_root() -> None:
     assert progress.next_section_ids == ["ch1-a"]
 
 
-def test_chapter_progress_keeps_the_lone_root_while_reading_it() -> None:
+def test_chapter_progress_scopes_a_lone_root_being_read_to_itself() -> None:
+    # day 1 of a fresh plan on a book-rooted doc: the root's own text is the scope,
+    # so a boundary-clipped batch stops before the first chapter
     progress = chapter_progress(_rooted_plan(), _ROOTED_BOOK)
 
     assert progress.chapter_id == "book"
+    assert progress.total_in_chapter == 1
+    assert progress.remaining_in_chapter == 1
+    assert progress.next_section_ids == ["book"]
+    assert progress.next_boundary_id == "ch1"
+    assert progress.remaining == 4
 
 
 def test_chapter_progress_explicit_level_does_not_skip_the_root() -> None:

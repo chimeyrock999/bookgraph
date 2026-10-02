@@ -142,7 +142,8 @@ ports/adapters:
 - [MarkItDown](https://github.com/microsoft/markitdown) — optional Office/HTML/etc.
   to Markdown conversion for the `markitdown` parser adapter.
 - [llm-wiki-compiler](https://github.com/atomicstrata/llm-wiki-compiler) — optional
-  wiki compiler target; BookGraph's `llmwiki` backend stages section Markdown for it.
+  wiki compiler target (>= 1.4.0); `bookgraph llmwiki bridge` stages sections for it
+  and `bookgraph llmwiki view` opens its local web viewer as BookGraph's wiki UI.
 - [FastMCP](https://github.com/jlowin/fastmcp) — optional MCP server framework used
   by `bookgraph mcp` when the `mcp` extra is installed.
 

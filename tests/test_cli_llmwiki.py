@@ -120,7 +120,8 @@ def test_llmwiki_bridge_stages_sections_with_provenance(tmp_path: Path) -> None:
     assert "staged: 2" in result.output
     assert "unchanged: 0" in result.output
 
-    intro = tmp_path / "llmwiki" / "sources" / "deep-work.intro.md"
+    # A new project groups sources by book: sources/<doc_id>/<section_id>.md.
+    intro = tmp_path / "llmwiki" / "sources" / "deep-work" / "deep-work.intro.md"
     assert intro.is_file()
     text = intro.read_text()
     assert 'bookgraph_doc_id: "deep-work"' in text
@@ -158,8 +159,9 @@ def test_llmwiki_bridge_plan_stages_only_read_sections(tmp_path: Path) -> None:
 
     assert result.exit_code == 0, result.output
     assert "staged: 1" in result.output
-    assert (tmp_path / "llmwiki" / "sources" / "deep-work.intro.md").is_file()
-    assert not (tmp_path / "llmwiki" / "sources" / "deep-work.chapter-1.md").exists()
+    sources = tmp_path / "llmwiki" / "sources" / "deep-work"
+    assert (sources / "deep-work.intro.md").is_file()
+    assert not (sources / "deep-work.chapter-1.md").exists()
 
 
 def test_llmwiki_bridge_plan_with_nothing_read_stages_nothing(tmp_path: Path) -> None:

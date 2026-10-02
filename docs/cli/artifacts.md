@@ -580,15 +580,16 @@ the `.json` sidecar beside it is the registry record, mirroring
 - `content_hash`: `sha256:` over the body's UTF-8 bytes at write time. It binds the
   sidecar to the body it describes: a body overwritten afterwards (a path-convention
   writer, a manual edit) no longer matches and reads as `untracked`.
-- `includes_assets`: whether the translation carries the section's figures/tables,
-  derived from the body by `write_section_translation`: every **staged** asset block
-  of the section (one whose file resolves, i.e. one `get_section` returns as an
-  `AssetRef`) must be linked by a Markdown image or `<img src>` that resolves to the
-  same file (its `AssetRef.link`, or a workspace-relative path). Claiming `true` for
-  a body that leaves one out is refused. The writer's claim only stands for asset
-  blocks whose file was never staged, which no body can link. Readers never trust the
-  stored value alone: the read tools and the export re-check the body against the
-  section's current assets.
+- `includes_assets`: the writer's claim that the translation carries the section's
+  figures/tables, checked against the body by `write_section_translation`: every
+  **staged** asset block of the section (one whose file resolves, i.e. one
+  `get_section` returns as an `AssetRef`) must be linked by a Markdown image or
+  `<img src>` that resolves to the same file (its `AssetRef.link`, or a
+  workspace-relative path), and claiming `true` for a body that leaves one out is
+  refused. Readers never trust the stored claim alone: the read tools and the export
+  re-check the body against the section's current assets, and the claim only stands
+  for asset blocks whose file was never staged (now or after a later re-parse), which
+  no body can link.
 - `notes` (optional): the writer's free-text side channel — QA/checker results,
   terminology decisions, job remarks. Stored only here, never in the body; returned by
   `get_section_translation` / `list_section_artifacts`.

@@ -147,11 +147,13 @@ def write_section_translation(
     when it fetched the section to translate; if the section has changed since, the
     write is refused so a translation of old content is never registered as fresh.
     ``includes_assets`` declares whether the section's figures/tables were carried into
-    the translation; the recorded value is derived from ``content``: every staged
-    figure/table of the section must be linked by an image that resolves to its file
-    (write its ``AssetRef.link``). Claiming ``True`` for a body that leaves one out is
-    refused, listing the missing links; the writer's claim only stands for assets whose
-    file was never staged, which no body can link.
+    the translation. It is checked against ``content``: every staged figure/table of
+    the section must be linked by an image that resolves to its file (write its
+    ``AssetRef.link``), and claiming ``True`` for a body that leaves one out is
+    refused, listing the missing links. The claim itself is what the sidecar records:
+    readers re-derive completeness from the body, and the claim only stands for assets
+    whose file was never staged (now or after a later re-parse), which no body can
+    link. The returned view reports the verified value.
 
     This is the only translation store: a translation file written anywhere else (under
     ``translations/`` by hand, or an agent's own ``translation_cache/``) is never read.
@@ -195,7 +197,7 @@ def write_section_translation(
         section,
         resolved_lang,
         content,
-        includes_assets=assets.includes_assets(includes_assets),
+        includes_assets=includes_assets,
         model=model,
         created_at=datetime.now(UTC).isoformat(),
         notes=notes,

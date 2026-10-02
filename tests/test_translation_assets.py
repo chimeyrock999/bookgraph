@@ -16,6 +16,7 @@ from bookgraph.exports.translated import (
 )
 from bookgraph.mcp import service
 from bookgraph.mcp.service import ReadingServiceError
+from bookgraph.models import CanonicalBlock, Document
 from bookgraph.parsers.markdown import document_from_markdown
 from bookgraph.sections import read_sections, write_sections
 from bookgraph.segmenters.heading import HeadingSegmenter
@@ -191,7 +192,7 @@ def test_write_refuses_a_false_includes_assets_claim(workspace: WorkspacePaths) 
     assert translation_state(workspace, "vi", DOC, chapter, None).status == "missing"
 
 
-def test_write_derives_includes_assets_from_the_body(workspace: WorkspacePaths) -> None:
+def test_write_reports_includes_assets_verified_from_the_body(workspace: WorkspacePaths) -> None:
     chapter, _, third = _section_ids(workspace)
 
     linked = service.write_section_translation(
@@ -200,9 +201,36 @@ def test_write_derives_includes_assets_from_the_body(workspace: WorkspacePaths) 
     prose = service.write_section_translation(workspace, DOC, third, "vi", "# Phần Ba\n")
 
     assert (linked.includes_assets, linked.missing_assets) == (True, [])
-    assert translation_state(workspace, "vi", DOC, chapter, None).artifact.includes_assets
     # Nothing to carry: a prose-only section's translation is complete.
     assert prose.includes_assets is True
+    # The sidecar keeps the writer's claim, not the derived value.
+    stored = translation_state(workspace, "vi", DOC, chapter, None).artifact
+    assert stored is not None and stored.includes_assets is False
+
+
+def test_unclaimed_write_is_not_vouched_for_an_asset_a_reparse_adds(
+    workspace: WorkspacePaths, tmp_path: Path
+) -> None:
+    _, _, third = _section_ids(workspace)  # no figure/table yet
+    service.write_section_translation(workspace, DOC, third, "vi", "# Phần Ba\n\nChữ.\n")
+    # A re-parse adds an uncaptioned figure whose file was never staged: the section
+    # text, and so its hash, stay the same.
+    blocks = [
+        *_blocks(),
+        CanonicalBlock(id="b10", type="image", text="", asset_path="never.png", page_idx=2),
+    ]
+    document = Document(doc_id=DOC, title="Tiny Book", blocks=blocks)
+    write_document(document, workspace.sources_parsed / DOC)
+    write_sections(
+        HeadingSegmenter(target_level=2).segment(document), workspace.sources_sections / DOC
+    )
+
+    view = service.get_section_translation(workspace, DOC, third, "vi")
+    export = _export(workspace)
+
+    assert (view.status, view.section_has_assets) == ("fresh", True)
+    assert view.includes_assets is False
+    assert _codes(export.report, third) == [TRANSLATION_MISSING_ASSETS]
 
 
 def test_prose_only_write_is_recorded_with_its_missing_assets(workspace: WorkspacePaths) -> None:

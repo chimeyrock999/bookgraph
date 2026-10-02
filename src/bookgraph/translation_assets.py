@@ -51,8 +51,12 @@ class TranslationAssetCheck:
 
 
 def translation_link_bases(root: Path, parsed_dir: Path, body_dir: Path) -> list[Path]:
-    """Where a translation's relative image links resolve, in the export's order: next
-    to the body, then under the parsed document, then the workspace root."""
+    """Where a translation's relative image links resolve: next to the body, then under
+    the parsed document, then the workspace root.
+
+    The one list the export (embedding and structure check), the MCP structure check,
+    and :func:`check_translation_assets` all resolve against.
+    """
 
     return [body_dir, parsed_dir / "images", parsed_dir, root]
 

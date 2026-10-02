@@ -834,12 +834,12 @@ docstrings (`write_section_translation`, `mark_read`) and both skills repeat the
   the body; `null` for an untracked body), `missing_assets` (the section's staged
   figures/tables the body does not link, each with `block_id`, `type`, `link`,
   `reference`, `caption`), `section_has_assets` (whether the section owns any
-  figure/table block), `model`,
-  `created_at`, `notes` (the writer's side-channel remarks), `content` (the body,
-  unless `include_content=False`), and `structure_issues` (the link destinations,
-  image paths, reference definitions, HTML anchors, and heading ids the body dropped
-  or added relative to the section; see the structure rule in `artifacts.md`). A
-  missing translation is a normal result, not an error.
+  figure/table block), `model`, `created_at`, `notes` (the writer's side-channel
+  remarks), `content` (the body, unless `include_content=False`), and
+  `structure_issues` (the link destinations, image paths, reference definitions, HTML
+  anchors, and heading ids the body dropped or added relative to the section; see the
+  structure rule in `artifacts.md`). A missing translation is a normal result, not an
+  error.
 - `write_section_translation(doc_id, section_id, lang, content, includes_assets=False,
   model=None, source_section_hash=None, notes=None)` → write
   `translations/<lang>/<doc_id>/<section_id>.md` and its registry sidecar,
@@ -848,13 +848,13 @@ docstrings (`write_section_translation`, `mark_read`) and both skills repeat the
   either way). Empty `content` is rejected. When `source_section_hash` is given and
   differs from the section's current hash the write is refused, so a translation of
   outdated content is never registered as fresh. `content` is the translated book
-  content only, with figures/tables linked by their `AssetRef.link`; the stored
-  `includes_assets` is derived from those links, and `includes_assets=True` for a
-  body that does not link every staged figure/table is refused with the missing
-  links. `notes`
-  (optional) is the side channel for QA/checker results and terminology decisions:
-  stored in the registry sidecar, returned as `notes` by the read tools, never in the
-  body (see *Artifact channels* in `artifacts.md`).
+  content only, with figures/tables linked by their `AssetRef.link`;
+  `includes_assets=True` for a body that does not link every staged figure/table is
+  refused with the missing links (the sidecar stores the claim, the read tools report
+  it verified against the body). `notes` (optional) is the side channel for
+  QA/checker results and terminology decisions: stored in the registry sidecar,
+  returned as `notes` by the read tools, never in the body (see *Artifact channels*
+  in `artifacts.md`).
 - `list_section_artifacts(doc_id=None, lang=None, type="translation")` → every
   cached translation (filtered by `doc_id` / `lang`) with its status, including
   `orphaned` ones whose section no longer exists; no bodies, but each entry carries

@@ -80,7 +80,7 @@ from bookgraph.quality import (
     section_warnings,
 )
 from bookgraph.sections import read_sections
-from bookgraph.translation_assets import check_translation_assets
+from bookgraph.translation_assets import check_translation_assets, translation_link_bases
 from bookgraph.translation_structure import (
     check_section_translation,
     describe_structure_issues,
@@ -407,7 +407,7 @@ class _Assembler(ImageEmbedder):
         heading_title = _first_heading_text(tokens)
         _shift_headings(tokens, depth)
         self._rewrite_images(
-            tokens, section.id, [artifact.parent, *self._parsed_bases()], counter, relative
+            tokens, section.id, self._translation_bases(artifact), counter, relative
         )
         fm_title = frontmatter.get("title")
         title = heading_title or (fm_title if isinstance(fm_title, str) and fm_title else None)
@@ -428,9 +428,7 @@ class _Assembler(ImageEmbedder):
         text, but intra-book links and image paths in the body only work as written.
         """
 
-        resolves = local_asset_resolver(
-            self.workspace.root, [artifact.parent, *self._parsed_bases()]
-        )
+        resolves = local_asset_resolver(self.workspace.root, self._translation_bases(artifact))
         issues = check_section_translation(
             section, body, blocks=self.blocks, asset_resolves=resolves
         )
@@ -462,6 +460,9 @@ class _Assembler(ImageEmbedder):
                 section.id,
             )
 
+    def _translation_bases(self, artifact: Path) -> list[Path]:
+        return translation_link_bases(self.workspace.root, self.parsed_dir, artifact.parent)
+
     def _asset_warnings(self, section: Section, body: str, state: TranslationState) -> None:
         """Flag a translation that left out its section's figures/tables.
 
@@ -487,7 +488,7 @@ class _Assembler(ImageEmbedder):
             self._warn(
                 TRANSLATION_MISSING_ASSETS,
                 f"translation {relative} does not link the section's {asset.type} "
-                f"{asset.block_id} ({asset.link}); it is not in this export",
+                f"{asset.block_id} ({asset.link}); it is not in the translated text",
                 section.id,
                 asset.link,
                 AssetOrigin(document, asset.block_id),
@@ -500,7 +501,7 @@ class _Assembler(ImageEmbedder):
             self._warn(
                 TRANSLATION_MISSING_ASSETS,
                 f"translation {relative} is prose-only (includes_assets=false) but the "
-                "section has figures/tables; they are not in this export",
+                "section has figures/tables; they are not in the translated text",
                 section.id,
             )
 

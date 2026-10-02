@@ -30,7 +30,10 @@ the book's structure, in this order:
 4. a file that names a section but a fragment that does not (a figure, an example)
    → the file's section, the deterministic container of the target.
 
-Anything else is left as written and reported (``internal_link_unresolved``). Remote
+Steps 2 and 3 match titles heuristically: a fragment that abbreviates its section's
+title (``sec_transactions_2pc`` for *Two-Phase Commit*) can land on another title
+that has the abbreviation (*2PL is not 2PC*), and nothing reports that. Anything else
+is left as written and reported (``internal_link_unresolved``). Remote
 URLs (``https:``, ``mailto:``, …), absolute paths and links to non-HTML files
 (images, PDFs) are not internal-book links and are never rewritten.
 """
@@ -283,18 +286,22 @@ class _Resolver:
         """The sections a source file holds, from the node it maps to.
 
         Its subtree when it has children; in a flat outline, the nodes after it in
-        reading order up to the next *Chapter N* / *Appendix X* / *Part N*, a shallower
-        node, or a same-depth node with sections of its own.
+        reading order up to the next *Chapter N* / *Appendix X* / *Part N* or a
+        shallower node. A chapter's own sections may sit at its depth with
+        subsections of their own, so only a head without a division title (a leaf
+        *Preface*, say) also stops at a same-depth node with sections: it must not
+        swallow the next untitled chapter.
         """
 
         if head.children:
             return list(head.walk())
+        division = bool(_DIVISION_TITLE.match(head.section.title.strip().lower()))
         start = self._order[head.section.id]
         span = [head]
         for node in self._nodes[start + 1 :]:
             if (
                 node.depth < head.depth
-                or (node.depth == head.depth and node.children)
+                or (not division and node.depth == head.depth and node.children)
                 or _DIVISION_TITLE.match(node.section.title.strip().lower())
             ):
                 break

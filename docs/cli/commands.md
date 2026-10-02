@@ -1137,14 +1137,19 @@ export rewrites each internal-book `<a href>` (a `#fragment`, or a link to a sou
    (`ch03.html#sec_datamodels_normalization` → *Normalization, Denormalization, and
    Joins*). A file holds its section's subtree or, in a flat outline (MarkItDown puts
    a chapter title and its sections at one level), the sections after it up to the
-   next *Chapter N* / *Appendix X* / *Part N*. A fragment-only link is looked up in
-   the linking section's file, then the book;
+   next *Chapter N* / *Appendix X* / *Part N* (a head with no such title, like a leaf
+   *Preface*, also stops at a same-depth section that has subsections). A
+   fragment-only link is looked up in the linking section's file, then the book;
 4. otherwise a link whose file named a section goes to that section (figure and
    example fragments such as `ch10.html#fig_x` always do; a fragment-only link has no
    file to fall back to).
 
 Only the shallowest match counts, and several matches at one depth are ambiguous. An
 unresolved link is left as written and reported as `internal_link_unresolved`.
+Steps 2 and 3 are heuristics over titles: a fragment that abbreviates its section's
+title can match another title that has the abbreviation
+(`ch08.html#sec_transactions_2pc` → *2PL is not 2PC*, not *Two-Phase Commit*), and
+such a wrong target is not reported. A missed link is.
 External URLs (`https:`, `mailto:`, …), absolute paths, and links to images or other
 files are never rewritten, and neither the parsed document nor the translation
 artifacts change. Both `bilingual` columns link to the right column's anchor.

@@ -1,15 +1,19 @@
-"""Pluggable renderers that turn an assembled export HTML page into a file.
+"""Pluggable writers that turn an assembled reading edition into a file.
 
-The HTML is self-contained (every image a ``data:`` URI), so a renderer only has
-to lay it out. Both PDF backends are optional extras — BookGraph never makes a
-heavy layout engine mandatory:
+An :class:`ExportWriter` receives the whole :class:`~bookgraph.exports.edition.
+TranslatedExport` (report, outline, section bodies). Most formats are an
+:class:`ExportRenderer`: they lay out the edition's one self-contained HTML page
+(every image a ``data:`` URI). ``epub`` (:mod:`bookgraph.exports.epub`) writes the
+structure itself, one file per chapter. Both PDF backends are optional extras —
+BookGraph never makes a heavy layout engine mandatory:
 
 - ``weasyprint`` (``pip install 'bookgraph[pdf]'``; needs the Pango system library);
 - ``playwright`` (``pip install 'bookgraph[pdf-chromium]'`` then
   ``playwright install chromium``).
 
-``html`` writes the page itself and needs nothing. Each backend refuses every
-non-``data:`` URL, so rendering never reads the filesystem or the network.
+``html`` writes the page itself and ``epub`` a zip with the standard library; they
+need nothing. Each PDF backend refuses every non-``data:`` URL, so rendering never
+reads the filesystem or the network.
 """
 
 from __future__ import annotations
@@ -19,9 +23,13 @@ import importlib
 import io
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
+from bookgraph.exports.models import BilingualLayout, ExportWarning
 from bookgraph.plugins import PluginRegistry
+
+if TYPE_CHECKING:
+    from bookgraph.exports.edition import TranslatedExport
 
 AUTO_RENDERER = "auto"
 
@@ -33,18 +41,32 @@ class RenderError(RuntimeError):
     """A renderer is unavailable or failed to produce its output."""
 
 
-class ExportRenderer(ABC):
-    """Render a self-contained HTML page to an output file."""
+class ExportWriter(ABC):
+    """Write an assembled reading edition to an output file."""
 
     name: str
-    # File suffix the renderer produces, e.g. ``.pdf``.
+    # File suffix the writer produces, e.g. ``.pdf``.
     suffix: str
     # Install hint shown when the backend is not available.
     install_hint: str = ""
+    # How ``bilingual`` rows must be laid out for this format (see ``BilingualLayout``).
+    bilingual_layout: BilingualLayout = "columns"
 
     @abstractmethod
     def available(self) -> bool:
         """Whether the backend can run in this environment (cheap, no rendering)."""
+
+    @abstractmethod
+    def write(self, export: TranslatedExport, output: Path) -> list[ExportWarning]:
+        """Write ``export`` to ``output``; return problems found while writing."""
+
+
+class ExportRenderer(ExportWriter):
+    """Render the edition's self-contained HTML page to an output file."""
+
+    def write(self, export: TranslatedExport, output: Path) -> list[ExportWarning]:
+        self.render(export.html, output)
+        return []
 
     @abstractmethod
     def render(self, html: str, output: Path) -> None:
@@ -115,15 +137,19 @@ class PlaywrightRenderer(ExportRenderer):
             raise RenderError(f"Playwright failed: {exc}. {self.install_hint}") from exc
 
 
-def default_renderer_registry() -> PluginRegistry[ExportRenderer]:
-    registry: PluginRegistry[ExportRenderer] = PluginRegistry(kind="export renderer")
+def default_renderer_registry() -> PluginRegistry[ExportWriter]:
+    # Imported here: the EPUB writer builds on this module's port.
+    from bookgraph.exports.epub import EpubWriter
+
+    registry: PluginRegistry[ExportWriter] = PluginRegistry(kind="export renderer")
     registry.register(WeasyPrintRenderer())
     registry.register(PlaywrightRenderer())
     registry.register(HtmlRenderer())
+    registry.register(EpubWriter())
     return registry
 
 
-def check_output_suffix(registry: PluginRegistry[ExportRenderer], name: str, output: Path) -> None:
+def check_output_suffix(registry: PluginRegistry[ExportWriter], name: str, output: Path) -> None:
     """Refuse an output path whose suffix does not match the renderer's format.
 
     Without this, ``--renderer html --out book.pdf`` would write HTML into a
@@ -148,19 +174,37 @@ def check_output_suffix(registry: PluginRegistry[ExportRenderer], name: str, out
         )
 
 
-def _accepted_suffixes(renderer: ExportRenderer) -> set[str]:
+def _accepted_suffixes(renderer: ExportWriter) -> set[str]:
     return {".html", ".htm"} if renderer.suffix == ".html" else {renderer.suffix}
 
 
-def select_renderer(
-    registry: PluginRegistry[ExportRenderer], name: str, output: Path
-) -> ExportRenderer:
-    """Pick the renderer for ``name`` (or ``auto``) and an output path.
+def bilingual_layout_for(
+    registry: PluginRegistry[ExportWriter], name: str, output: Path
+) -> BilingualLayout:
+    """The bilingual layout the writer for ``name`` (or ``auto``) and ``output`` needs.
 
-    ``auto`` writes HTML for a ``.html``/``.htm`` output and otherwise the first
-    available PDF backend. An explicitly named backend that is not installed is an
-    error rather than a silent switch to another engine, and so is an output suffix
-    the renderer does not produce (see :func:`check_output_suffix`).
+    Known before the export is assembled, and without checking that the backend is
+    installed (every PDF backend shares the ``columns`` layout).
+    """
+
+    if name != AUTO_RENDERER:
+        return registry.get(name).bilingual_layout
+    suffix = output.suffix.lower()
+    for writer in registry.all():
+        if suffix in _accepted_suffixes(writer):
+            return writer.bilingual_layout
+    return "columns"
+
+
+def select_renderer(
+    registry: PluginRegistry[ExportWriter], name: str, output: Path
+) -> ExportWriter:
+    """Pick the writer for ``name`` (or ``auto``) and an output path.
+
+    ``auto`` writes HTML for a ``.html``/``.htm`` output, EPUB for ``.epub``, and
+    otherwise the first available PDF backend. An explicitly named backend that is not
+    installed is an error rather than a silent switch to another engine, and so is an
+    output suffix the renderer does not produce (see :func:`check_output_suffix`).
     """
 
     check_output_suffix(registry, name, output)
@@ -171,6 +215,8 @@ def select_renderer(
         return renderer
     if output.suffix.lower() in {".html", ".htm"}:
         return registry.get("html")
+    if output.suffix.lower() == ".epub":
+        return registry.get("epub")
     for candidate in _PDF_PREFERENCE:
         try:
             renderer = registry.get(candidate)

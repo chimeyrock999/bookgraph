@@ -46,6 +46,7 @@ from bookgraph.assets import asset_reference, resolve_asset_path
 from bookgraph.books import read_book_bookmarks
 from bookgraph.documents import read_document
 from bookgraph.exports.bilingual import block_marker, mark_units
+from bookgraph.exports.edition import TranslatedExport
 from bookgraph.exports.images import AssetCounter, AssetOrigin, ImageEmbedder
 from bookgraph.exports.links import resolve_section_links
 from bookgraph.exports.models import (
@@ -56,6 +57,7 @@ from bookgraph.exports.models import (
     TRANSLATION_STRUCTURE_CHANGED,
     TRANSLATION_UNREADABLE,
     TRANSLATION_UNTRACKED,
+    BilingualLayout,
     ExportMode,
     ExportReport,
     ExportSection,
@@ -68,10 +70,9 @@ from bookgraph.exports.render import (
     FRESHNESS_NOTES,
     SKIPPED_NOTE,
     UNTRANSLATED_NOTE,
-    document_html,
     heading,
 )
-from bookgraph.exports.renderers import ExportRenderer
+from bookgraph.exports.renderers import ExportWriter
 from bookgraph.exports.tokens import first_heading_text, shift_headings
 from bookgraph.models import ASSET_BLOCK_TYPES, CanonicalBlock, Section
 from bookgraph.quality import (
@@ -123,14 +124,6 @@ class UntranslatedSectionsError(ExportError):
         )
 
 
-@dataclass(frozen=True)
-class TranslatedExport:
-    """The assembled reading edition plus its coverage/QA report."""
-
-    html: str
-    report: ExportReport
-
-
 def default_generated_at() -> str:
     """UTC timestamp for the export frontmatter, honouring ``SOURCE_DATE_EPOCH``.
 
@@ -152,6 +145,8 @@ def build_translated_export(
     mode: ExportMode = "translated",
     generated_at: str | None = None,
     show_status: bool = False,
+    bilingual_layout: BilingualLayout = "columns",
+    source_lang: str | None = None,
 ) -> TranslatedExport:
     """Assemble the reading edition for ``doc_id`` in ``lang``.
 
@@ -169,12 +164,14 @@ def build_translated_export(
     ``mode="bilingual"`` puts the original beside each section (see ``bilingual``).
     ``show_status`` prints status/debug metadata (freshness and fallback notes, TOC
     status markers, coverage, missing-asset placeholders) on the reading pages; by
-    default it is only in the report.
+    default it is only in the report. ``bilingual_layout`` is the output format's
+    pairing (``interleaved`` for EPUB) and ``source_lang`` the original's language tag.
     """
 
     try:
         validate_slug_id(doc_id, field_name="doc_id")
         lang = validate_lang(lang)
+        source_lang = validate_lang(source_lang) if source_lang is not None else None
     except ValueError as exc:
         raise ExportError(str(exc)) from exc
     manifest = workspace.sources_sections / doc_id / "sections.jsonl"
@@ -227,7 +224,14 @@ def build_translated_export(
         else {}
     )
     rendered, link_warnings = resolve_section_links(
-        outline, rendered, originals, assembler.original_source, lang, assembler.alignments
+        outline,
+        rendered,
+        originals,
+        assembler.original_source,
+        lang,
+        assembler.alignments,
+        layout=bilingual_layout,
+        source_lang=source_lang,
     )
     assembler.warnings.extend(link_warnings)
     report = ExportReport.from_sections(
@@ -240,6 +244,7 @@ def build_translated_export(
         generated_at=generated_at or default_generated_at(),
         warnings=assembler.warnings,
         show_status=show_status,
+        source_lang=source_lang,
     )
     # Checked after rendering, not on artifact existence: an empty or unreadable
     # artifact falls back too, and must count as untranslated under ``fail``. Stale and
@@ -248,8 +253,10 @@ def build_translated_export(
     if fallback == "fail" and report.untranslated:
         raise UntranslatedSectionsError(report)
     bodies = {section_id: body for section_id, (_, body) in rendered.items()}
-    html = document_html(report, outline, bodies, show_status=show_status)
-    return TranslatedExport(html=html, report=report)
+    sources = {
+        node.section.id: assembler.original_source(node.section) for node in flatten(outline)
+    }
+    return TranslatedExport(report, outline, bodies, bilingual_layout, sources)
 
 
 def _load_document(parsed_dir: Path, doc_id: str) -> tuple[str, dict[str, CanonicalBlock]]:
@@ -641,11 +648,11 @@ def report_path_for(output: Path) -> Path:
 def write_translated_export(
     export: TranslatedExport,
     output: Path,
-    renderer: ExportRenderer,
+    renderer: ExportWriter,
     *,
     strict: bool = False,
 ) -> ExportReport:
-    """Render ``export`` to ``output`` and write its report beside it.
+    """Write ``export`` to ``output`` and its report, with the writer's warnings, beside it.
 
     With ``strict`` any missing, remote, or unsupported asset, stale translation, or
     prose-only translation of a section with assets aborts before anything is
@@ -653,6 +660,11 @@ def write_translated_export(
     so a failed render never leaves a truncated file at ``output``.
     """
 
+    if export.report.mode == "bilingual" and export.bilingual_layout != renderer.bilingual_layout:
+        raise ExportError(
+            f"the export was laid out for {export.bilingual_layout} bilingual rows, but "
+            f"{renderer.name} writes {renderer.bilingual_layout} ones"
+        )
     if strict and export.report.strict_warnings:
         raise ExportError(
             f"{export.report.strict_summary()}: "
@@ -661,10 +673,16 @@ def write_translated_export(
     output.parent.mkdir(parents=True, exist_ok=True)
     partial = output.with_name(f".{output.name}.partial")
     try:
-        renderer.render(export.html, partial)
+        warnings = renderer.write(export, partial)
         partial.replace(output)
     finally:
         partial.unlink(missing_ok=True)
-    report = export.report.model_copy(update={"renderer": renderer.name, "output": str(output)})
+    report = export.report.model_copy(
+        update={
+            "renderer": renderer.name,
+            "output": str(output),
+            "warnings": [*export.report.warnings, *warnings],
+        }
+    )
     report_path_for(output).write_text(report.model_dump_json(indent=2) + "\n", encoding="utf-8")
     return report

@@ -853,7 +853,7 @@ then reads as `untracked`), or re-register it with `write_section_translation`.
 - An empty or unreadable (including non-UTF-8) body counts as untranslated and is
   reported (`translation_empty` / `translation_unreadable`).
 
-## `exports/<doc_id>.<lang>-progress.pdf` / `-bilingual.pdf` + `.report.json`
+## `exports/<doc_id>.<lang>-progress.pdf` / `-bilingual.pdf` / `.epub` + `.report.json`
 
 Owner: `bookgraph export translated-pdf`. This is derived, reader-facing output and
 can be regenerated at any time. The report (`bookgraph.exports.models.ExportReport`)
@@ -864,6 +864,7 @@ is written beside the export:
   "doc_id": "ddia",
   "title": "Designing Data-Intensive Applications",
   "lang": "vi",
+  "source_lang": null,
   "mode": "translated",
   "fallback": "original",
   "generated_at": "2026-10-02T00:00:00Z",
@@ -893,7 +894,10 @@ is written beside the export:
 }
 ```
 
-- `mode` is `translated` or `bilingual` (`--mode`).
+- `mode` is `translated` or `bilingual` (`--mode`). `source_lang` is `--source-lang`
+  (`null` when not given: original-language content is then tagged `und`).
+- `renderer` is the writer that produced `output`: `weasyprint`, `playwright`, `html`,
+  or `epub` (the EPUB 3 layout is described under *EPUB output* in `commands.md`).
 - `sections` are in the export's reading order: the source PDF outline's order when
   `book.json` has one, else `sections.jsonl` order (see `commands.md`).
 - `level` is the manifest's `Section.level`. `depth` is the heading level the section
@@ -967,6 +971,18 @@ is written beside the export:
     from the artifact, `source` otherwise. A diagnostic only: `--strict` does not
     refuse it yet.
   - `translation_empty`, `translation_unreadable`: the section falls back.
+  - `xhtml_repaired`: EPUB output only. The section's HTML had to be changed to be
+    well-formed XHTML beyond the routine fixes (self-closing void elements, escaping,
+    implied end tags): a stray end tag or an unclosed element, a dropped
+    `script`/`style`/`iframe`/`object`/`embed` element, obsolete tag, attribute name
+    or event handler, or an element HTML does not define kept as text. One per
+    section and side, listing what was changed. A repair of the translation names the
+    artifact (`origin: translation`, `column: mixed`); a repair of the original text
+    names `document.json` / `sections.jsonl` (`origin: source`), with `column:
+    original` for the original side of a translated or skipped section in `bilingual`
+    mode, `mixed` otherwise. Each side of a `bilingual` pair is normalised on its own,
+    so broken markup on one side never spills into the other. Found while writing, so a `--check` run
+    does not report it. A diagnostic only: `--strict` does not refuse it.
   - `asset_captions_only` / `asset_text_sparse`: ingest quality warnings, passed
     through for rendered sections whose source prose is mostly captions.
 

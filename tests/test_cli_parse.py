@@ -4,9 +4,11 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
 from typer.testing import CliRunner
 
 from bookgraph.cli import app
+from bookgraph.parsers import markitdown as markitdown_module
 
 
 def _init_workspace(tmp_path: Path) -> CliRunner:
@@ -214,3 +216,26 @@ def test_parsers_command_lists_registered_plugins(tmp_path: Path) -> None:
 
     assert result.exit_code == 0, result.output
     assert result.output.split() == ["markdown", "markitdown", "mineru-middle-json"]
+
+
+def test_parse_reports_markitdown_as_the_non_pdf_adapter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class _Converted:
+        text_content = "# Chapter 1\n\nBody.\n"
+
+    class _Converter:
+        def convert(self, source: str) -> _Converted:
+            return _Converted()
+
+    monkeypatch.setattr(markitdown_module, "_load_markitdown", lambda: _Converter())
+    runner = _init_workspace(tmp_path)
+    source = tmp_path / "sources" / "inbox" / "report.docx"
+    source.write_bytes(b"PK")
+
+    result = runner.invoke(app, ["parse", str(source), "--output", str(tmp_path)])
+
+    assert result.exit_code == 0, result.output
+    assert "parser: markitdown" in result.output
+    payload = json.loads((tmp_path / "sources" / "parsed" / "report" / "document.json").read_text())
+    assert payload["metadata"]["parser"] == "markitdown"

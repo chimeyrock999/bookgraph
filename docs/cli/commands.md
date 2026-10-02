@@ -388,6 +388,57 @@ remaining: <unread_count>
 
 `next` returns up to `daily_sections` unread section ids, in reading order.
 
+### `bookgraph reading-plan progress`
+
+Print progress within the chapter that holds the next unread section, without
+mutating the plan.
+
+```bash
+bookgraph reading-plan progress /path/to/workspace <plan_id>
+bookgraph reading-plan progress /path/to/workspace <plan_id> --chapter-level 2
+```
+
+#### Inputs
+
+- `workspace_path`: workspace/output root.
+- `plan_id`: existing reading plan id (fails if the plan file is missing).
+- `--chapter-level`: heading level of the chapter scope. The chapter is the nearest
+  ancestor-or-self of the next unread section whose `level` is at most this value
+  (e.g. `2` for chapters nested under level-1 parts). Must be at least `1`.
+  Defaults to the top-level ancestor; when the document has a single top-level
+  heading (a `# Book Title` above every chapter, common for Markdown/EPUB), that
+  lone root is skipped one level down so the scope is the chapter, not the whole
+  book. Pass `--chapter-level` explicitly for part/chapter books or deeper wrappers.
+  While a wrapper heading is itself the next unread section, the scope is that
+  heading's own section only and the boundary is its first child, so a tick never
+  spans a whole book or part. A wrapper is the lone root by default (day 1 of a
+  fresh plan), or, with `--chapter-level`, any heading shallower than that level
+  (e.g. a part heading with `--chapter-level 2`). A deeper section under a level jump
+  (`part(1) > sec(3)` with `--chapter-level 2`) still belongs to the part's span.
+
+#### Writes
+
+- None. `progress` is read-only.
+
+#### Prints
+
+```text
+plan_id: <plan_id>
+doc_id: <doc_id>
+completed: <completed_count>/<section_count>
+chapter: <chapter_title> (<chapter_section_id>)     # or "(complete)" and stop
+chapter_progress: <completed_in_chapter>/<total_in_chapter>
+remaining_in_chapter: <unread_in_chapter>
+next: <section_id>[, <section_id> ...]     # next daily batch, clipped at the boundary
+next_boundary: <title> (<section_id>)      # or "(end of document)"
+```
+
+The hierarchy is derived from `sections.jsonl` exactly as `get_outline` derives it.
+Counts are by **membership** in the chapter's subtree and in the plan, not by
+position, so they stay correct after a plan reset, skipped front matter (sections
+marked read up front), or out-of-order `mark-read` calls. Front-matter sections
+that are their own top-level headings are their own "chapter" until read.
+
 ### `bookgraph reading-plan mark-read`
 
 Mark a section read and persist the updated plan.
@@ -511,6 +562,35 @@ bookgraph index build /path/to/workspace --doc-id ddia   # index one document
 
 - No `--doc-id` and nothing segmented → `No segmented documents under …`.
 - `--doc-id` given but its `sections.jsonl` is missing → `Sections manifest not found`.
+- An invalid `concepts/registry.json` → `Invalid concept registry …` (the build
+  refuses to guess rather than silently un-merge aliases).
+
+## `bookgraph concepts`
+
+**Status:** Implemented.
+
+Curate the concept registry (`concepts/registry.json`) and report concept hygiene:
+merge suggestions, lint, and the agent-concept review queue. Report commands
+(`suggest`, `lint`, `review`) read the built index plus the registry. Write commands
+(`alias`, `unalias`, `canonical`, `ignore`, `distinct`) edit only the registry and
+take effect on the next `bookgraph index build`. See `docs/cli/concepts.md` for the
+full contract.
+
+```bash
+bookgraph concepts suggest /path/to/workspace
+bookgraph concepts alias /path/to/workspace metadata-file table-metadata
+bookgraph index build /path/to/workspace
+```
+
+### Must not do
+
+- Must not write the index, annotations, or wiki output. Only `concepts/registry.json`.
+
+### Errors
+
+- Report commands without a built index → `No concepts in … Run 'bookgraph index build' first.`
+- An invalid registry, or a mutation that would break its invariants (an alias chain,
+  ignoring a canonical slug, a non-slug id) → a `BadParameter` naming the conflict.
 
 ## `bookgraph index concepts`
 
@@ -522,19 +602,24 @@ build` it is not per-document).
 
 ```bash
 bookgraph index concepts /path/to/workspace
+bookgraph index concepts /path/to/workspace --durable-only
 ```
 
 ### Inputs
 
 - `workspace_path`: workspace/output root. Must already exist and have a built
   `indexes/bookgraph.db`.
+- `--durable-only`: skip concepts with a lint **warning** (generic, one-off, stale
+  alias/ignored; see `concepts.md`) unless they are canonical in
+  `concepts/registry.json`. Prints `skipped: N`.
 
 ### Writes
 
 - `wiki/concepts/<concept_slug>.md` — one page per concept, with cross-book
   backlinks, rendered from `concept_nodes` + `concept_mentions`. Each backlink shows
   its per-mention `gloss` when present and an `(agent-verified)` marker when the
-  mention's `source` is `agent`. Rewrites the whole `wiki/concepts/` directory so it
+  mention's `source` is `agent`. A concept in `concepts/registry.json` takes its
+  canonical title, and a concept with aliases gets an `Also known as:` line. Rewrites the whole `wiki/concepts/` directory so it
   reflects exactly the currently indexed concepts (see `docs/cli/artifacts.md`).
 
 > Backlinks point into `wiki/books/<doc_id>/sections/`, which is materialized by
@@ -565,9 +650,10 @@ bookgraph index concepts /path/to/workspace
 **Status:** Implemented (requires the optional `mcp` extra).
 
 Serve a workspace over MCP (stdio transport) so a reading client/agent can query
-sections and drive a reading plan. All tools are read-mostly; only `mark_read` and
-`create_plan` write reading-plan state, and `annotate_section` writes a Tier-2
-annotation artifact.
+sections and drive a reading plan. All tools are read-mostly; only `mark_read`,
+`complete_reading_batch`, and `create_plan` write reading-plan state,
+`annotate_section` writes a Tier-2 annotation artifact, and
+`write_section_translation` writes a cached translation.
 
 ```bash
 uv sync --extra mcp
@@ -584,10 +670,24 @@ telling the user to `uv sync --extra mcp`.
 
 ### Tools
 
-- `get_next_section(plan_id, include_assets=True)` → the next
-  up-to-`daily_sections` unread sections for a plan, each shaped exactly as
-  `get_section` returns it (full text, provenance, `<section_id>.md` path,
-  `assets`, `warnings`), plus `remaining` and `done`.
+- `get_next_section(plan_id, include_assets=True, stop_at_boundary=False,
+  chapter_level=None)` → the next up-to-`daily_sections` unread sections for a
+  plan, each shaped exactly as `get_section` returns it (full text, provenance,
+  `<section_id>.md` path, `assets`, `warnings`), plus `remaining`, `done`, and
+  `chapter` (as in `get_plan_progress`; `null` when done). `stop_at_boundary=True`
+  clips the batch at the end of the current chapter so a tick never spills into the
+  next one; `chapter_level` picks the chapter scope as below.
+- `get_plan_progress(plan_id, chapter_level=None)` → a plan's progress without any
+  section bodies: `completed`, `total`, `remaining`, `done`, `current_section_id`
+  (the next unread section), `chapter` (`{section, completed, remaining, total,
+  next_boundary}`, where `section` and `next_boundary` are id/title/level refs and
+  `next_boundary` is `null` at the end of the document; `chapter` is `null` when the
+  plan is done), and `next_sections` — the next `daily_sections` batch as refs,
+  clipped at the boundary. The chapter is the top-level ancestor of the next unread
+  section by default (a lone book-title root is skipped one level down), or the
+  nearest ancestor-or-self with `level <= chapter_level`.
+  Counts are by membership, so plan resets, skipped front matter, and out-of-order
+  `mark_read` calls stay correct (same semantics as `bookgraph reading-plan progress`).
 - `get_section(doc_id, section_id, include_assets=True)` → one section's full
   reading content, its `<section_id>.md` path, its figure/table `assets` (each
   `{block_id, type, path, caption, order, page_idx, type_confidence,
@@ -601,13 +701,69 @@ telling the user to `uv sync --extra mcp`.
   (and with it the asset warnings).
 - `mark_read(plan_id, section_id=None)` → mark a section read (defaults to the
   next unread one) and persist the plan; returns `completed`/`total`/`done`.
+- `validate_reading_batch(plan_id, section_ids=None, require_annotation=True,
+  index="fresh", require_assets=True, inspected_assets=None, translation_lang=None,
+  artifacts=None, stop_at_boundary=False, chapter_level=None)` → check whether a batch of sections is ready to be marked read,
+  **without writing**. Returns the same report as `complete_reading_batch` (see
+  below) with `committed: false`.
+- `complete_reading_batch(...)` (same arguments) → the formal completion boundary
+  for a reading batch: run every readiness check and, only when none blocks, mark
+  the **whole** batch read in one atomic plan write. On any blocking issue the plan
+  is untouched — progress advances by the entire batch or not at all. Use it instead
+  of `mark_read` when a batch involves enrichment (annotation, translation, figure
+  inspection, index rebuild). See *Reading batch completion* below.
 - `search(query, doc_id=None, limit=10)` → sections ranked by FTS5 `bm25` over
   title and text, with a short snippet. `doc_id` scopes to one document; omit it
   to search across every indexed document (cross-document search), each hit
   carrying its `doc_id`.
-- `get_outline(doc_id)` → the document's section outline (heading hierarchy) in
-  reading order: one node per section with `title`, `level`, `parent_id`, and
-  `child_ids`.
+- `get_outline(doc_id, root_id=None, max_depth=None)` → the document's section
+  outline (heading hierarchy) in reading order: one node per section with `title`,
+  `level`, `parent_id`, and `child_ids`. With no options it covers the whole
+  document, which can be very large for a real book. `root_id` scopes it to that
+  section's subtree (the section included). `max_depth` keeps that many **tree**
+  levels from the scope's top (`1` = top-level sections only, or `root_id` alone).
+  Depth follows the parent chain, not the heading `level`, so skipped levels don't
+  matter. The result also carries `root_id`, `total_nodes` (the document's full
+  section count), and `truncated` (whether `max_depth` cut deeper sections off).
+  Boundary nodes keep their full `child_ids`, so a client can drill in with
+  `root_id`. An unknown `root_id` or a `max_depth < 1` is an error. Note that on
+  a flat document (page/token fallback, every section top-level) `max_depth=1`
+  is still every section; `total_nodes` tells a client how large a level is.
+- `get_section_tree(doc_id, section_id, include_siblings=True,
+  include_children=True, sibling_window=10)` → a small outline around one
+  section: `section`, `ancestors` (root-first breadcrumb), `siblings` (the
+  parent's children in reading order, the section itself included; the
+  top-level sections for a top-level section), and direct `children`. Each
+  entry is an id/title/level reference. `siblings` keeps at most
+  `sibling_window` entries on each side of the section (`null` = all), and
+  `siblings_truncated` says whether any were dropped, so a flat document can't
+  turn this into the whole book.
+- `get_chapter_outline(plan_id, max_depth=2, chapter_level=None)` → the outline
+  of the chapter a reading plan is currently in (`current_section_id` = the
+  next unread section).
+  - The chapter and its span come from the shared `graph.chapter_span`, so they
+    always match `get_plan_progress`. By default the chapter is that section's
+    outermost ancestor-or-self, except that a lone top-level root (one
+    `# Book Title` heading above every chapter) is skipped one level down. With
+    `chapter_level`, it is the nearest ancestor-or-self whose heading `level` is
+    at most `chapter_level` (e.g. `2` for chapters under level-1 parts).
+  - The span is normally the chapter's whole subtree. The exception is a
+    wrapper heading that is itself the next unread section: then the span is
+    that heading's own section only, so a tick never spans a whole book or
+    part. A wrapper is the lone root by default, or, with `chapter_level`, any
+    heading shallower than that level. A deeper section under a level jump
+    (`part(1) > sec(3)`) still belongs to the part's span.
+  - Each node in the span carries a `read` flag. `nodes` contains only span
+    members, so a wrapper being read comes back alone; its `child_ids` still
+    point at its children.
+  - `completed` / `remaining` / `total` count the plan's sections in the
+    chapter's span, by membership, whatever `max_depth` is set to (a wrapper
+    being read counts as 1). `plan_completed` / `plan_total` are plan-wide.
+  - `max_depth` works as in `get_outline` and defaults to `2` (the chapter and
+    its direct subsections), so a chapter that turns out to be the whole book
+    stays small. Pass `null` for the full subtree.
+  - When the plan is done, `chapter` is null, `nodes` is empty, and the chapter
+    counts are zero.
 - `get_related(doc_id, section_id)` → a section's structural neighbours in the
   graph: `parent`, `prev`, `next`, and `children` (each a lightweight
   id/title/level reference).
@@ -624,7 +780,14 @@ telling the user to `uv sync --extra mcp`.
   (`doc_id`, `section_id`, `title`, `gloss`, `source`) across every indexed book,
   grouped by document. Returns empty when the slug is unknown. Backed by
   `concept_nodes` / `concept_mentions`; no live-scan fallback (a document's concepts
-  exist only once it is built).
+  exist only once it is built). An alias slug from `concepts/registry.json` resolves
+  to its canonical concept: the result also carries `aliases`, `canonical`, and
+  `resolved_from`, and each mention carries its `raw_slug` (see `concepts.md`).
+- `concept_hygiene(limit=20, threshold=0.5)` → a read-only concept-maintenance report:
+  `merge_suggestions` (likely duplicates with a suggested canonical side),
+  `lint` (generic / one-off / over-granular / stale concepts), and `review_queue`
+  (agent-created concepts not yet canonical, aliased, or ignored), each capped at
+  `limit`. Decisions are applied by a human with the `bookgraph concepts` CLI.
 - `annotate_section(doc_id, section_id, concepts=[], summary="", model=None)` →
   write a Tier-2 annotation for one section: the agent's authoritative concept edge
   set (each `{slug?, title, gloss?}`; `slug` defaults to a slugified `title`, and an
@@ -636,6 +799,24 @@ telling the user to `uv sync --extra mcp`.
   via `get_context` immediately; the concept edges (and their prune of Tier-1 false
   positives) take effect on the next `bookgraph index build <doc_id>`. Returns the
   written `doc_id`, `section_id`, `concept_count`, and `path`.
+- `get_section_translation(doc_id, section_id, lang, include_content=True)` → the
+  section's cached translation and its freshness: `status` (`fresh` / `stale` /
+  `untracked` / `missing`, see `artifacts.md`), `path`, `metadata_path`,
+  `source_section_hash`, `current_section_hash`, `includes_assets`,
+  `section_has_assets` (whether the section owns any figure/table block), `model`,
+  `created_at`, and `content` (the body, unless `include_content=False`). A missing
+  translation is a normal result, not an error.
+- `write_section_translation(doc_id, section_id, lang, content, includes_assets=False,
+  model=None, source_section_hash=None)` → write
+  `translations/<lang>/<doc_id>/<section_id>.md` and its registry sidecar,
+  replacing any previous translation; returns the entry (status `fresh`, no
+  `content`). Empty `content` is rejected. When `source_section_hash` is given and
+  differs from the section's current hash the write is refused, so a translation of
+  outdated content is never registered as fresh.
+- `list_section_artifacts(doc_id=None, lang=None, type="translation")` → every
+  cached translation (filtered by `doc_id` / `lang`) with its status, including
+  `orphaned` ones whose section no longer exists; no bodies. Only
+  `type="translation"` exists.
 - `list_documents()` → the workspace's segmented documents, each with `doc_id`,
   `title` (from the parsed `document.json`, falling back to `doc_id`), and
   `section_count`. Lets an agent discover what there is to read before picking a
@@ -651,8 +832,77 @@ telling the user to `uv sync --extra mcp`.
   `completed`, `total`, and `done`. Lets an agent resume or track progress.
 
 Together `list_documents` → `create_plan` → `get_next_section`/`get_context` →
-`mark_read` → `list_plans` let a client drive a full reading session without any
-CLI step (see `docs/mcp/reading-agent.md`).
+`mark_read` (or `complete_reading_batch`) → `list_plans`/`get_plan_progress` let a
+client drive a full reading session without any CLI step (see `docs/mcp/reading-agent.md`).
+
+### Reading batch completion
+
+`validate_reading_batch` / `complete_reading_batch` take a `plan_id`, an optional
+`section_ids` list, and the requirements the batch must meet. When `section_ids` is
+omitted the batch is the plan's current batch, resolved by the **same** resolver as
+`get_next_section` for the same `stop_at_boundary` / `chapter_level`: an agent that
+reads boundary-clipped batches (`get_next_section(stop_at_boundary=True)`) must pass
+the same flags here, or the default batch would spill past the chapter boundary.
+Explicit `section_ids` take precedence over both flags; duplicates are dropped and an
+empty list is rejected. Each requirement applies to every section of the batch:
+
+| Argument | Default | Check |
+|---|---|---|
+| `require_annotation` | `true` | `annotations/<doc_id>/<section_id>.json` exists and is valid (readable, and its payload names this document/section — the same files `index build` accepts). |
+| `index` | `"fresh"` | The document is in the index **and** the index reflects each section's current annotation: the stored `summary`/`model`/`created_at` match the file, and — when the annotation asserts `concepts` — the section's indexed concept edges are exactly those, agent-sourced. An unannotated section is fresh when the index stores no annotation for it. `"fresh"` makes a missing/stale index blocking; `"deferred"` reports it without blocking (the next `index build`, e.g. the nightly maintenance pass, folds it in); `"ignore"` skips the check. |
+| `require_assets` | `true` | Every figure/table of the section whose file resolves (the `assets` of `get_section`) is listed by `block_id` in `inspected_assets` — the caller's declaration that it opened/embedded it. |
+| `inspected_assets` | `[]` | Block ids the caller inspected. |
+| `translation_lang` | `null` | When set (a slug such as `vi`, `pt-br`; lowercased), the section's cached translation `translations/<lang>/<doc_id>/<section_id>.md` exists, is non-empty, and is not `stale` in the translation registry (see `artifacts.md`). An `untracked` body (no valid registry sidecar) passes with a warning. |
+| `artifacts` | `[]` | Extra workspace-relative path templates that must exist and be non-empty per section. `{doc_id}`, `{section_id}`, `{plan_id}` expand; an absolute path, a `..` segment, an unknown field, or a path resolving outside the workspace is rejected as a request error. |
+
+Both return a report:
+
+```json
+{
+  "plan_id": "daily", "doc_id": "ddia", "section_ids": ["ddia.a", "ddia.b"],
+  "ok": false, "committed": false, "index_rebuild_needed": true,
+  "issues": [
+    {"code": "annotation_missing", "section_id": "ddia.b", "blocking": true,
+     "message": "No annotation for 'ddia.b'; call annotate_section first."}
+  ],
+  "completed": 4, "total": 120, "done": false
+}
+```
+
+- `ok` — no blocking issue. `committed` — `complete_reading_batch` actually marked
+  the batch read (always `false` from `validate_reading_batch`).
+- `index_rebuild_needed` — the index is missing or stale, whatever the policy, so a
+  `"deferred"` caller knows to schedule `bookgraph index build <workspace> <doc_id>`.
+- `completed` / `total` / `done` — plan progress after the call.
+- Every problem is reported in one pass (not just the first), so a caller can fix
+  them all before retrying.
+
+Issue codes (`blocking` unless noted):
+
+- `section_not_in_plan` — a requested id is not in the plan.
+- `section_missing` — the plan references a section the document's
+  `sections.jsonl` no longer has (re-segmented); recreate the plan.
+- `already_read` — non-blocking; marking it again is idempotent.
+- `annotation_missing` — only when `require_annotation`.
+- `annotation_invalid` — corrupt or misplaced annotation file; blocking only when
+  `require_annotation`.
+- `index_missing` (batch-wide, `section_id: null`) / `index_stale` — blocking only
+  when `index="fresh"`.
+- `asset_not_inspected` — a resolvable figure/table was not in `inspected_assets`.
+- `asset_file_missing` — non-blocking; the parser never staged the file, so it
+  cannot be inspected (same condition as the section warning of that name).
+- `asset_unknown` — non-blocking; `inspected_assets` names a block that is not an
+  asset of the batch (likely a typo).
+- `translation_missing`, `artifact_missing` — the required file is absent or empty.
+- `translation_stale` — the registry records a translation of an older version of
+  the section; re-translate with `write_section_translation`.
+- `translation_untracked` — non-blocking; the body has no registry record, so its
+  freshness is unknown.
+
+Request errors — unknown/invalid `plan_id`, an unsegmented document, an empty
+`section_ids`, a plan that is already complete when `section_ids` is omitted, an
+invalid `translation_lang`, artifact template, or `chapter_level` — raise a tool error instead of
+returning a report.
 
 ### Reads / writes
 
@@ -662,10 +912,13 @@ CLI step (see `docs/mcp/reading-agent.md`).
   and `sources/parsed/<doc_id>/document.json` (asset resolution for `assets`; the
   section `warnings` are recomputed from the section and its assets, never read
   back from `quality.json`).
-- `mark_read` and `create_plan` write `reading_plans/<plan_id>.json` (same
-  contracts as `bookgraph reading-plan mark-read` / `create`); `annotate_section`
-  writes `annotations/<doc_id>/<section_id>.json` (see `annotations.md`). No other
-  tool writes.
+- `mark_read`, `complete_reading_batch`, and `create_plan` write
+  `reading_plans/<plan_id>.json` (same contracts as `bookgraph reading-plan
+  mark-read` / `create`; the file is replaced atomically, so a crash never leaves a
+  truncated plan); `annotate_section` writes
+  `annotations/<doc_id>/<section_id>.json` (see `annotations.md`);
+  `write_section_translation` writes `translations/<lang>/<doc_id>/<section_id>.md`
+  + `.json` (see `artifacts.md`). No other tool writes.
 
 MCP tool inputs are client-controlled, so `plan_id` and `doc_id` are validated as
 filesystem-safe slugs before they are used as path components; a traversal value
@@ -826,9 +1079,11 @@ bookgraph export translated-pdf /path/to/workspace ddia --check           # cove
   rebuilt from their `block_ids`, so figures, tables and equations stay next to the
   prose around them in the source. Without it, original sections render
   `Section.text` as Markdown.
-- Translation artifacts. The first file found wins:
-  1. `translations/<lang>/<doc_id>/<section_id>.md`
-  2. `translation_cache/<doc_id>/<section_id>.<lang>.md`
+- Translation bodies. The first file found wins:
+  1. `translations/<lang>/<doc_id>/<section_id>.md`, the registry-owned body written
+     by `write_section_translation`. The `.json` sidecar is ignored.
+  2. `translation_cache/<doc_id>/<section_id>.<lang>.md`, an export-only legacy
+     fallback (see `artifacts.md`).
 
 ### Asset handling
 

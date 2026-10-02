@@ -454,6 +454,25 @@ mirroring `bookgraph.models.ReadingPlan`:
 These are recomputed from `section_ids` + `completed` on each `next` call rather
 than persisted, so the file stays a minimal source of truth.
 
+### Write rules
+
+- Every writer (`reading-plan create`/`mark-read`, the MCP `create_plan`,
+  `mark_read`, and `complete_reading_batch` tools) replaces the file atomically
+  (fsynced temp file in `reading_plans/` + rename), so a crash or power loss
+  mid-write leaves the previous plan, never a truncated one. The file keeps its
+  existing permissions (umask default on first write).
+- Every writer holds a per-plan lock across load → modify → write (a CLI `create`,
+  which overwrites blindly, across its write): an in-process lock plus, on POSIX, an
+  advisory `flock` on `reading_plans/.<plan_id>.json.lock`, opened read-write (an exclusive
+  lock on NFS needs it) and read-only only when the file is not writable to us, so a
+  lock file created by another user does not block. Concurrent writers — e.g. the CLI and
+  an MCP server — therefore never lose each other's updates. The `.lock` file is
+  empty and may be left in place; it is not a plan. Without `fcntl` (Windows) only
+  the in-process lock applies.
+- `complete_reading_batch` appends a whole batch to `completed` in one write, and
+  only after its readiness checks pass (see `commands.md`, *Reading batch
+  completion*).
+
 ## `annotations/<doc_id>/<section_id>.json`
 
 Owner: the MCP `annotate_section` tool (`bookgraph.mcp.service` /
@@ -483,16 +502,108 @@ The concept edges here are the authoritative set for that section and, on the ne
 prunes that section's mentions). See **`annotations.md`** for the field rules, the
 presence-based merge rule, and the `markdown-graph` non-goal.
 
-## Translation artifacts
+## `concepts/registry.json`
 
-Read by `bookgraph export translated-pdf`. BookGraph does not write these files: a
-translation agent or a person produces them. There is one Markdown file per section.
-The export uses the first location below that exists:
+Owner: the `bookgraph concepts` CLI (`bookgraph.concept_registry`). Read by
+`index build`, `index concepts`, and the MCP `get_concept` / `concept_hygiene` tools.
+
+A **human-curated source of truth**, like `annotations/`: canonical concepts with
+their deprecated aliases, ignored slugs, and reviewed-distinct pairs. A missing file is
+an empty registry. An invalid one is an error. `index build` rewrites alias edges to
+their canonical slug (keeping the original in `concept_mentions.raw_slug`) and drops
+ignored slugs.
+
+```json
+{
+  "canonical": [
+    {"slug": "table-metadata", "title": "Table Metadata", "aliases": ["metadata-file"], "note": ""}
+  ],
+  "ignored": ["however"],
+  "distinct": [["snapshot", "snapshot-id"]]
+}
+```
+
+See **`concepts.md`** for the invariants, canonicalization rules, and hygiene reports.
+
+## `translations/<lang>/<doc_id>/<section_id>.md` + `.json`
+
+Owner: the MCP `write_section_translation` tool (`bookgraph.mcp.service` /
+`bookgraph.translations`). Read by `get_section_translation` and
+`list_section_artifacts`.
+
+A **cache of generated per-section translations** plus its registry. The `.md` body
+is the translation itself and keeps the path convention reading jobs already used;
+the `.json` sidecar beside it is the registry record, mirroring
+`bookgraph.models.SectionArtifact`:
+
+```json
+{
+  "type": "translation",
+  "lang": "vi",
+  "doc_id": "iceberg",
+  "section_id": "iceberg.table-format",
+  "path": "translations/vi/iceberg/iceberg.table-format.md",
+  "source_section_hash": "sha256:9f2c...",
+  "content_hash": "sha256:41ab...",
+  "includes_assets": true,
+  "model": "claude-...",
+  "created_at": "2026-10-02T00:00:00+00:00"
+}
+```
+
+- `lang`: a lowercase hyphenated tag (`vi`, `pt-br`); input is lowercased, so
+  `pt-BR` and `pt-br` name the same cache. Directories are always lowercase: a
+  mixed-case legacy directory (e.g. `translations/pt-BR/`) is not a valid `lang` and
+  is ignored by lookups and listings on case-sensitive filesystems — rename it to
+  lowercase to bring it into the registry.
+- `path`: the body, relative to the workspace root.
+- `source_section_hash`: `sha256:` over the section's `title` + `text` (canonical
+  JSON) at write time. Ids, page spans, and block ids are excluded, so a re-segment
+  that keeps the words keeps the translation fresh.
+- `content_hash`: `sha256:` over the body's UTF-8 bytes at write time. It binds the
+  sidecar to the body it describes: a body overwritten afterwards (a path-convention
+  writer, a manual edit) no longer matches and reads as `untracked`.
+- `includes_assets`: whether the writer carried the section's figures/tables into
+  the translation (declared by the writer, not inferred).
+
+Freshness is **derived, never stored**: each read recomputes the section's current
+hash and compares it with the sidecar.
+
+| `status` | Meaning |
+| --- | --- |
+| `fresh` | Body + matching sidecar; reuse as-is. |
+| `stale` | Body + sidecar, but the section's content changed since. |
+| `untracked` | Body with no valid sidecar for it (cached before the registry, a corrupt/misplaced sidecar, or a body whose hash no longer matches `content_hash`); freshness unknown. |
+| `missing` | No body (a sidecar without a body is ignored). |
+| `orphaned` | Body whose section (or whole document) no longer exists; reported by listing. |
+
+**Reuse rule.** `fresh` means the translation matches the section's current *text*;
+the hash does not cover assets, so a re-parse that newly stages a figure leaves a
+prose-only translation `fresh`. Reuse a translation as-is only when `status` is
+`fresh` **and** (`includes_assets` or not `section_has_assets`).
+
+Write order: remove the previous sidecar, write the body, then write the new sidecar,
+each via a same-directory temp file + fsync + rename (files take the process umask,
+not `mkstemp`'s 0600). A crash or a racing writer between the steps leaves an
+`untracked` body — never a sidecar describing a different body. A sidecar whose
+`lang`/`doc_id`/`section_id` disagrees with its location is ignored. Like
+annotations, the cache is **not** rebuildable from sources (regenerating it costs
+model calls), so `index build`, `segment`, and `wiki` never delete it.
+
+## Translation bodies as read by `bookgraph export translated-pdf`
+
+The export is a **read-only consumer** of the translation bodies described above. It
+reads the `.md` body and ignores the `.json` registry sidecar. It does not yet report
+`fresh` / `stale` / `untracked` status; that is tracked in issue 56. For each section it
+uses the first location below that exists:
 
 ```text
-translations/<lang>/<doc_id>/<section_id>.md          # curated translation
-translation_cache/<doc_id>/<section_id>.<lang>.md     # translation-run cache
+translations/<lang>/<doc_id>/<section_id>.md          # registry-owned body (see above)
+translation_cache/<doc_id>/<section_id>.<lang>.md     # export-only legacy fallback
 ```
+
+`translation_cache/` is not part of the registry. No BookGraph command writes it, and
+it may be dropped or rerouted through `write_section_translation` (issue 56).
 
 - Optional leading `---` frontmatter. Only flat `key: value` lines are read. `title`
   is the translated section title used in the table of contents.

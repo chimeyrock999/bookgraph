@@ -20,6 +20,8 @@ belong under `docs/design/` instead.
 - `workspace.md` — canonical workspace paths and naming rules.
 - `commands.md` — CLI command contracts, inputs, outputs, side effects, and error behavior.
 - `artifacts.md` — JSON/Markdown artifact schemas and status transitions.
+- `concepts.md` — the `concepts/registry.json` concept registry (aliases, canonical
+  concepts, ignores) and the concept-hygiene contract (merge suggestions, lint, review).
 - `index.md` — the `indexes/bookgraph.db` SQLite schema, build, and query contract.
 - `parse-book-large-pdfs.md` — user-facing runtime/diagnosis guide for long raw-PDF parses.
 - `handoff.md` — feature-branch and cross-agent integration workflow.

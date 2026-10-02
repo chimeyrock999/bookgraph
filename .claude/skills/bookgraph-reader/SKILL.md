@@ -60,16 +60,57 @@ Operational details live in `docs/cli/parse-book-large-pdfs.md`.
 4. **Advance** — once the user is done with a section, `mark_read(plan_id)` (marks
    the next unread by default) so progress persists. Then loop to step 3.
 5. **Report** — when the user pauses, `list_plans()` to show `completed/total`.
+   For "how many sections until the end of this chapter?", use
+   `get_plan_progress(plan_id)` (or the `chapter` field of `get_next_section`) —
+   don't pull the whole outline. Pass `chapter_level=2` when chapters sit under parts (a lone `# Book Title`
+   root is skipped automatically).
+
+For an **enrichment job** (annotating, translating, or rebuilding the index per
+batch), advance with `complete_reading_batch(plan_id, inspected_assets=[...],
+translation_lang=..., ...)` instead of `mark_read`: it marks the whole batch read
+only after verifying the work, and otherwise returns `committed: false` with
+actionable `issues`. Fix every blocking issue and retry — never advance past a
+failed step. If you read with `get_next_section(stop_at_boundary=True)`, pass the same
+`stop_at_boundary` / `chapter_level` so it completes the batch you were handed.
+`validate_reading_batch` takes the same arguments as a dry run.
 
 ## Navigating and connecting
 
 - `search(query, doc_id=None)` — find sections by topic. Omit `doc_id` to search
   **every** document (cross-document); each hit carries its `doc_id`.
-- `get_outline(doc_id)` — the full heading hierarchy, for jumping around or giving
-  the user a map.
+- `get_chapter_outline(plan_id)` — the current chapter's subtree (two levels by
+  default) with per-section `read` flags and `completed`/`remaining`/`total` for
+  the chapter. This is the cheap answer to "where am I / what's left in this
+  chapter". A lone book-title root is skipped automatically; if the "chapter"
+  comes back as a Part, retry with `chapter_level=2`. While the Part (or book
+  root) heading itself is the next unread section, it is returned alone
+  (`total == 1`) even with `chapter_level=2`. That is expected, so don't keep
+  retrying: read it, `mark_read`, and the next call returns the real chapter.
+- `get_section_tree(doc_id, section_id)` — a section's breadcrumb, siblings and
+  children.
+- `get_outline(doc_id, root_id=None, max_depth=None)` — the heading hierarchy, for
+  jumping around or giving the user a map. On real books, scope it: `max_depth=1`
+  for the chapter list, then `root_id=<chapter>` to drill in. An unscoped outline
+  can be huge.
 - `get_related(doc_id, section_id)` — a section's structural neighbours.
 - `get_concept(concept)` — the cross-book "where else is this discussed" view. Use it
   whenever a concept recurs, to build the user's mental graph across books.
+
+## Translating sections
+
+When the user wants sections translated (e.g. read in Vietnamese, or delivered to a
+chat), reuse the cache instead of retranslating:
+
+1. `get_section_translation(doc_id, section_id, lang)` — reuse its `content` as-is
+   only when `status` is `fresh` **and** (`includes_assets` or not
+   `section_has_assets`). A fresh translation with `includes_assets` false on a
+   section that has assets left out figures/tables; mention that or redo it.
+2. Otherwise (`missing`, `stale`, or `untracked` you don't trust) translate the
+   section's real text, then `write_section_translation(doc_id, section_id, lang,
+   content, includes_assets=..., source_section_hash=<current_section_hash>)` so
+   the next run reuses it.
+3. `list_section_artifacts(doc_id, lang)` shows every cached translation and which
+   are `stale` after a re-segment.
 
 ## Behavior
 
@@ -85,8 +126,9 @@ Operational details live in `docs/cli/parse-book-large-pdfs.md`.
 
 ## Notes
 
-- Only `create_plan` and `mark_read` change state (the reading plan); everything
-  else is read-only.
+- Only `create_plan`, `mark_read`, and `complete_reading_batch` (the reading plan),
+  `annotate_section`, and `write_section_translation` change state; everything else
+  is read-only.
 - Concepts require `bookgraph index build`; `search` and the graph tools also work
   before indexing (live scan), just with rougher ranking.
 - Full tool reference: `docs/cli/commands.md`; setup + client config:

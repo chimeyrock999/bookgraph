@@ -537,3 +537,17 @@ def test_toc_title_drops_heading_markdown(workspace: WorkspacePaths) -> None:
 def test_api_rejects_non_slug_ids(workspace: WorkspacePaths, doc_id: str, lang: str) -> None:
     with pytest.raises(ExportError, match="must be a lowercase hyphenated slug"):
         build_translated_export(workspace, doc_id, lang=lang)
+
+
+def test_reads_translations_written_through_the_registry(workspace: WorkspacePaths) -> None:
+    from bookgraph.mcp.service import write_section_translation
+
+    chapter, _, _ = _section_ids(workspace)
+    write_section_translation(workspace, DOC, chapter, "vi", "# Chương Một\n\nTừ registry.\n")
+
+    export = build_translated_export(workspace, DOC, lang="vi", generated_at=GENERATED_AT)
+
+    assert export.report.sections[0].source == "translated"
+    assert export.report.sections[0].artifact == f"translations/vi/{DOC}/{chapter}.md"
+    assert "Từ registry." in export.html
+    assert '"source_section_hash"' not in export.html  # the .json sidecar is not content

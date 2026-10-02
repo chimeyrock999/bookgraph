@@ -70,7 +70,9 @@ class ConceptMention(BaseModel):
     ``source`` is ``"auto"`` (deterministic Tier-1) or ``"agent"`` (Tier-2 annotation).
     ``summary`` is the mentioning section's Tier-2 annotation summary (empty when the
     section has none) — the long-form context that turns a bare backlink into a
-    readable, source-grounded concept note.
+    readable, source-grounded concept note. ``raw_slug`` is the slug the mention was
+    asserted under when the concept registry resolved it as an alias of this concept
+    (empty when it was stored under its own slug) — alias provenance.
     """
 
     doc_id: str
@@ -79,6 +81,7 @@ class ConceptMention(BaseModel):
     gloss: str = ""
     source: str = "auto"
     summary: str = ""
+    raw_slug: str = ""
 
 
 class ConceptNode(BaseModel):
@@ -103,6 +106,19 @@ class Concept(BaseModel):
 
     node: ConceptNode
     mentions: list[ConceptMention]
+
+
+class IndexedAnnotation(BaseModel):
+    """The Tier-2 annotation provenance an index build stored for one section.
+
+    Mirrors the annotation file's ``summary`` / ``model`` / ``created_at`` as of the
+    last ``index build``, so a caller can tell whether the file on disk has been
+    folded into the index yet (see ``IndexBackend.indexed_annotation``).
+    """
+
+    summary: str = ""
+    model: str | None = None
+    created_at: str | None = None
 
 
 class IndexBackend(ABC):
@@ -199,6 +215,17 @@ class IndexBackend(ABC):
         last ``index build`` — unlike the MCP ``get_context`` tool, which reads the
         annotation file directly for an immediate, pre-rebuild summary. ``None`` when
         the section is unannotated, unindexed, or the table predates this feature.
+        """
+
+    @abstractmethod
+    def indexed_annotation(
+        self, workspace: WorkspacePaths, doc_id: str, section_id: str
+    ) -> IndexedAnnotation | None:
+        """The annotation provenance stored for a section by the last build.
+
+        ``None`` when the section has no stored annotation (unannotated, unindexed, or
+        the table predates the feature). Comparing it with the annotation file is how
+        ``complete_reading_batch`` detects an annotation the index has not picked up.
         """
 
     @abstractmethod

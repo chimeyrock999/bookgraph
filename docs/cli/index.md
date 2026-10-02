@@ -123,6 +123,7 @@ CREATE TABLE concept_mentions (
     section_id    TEXT NOT NULL,
     gloss         TEXT NOT NULL DEFAULT '',      -- per-mention note (Tier-2 only)
     source        TEXT NOT NULL DEFAULT 'auto',  -- 'auto' | 'agent'
+    raw_slug      TEXT NOT NULL DEFAULT '',      -- original slug when aliased
     PRIMARY KEY (doc_id, section_id, concept_slug)
 );
 CREATE INDEX concept_mentions_slug ON concept_mentions (concept_slug);
@@ -153,6 +154,10 @@ CREATE INDEX concept_mentions_slug ON concept_mentions (concept_slug);
   from exactly one tier, all rows for a given pair share one `source`; the
   `PRIMARY KEY (doc_id, section_id, concept_slug)` makes a cross-tier collision for the
   same pair impossible.
+- `raw_slug`: when the concept registry (`concepts/registry.json`, see `concepts.md`)
+  resolved the edge's slug as an **alias**, the slug it was asserted under. In that
+  case `concept_slug` is the canonical slug. Empty for an edge stored under its own
+  slug. This is alias provenance, surfaced on `get_concept` mentions.
 
 ### `section_annotations`
 
@@ -162,6 +167,11 @@ annotation files (mirroring `concept_mentions`' per-doc delete/insert) so the bu
 database carries the summary alongside the graph — but it is **not** a
 `_REQUIRED_TABLES` member, so a database predating it still reads cleanly (its absence
 just means "no stored summaries").
+
+The stored `summary`/`model`/`created_at` double as the build's record of *which*
+annotation it folded in: `IndexBackend.indexed_annotation` returns them, and the MCP
+`complete_reading_batch` tool compares them with the annotation file to detect an
+annotation the index has not picked up yet (`index_stale`).
 
 ```sql
 CREATE TABLE section_annotations (
@@ -211,7 +221,11 @@ GROUP BY concept_slug;
    with the deterministic Tier-1 extraction per the **presence-based merge rule**: for
    each section, an annotation (if present) is the authoritative concept edge set
    (`source='agent'`, carrying gloss — an empty concept list prunes the section);
-   otherwise the auto extractor supplies the edges (`source='auto'`).
+   otherwise the auto extractor supplies the edges (`source='auto'`). The merged
+   edges then pass through the concept registry (`concepts/registry.json`, see
+   `concepts.md`): ignored slugs are dropped, aliases are rewritten to their canonical
+   slug (the original is kept in `raw_slug`), and canonical concepts take the registry
+   title. An invalid registry aborts the build.
 4. Rebuilds that document **idempotently and atomically** in one transaction:
    `DELETE FROM doc_catalog / sections_fts / section_graph / concept_mentions /
    section_annotations WHERE doc_id = ?`, then re-inserts the fresh rows (the merged
@@ -230,8 +244,8 @@ Tier-2 merge), and the stored summaries stay in sync with `sections.jsonl` +
 The `gloss` / `source` columns on `concept_mentions` and the `section_annotations`
 table were added for the Tier-2 enrichment. `index build` runs an idempotent,
 guarded migration on open: it reads `PRAGMA table_info(concept_mentions)` and issues
-`ALTER TABLE … ADD COLUMN` only for columns that are missing (both with `NOT NULL
-DEFAULT` so existing rows backfill), and `CREATE TABLE IF NOT EXISTS section_annotations`.
+`ALTER TABLE … ADD COLUMN` only for columns that are missing (`gloss`, `source`, and
+the later `raw_slug`, all with `NOT NULL DEFAULT` so existing rows backfill), and `CREATE TABLE IF NOT EXISTS section_annotations`.
 
 - A pre-change database never crashes: its `concept_mentions` lacks the `gloss` /
   `source` columns, so the concept-read SELECTs (which now name those columns) hit
@@ -263,8 +277,10 @@ stage's output.
   `sections_fts`, ranked by `bm25`. When `doc_id` is given, results are filtered
   to that document; when omitted, `search` ranks across **every** indexed document
   (cross-document search) and each hit carries its `doc_id`.
-- **`get_outline` / `get_related` / `get_context`**: read `section_graph` for the
-  requested `doc_id`, reconstructing children via the `parent_id` inverse.
+- **`get_outline` / `get_related` / `get_context`** (and the scoped `get_section_tree` /
+  `get_chapter_outline`): read `section_graph` for the
+  requested `doc_id`, reconstructing children via the `parent_id` inverse. Scoping
+  (`root_id` / `max_depth`) is applied to the loaded graph in the service, not in SQL.
   `get_context` additionally returns the section's own concepts (from
   `concept_mentions`, each with its cross-book `doc_count` / `mention_count` plus the
   per-mention `gloss` / `source`) so a reader can pivot from the current section into
@@ -284,7 +300,10 @@ stage's output.
   section). `annotated_mention_count` reports how many mentions carry a summary in
   **both** modes — the compact card omits the summary text but still counts it, a cheap
   cue for whether a follow-up `include_annotations=True` call is worthwhile. Returns
-  nothing when the slug is absent. Concepts have no live-scan fallback: an unindexed
+  nothing when the slug is absent. An **alias** slug from the concept registry
+  resolves to its canonical concept first. The result then carries the canonical
+  `slug`/`title`, `aliases`, `canonical`, and `resolved_from`, and each mention
+  carries its `raw_slug` (see `concepts.md`). Concepts have no live-scan fallback: an unindexed
   document's concepts are simply absent until it is built (unlike `search`/graph reads,
   which scan `sections.jsonl` on miss).
 

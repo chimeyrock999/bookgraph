@@ -1,10 +1,22 @@
 from __future__ import annotations
 
+import os
+import stat
+import threading
+import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
+from bookgraph.graph import build_section_graph, chapter_span
 from bookgraph.models import ReadingPlan, Section
 from bookgraph.utils import validate_slug_id
+
+try:  # POSIX only; elsewhere plan_lock falls back to the in-process lock alone
+    import fcntl
+except ImportError:  # pragma: no cover - exercised only on Windows
+    fcntl = None  # type: ignore[assignment]
 
 
 @dataclass(frozen=True)
@@ -64,6 +76,112 @@ def next_sections(plan: ReadingPlan) -> ContextPack:
     )
 
 
+@dataclass(frozen=True)
+class ChapterProgress:
+    """Progress through the chapter that holds a plan's next unread section.
+
+    The "chapter" is the scope ancestor of the first unread section (see
+    :func:`chapter_progress`). Counts cover only sections that are both in the plan
+    and in that chapter's subtree, by membership — so plan resets, skipped front
+    matter, and out-of-order ``mark_read`` calls all count correctly. ``next_section_ids``
+    is the next ``daily_sections`` batch clipped at the chapter boundary, and
+    ``next_boundary_id`` is the first section after the chapter (``None`` at the end
+    of the document). Chapter fields are ``None`` when the plan is done.
+    """
+
+    plan_id: str
+    doc_id: str
+    current_section_id: str | None
+    chapter_id: str | None
+    chapter_title: str | None
+    chapter_level: int | None
+    completed_in_chapter: int
+    remaining_in_chapter: int
+    total_in_chapter: int
+    next_section_ids: list[str]
+    next_boundary_id: str | None
+    next_boundary_title: str | None
+    next_boundary_level: int | None
+    remaining: int
+    done: bool
+
+
+def chapter_progress(
+    plan: ReadingPlan,
+    sections: list[Section],
+    *,
+    chapter_level: int | None = None,
+) -> ChapterProgress:
+    """Report progress within the chapter of ``plan``'s next unread section.
+
+    ``sections`` is the document's manifest in reading order; the heading hierarchy is
+    derived from it with :func:`~bookgraph.graph.build_section_graph`, so this matches
+    ``get_outline``. The scope is resolved by :func:`~bookgraph.graph.resolve_chapter`:
+    the outermost ancestor of the next unread section (skipping a lone book-title root)
+    by default, or the nearest ancestor-or-self whose heading ``level`` is at most
+    ``chapter_level`` (e.g. ``2`` for chapters nested under level-1 parts). Its members
+    and boundary come from :func:`~bookgraph.graph.chapter_span`; while a lone root is
+    itself being read — or, with ``chapter_level``, any heading shallower than it, such
+    as a part — the scope is that one section and the boundary its first child.
+    """
+
+    if chapter_level is not None and chapter_level < 1:
+        raise ValueError("chapter_level must be at least 1")
+
+    completed = set(plan.completed)
+    unread = [section_id for section_id in plan.section_ids if section_id not in completed]
+    if not unread:
+        return ChapterProgress(
+            plan_id=plan.plan_id,
+            doc_id=plan.doc_id,
+            current_section_id=None,
+            chapter_id=None,
+            chapter_title=None,
+            chapter_level=None,
+            completed_in_chapter=0,
+            remaining_in_chapter=0,
+            total_in_chapter=0,
+            next_section_ids=[],
+            next_boundary_id=None,
+            next_boundary_title=None,
+            next_boundary_level=None,
+            remaining=0,
+            done=True,
+        )
+
+    nodes = build_section_graph(plan.doc_id, sections).nodes
+    current_id = unread[0]
+    if not any(node.id == current_id for node in nodes):
+        raise ValueError(
+            f"reading plan '{plan.plan_id}' references unknown section '{current_id}' "
+            f"in document '{plan.doc_id}'"
+        )
+
+    span = chapter_span(nodes, current_id, chapter_level=chapter_level)
+    chapter, boundary = span.chapter, span.boundary
+    subtree = set(span.member_ids)
+
+    in_chapter = [section_id for section_id in plan.section_ids if section_id in subtree]
+    unread_in_chapter = [section_id for section_id in in_chapter if section_id not in completed]
+    return ChapterProgress(
+        plan_id=plan.plan_id,
+        doc_id=plan.doc_id,
+        current_section_id=current_id,
+        chapter_id=chapter.id,
+        chapter_title=chapter.title,
+        chapter_level=chapter.level,
+        completed_in_chapter=len(in_chapter) - len(unread_in_chapter),
+        remaining_in_chapter=len(unread_in_chapter),
+        total_in_chapter=len(in_chapter),
+        next_section_ids=unread_in_chapter[: plan.daily_sections],
+        next_boundary_id=boundary.id if boundary else None,
+        next_boundary_title=boundary.title if boundary else None,
+        next_boundary_level=boundary.level if boundary else None,
+        remaining=len(unread),
+        done=False,
+    )
+
+
 def mark_section_read(plan: ReadingPlan, section_id: str | None = None) -> tuple[ReadingPlan, str]:
     """Return a copy of ``plan`` with ``section_id`` marked read.
 
@@ -90,11 +208,83 @@ def mark_section_read(plan: ReadingPlan, section_id: str | None = None) -> tuple
     return updated, section_id
 
 
+_PLAN_LOCKS: dict[Path, threading.Lock] = {}
+_PLAN_LOCKS_GUARD = threading.Lock()
+
+
+@contextmanager
+def plan_lock(path: Path) -> Iterator[None]:
+    """Serialise read-modify-write cycles on one reading plan.
+
+    Wrap the whole load → modify → :func:`write_reading_plan` sequence so a concurrent
+    writer cannot slip in between the load and the replace and have its update lost.
+    Holds an in-process lock (concurrent MCP requests) plus, on POSIX, an advisory
+    ``flock`` on a sibling ``.<plan>.json.lock`` file (the CLI and an MCP server
+    racing). Not re-entrant.
+    """
+
+    key = path.resolve()
+    with _PLAN_LOCKS_GUARD:
+        thread_lock = _PLAN_LOCKS.setdefault(key, threading.Lock())
+    with thread_lock:
+        if fcntl is None:
+            yield
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd = _open_lock_file(path.with_name(f".{path.name}.lock"))
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+
+
+def _open_lock_file(lock_path: Path) -> int:
+    """Open (creating if needed) a plan's lock file for ``flock``.
+
+    Read-write first: Linux NFS clients emulate ``flock`` with ``fcntl`` byte-range
+    locks, where an exclusive lock needs a descriptor open for writing. Falls back to
+    read-only when the file is not writable to us (e.g. created 0644 by another user
+    in a shared workspace), which is enough for ``flock`` on local filesystems.
+    """
+
+    try:
+        return os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o666)
+    except PermissionError:
+        return os.open(lock_path, os.O_RDONLY | os.O_CREAT, 0o666)
+
+
 def write_reading_plan(plan: ReadingPlan, path: Path) -> Path:
-    """Persist a reading plan to ``reading_plans/<plan_id>.json``."""
+    """Atomically persist a reading plan to ``reading_plans/<plan_id>.json``.
+
+    The plan is the reading-progress source of truth, so it is written to a temp file
+    in the same directory, fsynced, and swapped in with ``os.replace``: a crash or
+    power loss mid-write leaves the previous plan intact rather than a truncated or
+    empty file that loses all progress. The temp file is created with the usual
+    umask-derived mode (like ``Path.write_text``), and an existing plan keeps its mode.
+    Atomicity covers torn writes only; callers that read-modify-write must hold
+    :func:`plan_lock` to avoid lost updates.
+    """
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(plan.model_dump_json(indent=2) + "\n")
+    tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
+    try:
+        with os.fdopen(fd, "w") as handle:
+            handle.write(plan.model_dump_json(indent=2) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.chmod(tmp, stat.S_IMODE(path.stat().st_mode))
+        except FileNotFoundError:
+            pass  # first write: keep the umask-derived mode
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
     return path
 
 

@@ -373,6 +373,12 @@ def _validate_mineru_options(
             "This MinerU profile parses on a remote MinerU V1 service and needs its URL; "
             "pass --url or set [mineru].url."
         )
+    if options.url and (options.ocr_mode != "auto" or options.image_analysis is False):
+        # mineru-kit sends only the tier and page range to a remote service.
+        raise typer.BadParameter(
+            "A remote MinerU V1 service (--url) only takes the tier and page range; "
+            "drop --ocr-mode / --no-image-analysis (or their [mineru] keys) for a remote run."
+        )
     for label, value in (("start-page", options.start_page), ("end-page", options.end_page)):
         if value is None:
             continue

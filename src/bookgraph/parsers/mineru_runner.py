@@ -34,6 +34,9 @@ _ZIP_MARKDOWN = "markdown.md"
 _ZIP_STRUCTURED_CONTENT = "structured_content.json"
 _ZIP_MODEL_OUTPUT = "model_output.json"
 _ZIP_IMAGES_DIR = "images"
+# MinerU 3.x side artifacts. A MinerU 4 run supersedes them, so restaging removes
+# them instead of leaving stale debug output next to the new bundle.
+_LEGACY_ARTIFACT_SUFFIXES = ("_layout.pdf", "_span.pdf", "_content_list.json")
 
 
 class MinerUNotInstalledError(RuntimeError):
@@ -169,13 +172,15 @@ class MinerURunner:
             "zip",
             "--tier",
             self.tier,
-            "--ocr-mode",
-            self.ocr_mode,
         ]
-        if self.image_analysis is False:
-            argv.append("--disable-image-analysis")
         if self.url:
+            # mineru-kit forwards only the tier and page range to a remote service,
+            # so local-only knobs stay out of argv (and of the run log).
             argv += ["--remote-url", self.url]
+        else:
+            argv += ["--ocr-mode", self.ocr_mode]
+            if self.image_analysis is False:
+                argv.append("--disable-image-analysis")
         if (pages := _page_range(self.start_page, self.end_page)) is not None:
             argv += ["--pages", pages]
         return argv
@@ -344,6 +349,9 @@ def _stage_artifacts(
         shutil.copy2(candidate, target)
         written.append(target)
         return target
+
+    for suffix in _LEGACY_ARTIFACT_SUFFIXES:
+        (output_dir / f"{stem}{suffix}").unlink(missing_ok=True)
 
     try:
         staged_middle = stage_file(_ZIP_MIDDLE_JSON, MINERU_MIDDLE_JSON_SUFFIX)

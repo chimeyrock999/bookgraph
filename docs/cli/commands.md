@@ -1382,7 +1382,7 @@ Options:
 - `--tier` / `--mineru-tier`: MinerU 4 tier `flash | basic | standard | advanced`. Default: profile / `[mineru].tier`.
 - `--ocr-mode` (aliases `--method/-m`, `--mineru-method`): `auto | txt | ocr`. Default: profile / `[mineru].ocr_mode` (or the 3.x key `[mineru].method`).
 - `--image-analysis/--no-image-analysis`: `--no-image-analysis` passes `--disable-image-analysis`. Default: profile / `[mineru].image_analysis`.
-- `--url/-u` / `--mineru-url`: remote MinerU V1 parse service, passed as `--remote-url`; required by `remote-gpu`. The API key comes from `MINERU_API_KEY`. Default: `[mineru].url`.
+- `--url/-u` / `--mineru-url`: remote MinerU V1 parse service, passed as `--remote-url`; required by `remote-gpu`. The API key comes from `MINERU_API_KEY`. Only the tier and page range reach the remote service, so `--ocr-mode` other than `auto` or `--no-image-analysis` together with a URL is rejected, and argv carries neither flag. Default: `[mineru].url`.
 - `--start-page/-s`, `--end-page/-e`: 0-based inclusive page range, passed to MinerU as its 1-based `--pages` (`--start-page 4` alone is `5-r1`). Default: `[mineru].start_page` / `end_page`.
 - `--timeout-seconds`: subprocess timeout. Default: config; pass `0` for no timeout.
 - `--parser/-p`: parser after runner output is staged. Default: `[parsers].default_pdf` (`mineru-middle-json`).

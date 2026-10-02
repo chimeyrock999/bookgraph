@@ -203,7 +203,9 @@ MinerU runner staging contract (`bookgraph parse-book`):
   `<doc_id>_model_output.json`, and `images/` as is (Markdown and middle JSON
   reference images as `images/<file>`).
 - A bundle without `middle_json.json` fails the run. MinerU 3.x side artifacts
-  (`*_layout.pdf`, `*_span.pdf`, `*_content_list.json`) are no longer produced.
+  (`<doc_id>_layout.pdf`, `<doc_id>_span.pdf`, `<doc_id>_content_list.json`) are no
+  longer produced; a successful MinerU 4 run removes the ones an earlier 3.x run
+  left in `sources/parsed/<doc_id>/`.
 - It does not produce `document.json`; `mineru-middle-json` remains the parser that turns `<doc_id>_middle.json` into canonical blocks.
 
 `mineru-middle-json` block mapping for MinerU 4 (`docvortex.middle` 2.x):
@@ -282,7 +284,9 @@ mirroring `bookgraph.models.Section`:
 
 - `id`: `<doc_id>.<slug>` derived from the section title. Doubles as the
   `<section_id>.md` filename, so it must be unique within a document; the writer
-  refuses duplicate ids rather than overwriting.
+  refuses duplicate ids rather than overwriting. The slug is capped at 80
+  characters on a `-` boundary (a heading can be a whole misclassified code or TOC
+  line); the `-2`, `-3`, … collision suffix keeps capped slugs unique.
 - `doc_id`: parent document id; matches the `sources/parsed/<doc_id>/` folder.
 - `heading_path`: heading ancestry from the document root to this section.
 - `page_start` / `page_end`: page span if known from paged parser output.

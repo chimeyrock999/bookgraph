@@ -60,11 +60,11 @@ of relying on a user-global cache that may be owned by another process/user.
 
 The `mineru` extra runs every tier on CPU (small models on ONNX, the `standard` /
 `advanced` VLM on llama.cpp). The VLM tiers are slow on CPU; the `mineru-torch` extra
-adds Torch for GPU-backed models:
+adds Torch for GPU-backed models (already included by `mineru` on Apple Silicon):
 
 ```bash
 uv sync --extra mineru         # every tier, CPU
-uv sync --extra mineru-torch   # + Torch for GPU-backed models
+uv sync --extra mineru-torch   # + Torch for GPU-backed models (not needed on Apple Silicon)
 ```
 
 Pre-download a tier's models so the parse itself does not stall on the download:

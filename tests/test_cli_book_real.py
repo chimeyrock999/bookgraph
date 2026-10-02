@@ -40,7 +40,7 @@ assert argv[0] == 'parse', argv
 out = Path(argv[argv.index('--output') + 1])
 assert argv[argv.index('--format') + 1] == 'zip'
 tier = argv[argv.index('--tier') + 1]
-ocr_mode = argv[argv.index('--ocr-mode') + 1]
+ocr_mode = argv[argv.index('--ocr-mode') + 1] if '--ocr-mode' in argv else None
 print(f'fake mineru-kit progress tier={tier} ocr_mode={ocr_mode}')
 
 def span(text):
@@ -318,6 +318,31 @@ def test_parse_book_remote_profile_passes_the_v1_service_url(tmp_path: Path) -> 
     argv_line = _argv_line(workspace)
     assert "--remote-url http://gpu-box:8000" in argv_line
     assert "--tier standard" in argv_line
+    assert "--ocr-mode" not in argv_line
+
+
+def test_parse_book_remote_url_refuses_an_ocr_mode_it_would_ignore(tmp_path: Path) -> None:
+    runner = CliRunner()
+    workspace = _workspace_with_book(tmp_path, runner)
+
+    result = runner.invoke(
+        app,
+        [
+            "parse-book",
+            str(workspace),
+            "deep-work",
+            "--profile",
+            "remote-gpu",
+            "--url",
+            "http://gpu-box:8000",
+            "--ocr-mode",
+            "ocr",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "only takes the tier and page range" in _error_text(result)
+    assert not (workspace / "sources" / "parsed" / "deep-work").exists()
 
 
 @pytest.mark.parametrize("url_args", [[], ["--url", ""]])

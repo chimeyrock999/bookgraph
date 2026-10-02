@@ -59,3 +59,15 @@ def test_page_bounds_skipped_when_page_count_unknown() -> None:
 def test_end_before_start_rejected() -> None:
     with pytest.raises(typer.BadParameter, match="end-page must not be before start-page"):
         _validate_mineru_options(_options(start_page=5, end_page=2), pages=100)
+
+
+@pytest.mark.parametrize("overrides", [{"ocr_mode": "ocr"}, {"image_analysis": False}])
+def test_remote_url_rejects_knobs_the_remote_service_ignores(overrides: dict[str, object]) -> None:
+    with pytest.raises(typer.BadParameter, match="only takes the tier and page range"):
+        _validate_mineru_options(_options(url="http://gpu-box:8000", **overrides), pages=None)
+
+
+def test_remote_url_accepts_default_knobs() -> None:
+    _validate_mineru_options(
+        _options(url="http://gpu-box:8000", image_analysis=True, start_page=0), pages=None
+    )

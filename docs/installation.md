@@ -67,7 +67,7 @@ them to `uv sync` (persistent) or `uv run` (one-off) with `--extra`:
 |-------|---------|---------|
 | `parsers` | MarkItDown + pypdf adapters for Office/HTML/simple-PDF → Markdown | `uv sync --extra parsers` |
 | `mineru` | MinerU 4 for raw-PDF parsing (`bookgraph parse-book`): every tier, small models on ONNX and the VLM on llama.cpp | `uv sync --extra mineru` |
-| `mineru-torch` | `mineru` plus the Torch stack (`mineru[torch]`) for GPU-backed models | `uv sync --extra mineru-torch` |
+| `mineru-torch` | `mineru` plus the Torch stack (`mineru[torch]`) for GPU-backed models; already included by `mineru` on Apple Silicon | `uv sync --extra mineru-torch` |
 | `mcp` | FastMCP server (`bookgraph mcp`) that serves an agent | `uv sync --extra mcp` |
 | `pdf` | WeasyPrint PDF renderer for `bookgraph export translated-pdf` (needs system Pango) | `uv sync --extra pdf` |
 | `pdf-chromium` | Playwright/Chromium PDF renderer for `bookgraph export translated-pdf` | `uv sync --extra pdf-chromium && uv run playwright install chromium` |
@@ -99,8 +99,9 @@ supported: its `mineru -p … -b <backend>` CLI, the `pipeline` extra, and
 | `advanced` | the VLM at its highest effort |
 
 The base `mineru` extra runs every tier: small models on ONNX and the VLM on
-llama.cpp, CPU included. `mineru-torch` adds Torch for GPU-backed models; vLLM /
-LMDeploy engines need MinerU's own `mineru[full]`.
+llama.cpp, CPU included. `mineru-torch` adds Torch for GPU-backed models (on
+Apple Silicon the base `mineru` package already pulls in Torch); vLLM / LMDeploy
+engines need MinerU's own `mineru[full]`.
 
 Download the models for a tier ahead of a long run (otherwise the first parse does it):
 

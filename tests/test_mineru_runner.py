@@ -116,6 +116,14 @@ def test_argv_remote_service_passes_url_but_never_an_api_key(tmp_path: Path) -> 
     assert "--api-key" not in argv
 
 
+def test_argv_remote_service_omits_local_only_knobs(tmp_path: Path) -> None:
+    argv = _capture_argv(tmp_path, url="http://gpu-box:8000", ocr_mode="ocr", image_analysis=False)
+
+    # mineru-kit ignores these on the remote branch, so they are not claimed in argv.
+    assert "--ocr-mode" not in argv
+    assert "--disable-image-analysis" not in argv
+
+
 @pytest.mark.parametrize(
     ("start_page", "end_page", "pages"),
     [(2, 9, "3-10"), (0, 0, "1-1"), (4, None, "5-r1"), (None, 6, "1-7")],
@@ -153,6 +161,33 @@ def test_run_points_a_mineru_3_command_at_mineru_kit(tmp_path: Path) -> None:
 
     with pytest.raises(MinerURunError, match="MinerU 4 parses with 'mineru-kit'"):
         runner.run(_pdf(tmp_path), tmp_path / "parsed" / "doc")
+
+
+def test_restaging_removes_mineru_3_side_artifacts(tmp_path: Path) -> None:
+    out = tmp_path / "parsed" / "doc"
+    out.mkdir(parents=True)
+    legacy = [out / f"doc{suffix}" for suffix in ("_layout.pdf", "_span.pdf", "_content_list.json")]
+    for path in legacy:
+        path.write_bytes(b"3.x")
+    unrelated = out / "notes.txt"
+    unrelated.write_text("keep")
+
+    MinerURunner(run_process=_fake_mineru()).run(_pdf(tmp_path), out)
+
+    assert not any(path.exists() for path in legacy)
+    assert unrelated.read_text() == "keep"
+
+
+def test_failed_run_keeps_mineru_3_side_artifacts(tmp_path: Path) -> None:
+    out = tmp_path / "parsed" / "doc"
+    out.mkdir(parents=True)
+    layout = out / "doc_layout.pdf"
+    layout.write_bytes(b"3.x")
+
+    with pytest.raises(MinerURunError):
+        MinerURunner(run_process=_fake_mineru(returncode=1)).run(_pdf(tmp_path), out)
+
+    assert layout.is_file()
 
 
 def test_run_rejects_non_pdf_input(tmp_path: Path) -> None:

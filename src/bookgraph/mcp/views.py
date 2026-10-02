@@ -11,6 +11,7 @@ from bookgraph.concept_hygiene import (
 )
 from bookgraph.mcp.asset_views import AssetRef
 from bookgraph.models import (
+    MissingTranslationAsset,
     TranslationStructureIssue,
 )
 from bookgraph.quality import (
@@ -340,7 +341,10 @@ class SectionArtifactView(BaseModel):
     tells whether a translation is complete: reuse it as-is only when ``status`` is
     ``fresh`` **and** (``includes_assets`` or not ``section_has_assets``). A translation
     that left out the section's figures/tables is prose-only even when fresh, because
-    the section hash covers only its title and text.
+    the section hash covers only its title and text. ``includes_assets`` is verified
+    from the body, not taken from the writer: it is false whenever ``missing_assets``
+    (the section's staged figures/tables the body does not link, each with the
+    ``link`` to write) is non-empty, and stays ``None`` for an untracked body.
     ``content`` is the translation body when requested and present.
     ``structure_issues``: see :mod:`bookgraph.mcp.translation_structure`.
     """
@@ -361,6 +365,7 @@ class SectionArtifactView(BaseModel):
     notes: str | None = None
     content: str | None = None
     structure_issues: list[TranslationStructureIssue] = Field(default_factory=list)
+    missing_assets: list[MissingTranslationAsset] = Field(default_factory=list)
 
 
 class SectionArtifactList(BaseModel):

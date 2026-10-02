@@ -16,7 +16,10 @@ from bookgraph.mcp.loading import (
     _section_assets,
     _validate_id,
 )
-from bookgraph.mcp.translation_structure import translation_structure_issues
+from bookgraph.mcp.translation_structure import (
+    translation_asset_check,
+    translation_structure_issues,
+)
 from bookgraph.mcp.views import (
     SectionArtifactList,
     SectionArtifactView,
@@ -24,10 +27,13 @@ from bookgraph.mcp.views import (
 from bookgraph.models import (
     Section,
 )
+from bookgraph.translation_assets import check_translation_assets, describe_missing_assets
 from bookgraph.translations import (
     TranslationState,
     iter_translation_keys,
     section_content_hash,
+    split_frontmatter,
+    translation_paths,
     translation_state,
     validate_lang,
     write_translation,
@@ -63,6 +69,17 @@ def _artifact_view(
     if include_content and state.body is not None:
         # Decode the bytes the status was computed from (no second read of the file).
         content = state.body.decode("utf-8", errors="replace")
+    blocks = _load_doc_blocks(workspace, state.doc_id)
+    # The sidecar's ``includes_assets`` is only the writer's claim: verify it against
+    # the body, so a re-parse that staged a new figure makes a prose-only body incomplete.
+    assets = translation_asset_check(workspace, state, section, blocks)
+    includes_assets: bool | None = None
+    if artifact is not None:
+        includes_assets = (
+            assets.includes_assets(artifact.includes_assets)
+            if assets is not None
+            else artifact.includes_assets
+        )
     return SectionArtifactView(
         lang=state.lang,
         doc_id=state.doc_id,
@@ -72,15 +89,14 @@ def _artifact_view(
         metadata_path=str(state.paths.metadata) if artifact is not None else None,
         source_section_hash=artifact.source_section_hash if artifact else None,
         current_section_hash=state.current_section_hash,
-        includes_assets=artifact.includes_assets if artifact else None,
+        includes_assets=includes_assets,
         section_has_assets=_section_has_assets(workspace, section) if section else False,
         model=artifact.model if artifact else None,
         created_at=artifact.created_at if artifact else None,
         notes=artifact.notes if artifact else None,
         content=content,
-        structure_issues=translation_structure_issues(
-            workspace, state, section, _load_doc_blocks(workspace, state.doc_id)
-        ),
+        structure_issues=translation_structure_issues(workspace, state, section, blocks),
+        missing_assets=assets.missing if assets is not None else [],
     )
 
 
@@ -131,7 +147,13 @@ def write_section_translation(
     when it fetched the section to translate; if the section has changed since, the
     write is refused so a translation of old content is never registered as fresh.
     ``includes_assets`` declares whether the section's figures/tables were carried into
-    the translation.
+    the translation. It is checked against ``content``: every staged figure/table of
+    the section must be linked by an image that resolves to its file (write its
+    ``AssetRef.link``), and claiming ``True`` for a body that leaves one out is
+    refused, listing the missing links. The claim itself is what the sidecar records:
+    readers re-derive completeness from the body, and the claim only stands for assets
+    whose file was never staged (now or after a later re-parse), which no body can
+    link. The returned view reports the verified value.
 
     This is the only translation store: a translation file written anywhere else (under
     ``translations/`` by hand, or an agent's own ``translation_cache/``) is never read.
@@ -153,6 +175,22 @@ def write_section_translation(
             f"section '{section.id}' changed since it was translated "
             f"(translated {source_section_hash}, current {current_hash}); "
             "re-fetch it with get_section and translate the current content"
+        )
+    assets = check_translation_assets(
+        section,
+        split_frontmatter(content)[1],
+        blocks=_load_doc_blocks(workspace, resolved_doc_id),
+        root=workspace.root,
+        parsed_dir=workspace.sources_parsed / resolved_doc_id,
+        body_dir=translation_paths(
+            workspace, resolved_lang, resolved_doc_id, section.id
+        ).body.parent,
+    )
+    if includes_assets and assets.missing:
+        raise ReadingServiceError(
+            f"translation of section '{section.id}' claims includes_assets but does not "
+            f"link {describe_missing_assets(assets.missing)}; add each as "
+            "![caption](<AssetRef.link>), or write it with includes_assets=False"
         )
     write_translation(
         workspace,

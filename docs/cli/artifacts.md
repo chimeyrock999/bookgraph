@@ -580,8 +580,16 @@ the `.json` sidecar beside it is the registry record, mirroring
 - `content_hash`: `sha256:` over the body's UTF-8 bytes at write time. It binds the
   sidecar to the body it describes: a body overwritten afterwards (a path-convention
   writer, a manual edit) no longer matches and reads as `untracked`.
-- `includes_assets`: whether the writer carried the section's figures/tables into
-  the translation (declared by the writer, not inferred).
+- `includes_assets`: the writer's claim that the translation carries the section's
+  figures/tables, checked against the body by `write_section_translation`: every
+  **staged** asset block of the section (one whose file resolves, i.e. one
+  `get_section` returns as an `AssetRef`) must be linked by a Markdown image or
+  `<img src>` that resolves to the same file (its `AssetRef.link`, or a
+  workspace-relative path), and claiming `true` for a body that leaves one out is
+  refused. Readers never trust the stored claim alone: the read tools and the export
+  re-check the body against the section's current assets, and the claim only stands
+  for asset blocks whose file was never staged (now or after a later re-parse), which
+  no body can link.
 - `notes` (optional): the writer's free-text side channel — QA/checker results,
   terminology decisions, job remarks. Stored only here, never in the body; returned by
   `get_section_translation` / `list_section_artifacts`.
@@ -600,7 +608,10 @@ hash and compares it with the sidecar.
 **Reuse rule.** `fresh` means the translation matches the section's current *text*;
 the hash does not cover assets, so a re-parse that newly stages a figure leaves a
 prose-only translation `fresh`. Reuse a translation as-is only when `status` is
-`fresh` **and** (`includes_assets` or not `section_has_assets`).
+`fresh` **and** (`includes_assets` or not `section_has_assets`). The read tools report
+`includes_assets` re-verified against the body (false whenever `missing_assets` lists
+a staged figure/table the body does not link), so that re-parse makes the translation
+incomplete without changing its `status`.
 
 **Structure rule: translate content, preserve structural Markdown.** A translation
 translates prose, captions, and link labels, but keeps every structural target of the
@@ -701,10 +712,13 @@ debug view) the page also shows it: a *Translation may be outdated* /
 Stale and untracked translations count as translated, so `--fallback fail` accepts
 them. `--strict` refuses `translation_stale` (known outdated) but not
 `translation_untracked` (freshness unknown, e.g. a hand-written body), matching
-reading-batch completion. Completeness follows the registry's reuse rule: a
-registered translation with `includes_assets: false` of a section that has
-figures/tables is rendered but flagged `translation_missing_assets`, which `--strict`
-also refuses.
+reading-batch completion. Completeness follows the registry's reuse rule, verified
+from the body rather than the sidecar: a rendered translation (registered or
+untracked) that does not link one of its section's staged figures/tables gets one
+`translation_missing_assets` warning per asset, whatever its sidecar's
+`includes_assets` says; a registered one with `includes_assets: false` of a section
+whose assets were never staged is flagged too. Both are rendered, and `--strict`
+refuses them.
 
 `translation_cache/<doc_id>/<section_id>.<lang>.md` is **not read**. It was an
 export-only fallback that no BookGraph command ever wrote, so there is no migration:
@@ -808,9 +822,14 @@ is written beside the export:
     export (its caption and surrounding prose are). `--strict` refuses these.
   - `translation_stale`: the source section changed after the translation was
     registered. Rendered (with a note under `--show-status`); `--strict` refuses it.
-  - `translation_missing_assets`: a registered prose-only translation
-    (`includes_assets: false`) of a section that has figures/tables. `--strict`
-    refuses it.
+  - `translation_missing_assets`: a translation left out a figure/table of its
+    section. Per staged asset the body does not link: `reference` is the asset's
+    `AssetRef.link` (what to add), `block_id` its parsed block, `source_path` the
+    parsed `document.json` (where the block lives), and `origin` is `translation`.
+    A registered prose-only translation (`includes_assets: false`) of a section
+    whose assets were never staged gets one warning with no `reference`. Both are
+    `column: mixed` (they are about the translated side; for a staged asset the
+    bilingual original column still shows the figure). `--strict` refuses it.
   - `translation_untracked`: no valid registry record, or the body was edited after
     registration. Rendered (with a note under `--show-status`); never refused.
   - `translation_structure_changed`: the rendered translation dropped, added, or

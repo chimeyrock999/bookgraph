@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Annotated
 
 import typer
 
+from bookgraph.books import read_book_bookmarks
 from bookgraph.cli._app import app
 from bookgraph.cli._config import load_config
 from bookgraph.cli._shared import _validate_id, _validate_plugin_name
@@ -17,7 +17,7 @@ from bookgraph.quality import (
     write_quality_report,
 )
 from bookgraph.sections import write_sections
-from bookgraph.segmenters.bookmark import BookmarkSegmenter, PdfBookmark
+from bookgraph.segmenters.bookmark import BookmarkSegmenter
 from bookgraph.segmenters.heading import HeadingSegmenter
 from bookgraph.segmenters.token_page import TokenPageSegmenter
 from bookgraph.workspace import WorkspacePaths
@@ -85,7 +85,7 @@ def segment(
         segmenter_plugin = HeadingSegmenter(target_level=resolved_target_level)
     if isinstance(segmenter_plugin, BookmarkSegmenter):
         segmenter_plugin = BookmarkSegmenter(
-            bookmarks=_load_bookmarks(workspace, resolved_doc_id),
+            bookmarks=read_book_bookmarks(workspace, resolved_doc_id),
             split_level=resolved_target_level,
         )
     if isinstance(segmenter_plugin, TokenPageSegmenter):
@@ -130,32 +130,3 @@ def _echo_warnings(report: QualityReport, sample: int = 5) -> None:
     remaining = max(0, report.warning_count - sample)
     if remaining:
         typer.echo(f"warning: … and {remaining} more (see the quality report above)")
-
-
-def _load_bookmarks(workspace: WorkspacePaths, doc_id: str) -> list[PdfBookmark]:
-    manifest = workspace.sources_inbox / doc_id / "book.json"
-    if not manifest.is_file():
-        return []
-    try:
-        payload = json.loads(manifest.read_text())
-    except (OSError, json.JSONDecodeError):
-        return []
-    pdf = payload.get("pdf") if isinstance(payload, dict) else None
-    raw_bookmarks = pdf.get("bookmarks") if isinstance(pdf, dict) else None
-    if not isinstance(raw_bookmarks, list):
-        return []
-    bookmarks: list[PdfBookmark] = []
-    for raw in raw_bookmarks:
-        if not isinstance(raw, dict):
-            continue
-        title = raw.get("title")
-        page_index = raw.get("page_index")
-        level = raw.get("level")
-        if not isinstance(title, str) or not title.strip():
-            continue
-        if page_index is not None and not isinstance(page_index, int):
-            continue
-        if not isinstance(level, int):
-            continue
-        bookmarks.append(PdfBookmark(title=title.strip(), page_index=page_index, level=level))
-    return bookmarks

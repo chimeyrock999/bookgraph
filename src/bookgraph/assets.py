@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from urllib.parse import unquote
 
 from bookgraph.models import CanonicalBlock
 from bookgraph.utils import is_url
@@ -75,3 +76,48 @@ def resolve_asset_path(parsed_dir: Path, block: CanonicalBlock) -> str | None:
         except (OSError, ValueError):
             continue
     return None
+
+
+def resolve_workspace_link(root: Path, link: str, bases: list[Path]) -> Path | None:
+    """Resolve a Markdown/HTML image link to a regular file inside the workspace.
+
+    The query and fragment are dropped and the path is unquoted. A relative link is
+    tried under each of ``bases`` in order; an absolute one as is. Only a regular file
+    that stays inside ``root`` after symlinks are followed counts. Shared by the
+    translated export (which embeds the file) and the translation structure check
+    (which only asks whether it exists), so the two never disagree about a link.
+    """
+
+    raw = unquote(link.split("#", 1)[0].split("?", 1)[0])
+    if not raw:
+        return None
+    try:
+        root_real = root.resolve()
+    except (OSError, ValueError):
+        return None
+    candidate = Path(raw)
+    options = [candidate] if candidate.is_absolute() else [base / candidate for base in bases]
+    for option in options:
+        try:
+            real = option.resolve()
+            if real.is_relative_to(root_real) and real.is_file():
+                return real
+        except (OSError, ValueError):
+            continue
+    return None
+
+
+def asset_link(parsed_dir: Path, path: str) -> str:
+    """A resolved asset ``path`` relative to ``parsed_dir``, as a POSIX link.
+
+    This is the reference an artifact (a translation) should write for the asset —
+    ``images/fig1.png`` rather than an absolute path — and the one the translated
+    export resolves against the parsed document directory.
+    """
+
+    try:
+        return Path(path).resolve().relative_to(parsed_dir.resolve()).as_posix()
+    except (OSError, ValueError):
+        # ``resolve_asset_path`` only returns files inside ``parsed_dir``; keep the
+        # basename rather than leak an absolute path if that ever changes.
+        return Path(path).name

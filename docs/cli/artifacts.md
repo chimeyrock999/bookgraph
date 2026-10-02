@@ -136,6 +136,20 @@ Current schema mirrors `bookgraph.models.Document`:
 - `order`: zero-based reading order.
 - `metadata`: parser-specific provenance. Must be JSON scalar values only.
 
+### Repaired asset blocks
+
+`bookgraph assets repair` is the only command besides a parser that rewrites
+`document.json`, and it changes nothing but the asset reference of blocks whose file
+was missing. A recovered block is repointed at `images/<name>` (in `asset_path`, or in
+`metadata.src` for Markdown-parsed blocks) and records:
+
+- `metadata.original_asset_reference`: the reference the parser wrote;
+- `metadata.asset_recovered_from`: the file it was recovered from, or
+  `<source.epub>!<member>` for an EPUB member.
+
+Block `text`, ids, and order are untouched, so sections and translation freshness are
+unaffected. A reference that cannot be recovered is left exactly as parsed.
+
 ### Provenance rules for converting adapters
 
 When an adapter converts the original source into Markdown before building
@@ -282,7 +296,8 @@ parse is visible at ingest time instead of during reading.
       "section_id": "iceberg.snapshots",
       "code": "asset_type_ambiguous",
       "message": "asset p12.b3: caption reads as a 'image' but the parser classified the block as 'table'; treat it as 'image' or open the file to confirm",
-      "block_id": "p12.b3"
+      "block_id": "p12.b3",
+      "reference": null
     }
   ]
 }
@@ -297,7 +312,7 @@ parse is visible at ingest time instead of during reading.
 | `asset_type_ambiguous` | The asset's caption label contradicts the parser's block type (a figure emitted as a `table`, say). Carries `block_id`. |
 | `asset_captions_only` | The section's `text` is effectively just its asset captions; the labels/tabular data live inside the asset files. |
 | `asset_text_sparse` | A figure/table-heavy section (2+ assets) with almost no prose beyond the captions. |
-| `asset_file_missing` | The section references an asset file that is not available under `sources/parsed/<doc_id>/` (never staged, remote, or outside the workspace). Carries `block_id`. |
+| `asset_file_missing` | The section references an asset file that is not available under `sources/parsed/<doc_id>/` (never staged, remote, or outside the workspace). Carries `block_id` and `reference` (the parser's raw asset reference). `bookgraph assets repair` can recover the file. |
 
 Codes are stable identifiers; `message` is display text and may be reworded.
 A document with no anomalies still gets a report, with `warning_count: 0` and an
@@ -567,6 +582,9 @@ the `.json` sidecar beside it is the registry record, mirroring
   writer, a manual edit) no longer matches and reads as `untracked`.
 - `includes_assets`: whether the writer carried the section's figures/tables into
   the translation (declared by the writer, not inferred).
+- `notes` (optional): the writer's free-text side channel — QA/checker results,
+  terminology decisions, job remarks. Stored only here, never in the body; returned by
+  `get_section_translation` / `list_section_artifacts`.
 
 Freshness is **derived, never stored**: each read recomputes the section's current
 hash and compares it with the sidecar.
@@ -584,6 +602,56 @@ the hash does not cover assets, so a re-parse that newly stages a figure leaves 
 prose-only translation `fresh`. Reuse a translation as-is only when `status` is
 `fresh` **and** (`includes_assets` or not `section_has_assets`).
 
+**Structure rule: translate content, preserve structural Markdown.** A translation
+translates prose, captions, and link labels, but keeps every structural target of the
+section (its title heading + text) byte-for-byte, because intra-book references, TOC
+anchors, and exports depend on them:
+
+| Kind | Preserved |
+| --- | --- |
+| `link` | Markdown link destinations and fragments (`[label](ch03.html#sec_x)`, `(#fig_y)`), autolinks, HTML `href`, and `src` on elements other than `<img>` |
+| `image` | Markdown image paths and `<img src>` |
+| `reference` | Reference-style definitions, identifier (case- and whitespace-insensitive, as CommonMark matches labels) and destination (`[spec]: https://…`) |
+| `html_id` | HTML `id` / `name` anchors |
+| `heading_id` | Explicit heading ids (`## Title {#sec_x}`) |
+
+`[label](target)` may become `[nhãn](target)`; `target` must not change. Two image
+changes are allowed: an image that resolves may be added, which carries the section's
+figures — a `data:image/…` URI, or a relative path found next to the body, then under
+`sources/parsed/<doc_id>/images/`, `sources/parsed/<doc_id>/`, or the workspace root
+(the export's own lookup) — and a source image path that does not resolve may be
+replaced by one that does. An absolute path (`/…`, `~/…`, `file:`, `C:\…`) never
+counts as resolving, even when it points at a workspace file: the reading-agent
+contract links each carried figure/table by its relative `AssetRef.link`, never by its
+absolute `AssetRef.path`, so adding an absolute image link is reported. Heading *text* may be translated: export navigation anchors
+on section ids, never on heading text.
+
+What is compared:
+
+- The source is the section's title heading plus its text, rebuilt from the parsed
+  blocks when `document.json` exists. Parsers store code blocks as plain text without
+  fences, so code (`metadata.code`) and equation blocks are re-fenced and never count
+  as structure. The rebuild is used only when, fences aside, it reproduces
+  `Section.text` exactly (with or without title blocks, as segmenters differ);
+  otherwise, and without `document.json`, `Section.text` is used as is.
+- Targets the translation added that the source's code blocks and spans yield when
+  read as Markdown (sample code left unfenced) are not reported, up to their count.
+- The translation body is compared after its frontmatter is split off, exactly as the
+  export renders it.
+- Code spans/blocks and HTML comments are not structure on either side.
+- Known limitation: the Markdown/MarkItDown parsers drop reference definitions
+  (`[spec]: …`) from the section text, so for parsed sections the `reference` kind
+  has nothing to protect, and a reference-style link reads as plain text on both
+  sides.
+
+`bookgraph.translation_structure.check_section_translation` does the comparison for
+the MCP tools, reading-batch completion, and the export alike.
+The translation tools return its findings as `structure_issues` (each `{kind, target,
+change: "missing" | "added", count}`; a rewritten target is one `missing` plus one
+`added`). Writes are not refused, because the body is the deliverable, but
+`complete_reading_batch` blocks on `translation_structure_changed` and the export
+flags it.
+
 Write order: remove the previous sidecar, write the body, then write the new sidecar,
 each via a same-directory temp file + fsync + rename (files take the process umask,
 not `mkstemp`'s 0600). A crash or a racing writer between the steps leaves an
@@ -591,6 +659,25 @@ not `mkstemp`'s 0600). A crash or a racing writer between the steps leaves an
 `lang`/`doc_id`/`section_id` disagrees with its location is ignored. Like
 annotations, the cache is **not** rebuildable from sources (regenerating it costs
 model calls), so `index build`, `segment`, and `wiki` never delete it.
+
+### Artifact channels
+
+A translation body (and an annotation's `summary`/`gloss`) is **book content
+only**: it is reused by later jobs and printed in reading PDFs. Everything else a
+reading/translation job produces has its own channel, and the agent contract says so
+— the MCP server `instructions`, the tool docstrings, and the `bookgraph-reader`
+skills (`.claude/` and `.agents/`):
+
+| What | Channel |
+| --- | --- |
+| Translated headings, prose, tables, figures | `write_section_translation(content=...)` |
+| Figure/table references inside a translation | the asset's `AssetRef.link` from `get_section` / `get_context` — relative to `sources/parsed/<doc_id>/` (e.g. `images/fig1-1.png`); `AssetRef.path` is the absolute file to *open*, not to write |
+| QA/checker results, terminology decisions, doubts about the source | `write_section_translation(notes=...)` — the sidecar's `notes` |
+| `MEDIA:/path` delivery markers, cache/mark-read progress, job status | the agent's final chat reply |
+| Export coverage, freshness, missing assets | the export's `.report.json` (the reading pages do not print them unless `--show-status`) |
+
+The tool does not try to detect or strip text that went into the wrong channel:
+that is agent behavior, fixed in the agent contract above.
 
 ## Translation bodies as read by `bookgraph export translated-pdf`
 
@@ -602,9 +689,14 @@ way the registry does it (`VI` → `vi`). Per section:
 | Registry status | Export |
 | --- | --- |
 | `fresh` | Rendered. `freshness: "fresh"`. |
-| `stale` | Rendered with a *Translation may be outdated* note (and a `(may be outdated)` TOC marker); `freshness: "stale"` + `translation_stale`. |
-| `untracked` | Rendered with a *Translation status unknown — it may be outdated* note (and a `(not tracked)` TOC marker); `freshness: "untracked"` + `translation_untracked`. |
+| `stale` | Rendered; `freshness: "stale"` + `translation_stale`. |
+| `untracked` | Rendered; `freshness: "untracked"` + `translation_untracked`. |
 | `missing` | Untranslated: follows `--fallback`. |
+
+Freshness lives in the report, not on the reading pages. With `--show-status` (a
+debug view) the page also shows it: a *Translation may be outdated* /
+*Translation status unknown — it may be outdated* note under the heading and a
+`(may be outdated)` / `(not tracked)` TOC marker.
 
 Stale and untracked translations count as translated, so `--fallback fail` accepts
 them. `--strict` refuses `translation_stale` (known outdated) but not
@@ -622,7 +714,8 @@ then reads as `untracked`), or re-register it with `write_section_translation`.
 - Optional leading `---` frontmatter. Only flat `key: value` lines are read. `title`
   is the translated section title used in the table of contents.
 - If the body starts with a heading, that heading is the translated title. Artifact
-  headings are shifted so the top one sits at the section's `level`. A body with no
+  headings are shifted so the top one sits at the section's `depth` in the export
+  (see the report below). A body with no
   heading gets the frontmatter `title`, or the original title.
 - Image links (`![caption](images/fig1.png)`) may point at workspace files, for
   example the parsed assets under `sources/parsed/<doc_id>/images/`. They may also be
@@ -631,7 +724,7 @@ then reads as `untracked`), or re-register it with `write_section_translation`.
 - An empty or unreadable (including non-UTF-8) body counts as untranslated and is
   reported (`translation_empty` / `translation_unreadable`).
 
-## `exports/<doc_id>.<lang>-progress.pdf` + `.report.json`
+## `exports/<doc_id>.<lang>-progress.pdf` / `-bilingual.pdf` + `.report.json`
 
 Owner: `bookgraph export translated-pdf`. This is derived, reader-facing output and
 can be regenerated at any time. The report (`bookgraph.exports.models.ExportReport`)
@@ -642,40 +735,78 @@ is written beside the export:
   "doc_id": "ddia",
   "title": "Designing Data-Intensive Applications",
   "lang": "vi",
+  "mode": "translated",
   "fallback": "original",
   "generated_at": "2026-10-02T00:00:00Z",
   "total_sections": 3,
   "translated_sections": 1,
+  "original_sections": 2,
+  "skipped_sections": 0,
+  "unpaired_sections": 0,
+  "assets_missing": 1,
   "coverage": 0.3333,
   "sections": [
-    {"section_id": "ddia.chapter-1", "title": "Chương 1", "level": 1,
-     "source": "translated", "artifact": "translations/vi/ddia/ddia.chapter-1.md",
-     "freshness": "fresh", "assets_embedded": 1, "assets_missing": 0}
+    {"section_id": "ddia.chapter-1", "title": "Chương 1", "level": 1, "depth": 1,
+     "parent_id": null, "source": "translated",
+     "artifact": "translations/vi/ddia/ddia.chapter-1.md", "freshness": "fresh",
+     "assets_embedded": 1, "assets_missing": 0,
+     "original_assets_embedded": null, "original_assets_missing": null}
   ],
   "warnings": [
     {"code": "asset_missing", "message": "…", "section_id": "ddia.scalability",
-     "reference": "t1.png"}
+     "reference": "t1.png", "source_path": "translations/vi/ddia/ddia.scalability.md",
+     "block_id": null}
   ],
   "renderer": "playwright",
-  "output": "/path/to/workspace/exports/ddia.vi-progress.pdf"
+  "output": "/path/to/workspace/exports/ddia.vi-progress.pdf",
+  "show_status": false
 }
 ```
 
-- `source` is `translated`, `original`, or `skipped`.
+- `mode` is `translated` or `bilingual` (`--mode`).
+- `sections` are in the export's reading order: the source PDF outline's order when
+  `book.json` has one, else `sections.jsonl` order (see `commands.md`).
+- `level` is the manifest's `Section.level`. `depth` is the heading level the section
+  renders at, and `parent_id` is the section it renders inside (`null` at the top
+  level). In `bilingual` mode both columns use `depth`.
+- `source` is `translated`, `original`, or `skipped`: how the section's mixed
+  rendering was filled (the right column in `bilingual` mode).
+- `original_sections` / `skipped_sections` count the sections that took the
+  `--fallback` path. `unpaired_sections` counts `bilingual` rows with no translation
+  to compare against (always `0` in `translated` mode).
+- `assets_embedded` / `assets_missing` count the mixed rendering;
+  `original_assets_embedded` / `original_assets_missing` count the `bilingual` left
+  column (`null` in `translated` mode). The top-level `assets_missing` counts the
+  asset references that could not be embedded, per column. A missing original asset
+  shown in both columns of an untranslated row is counted twice there but warned
+  about once.
+- An asset warning names the section (`section_id`), the raw reference as written
+  (`reference`), and the workspace-relative file that carries it (`source_path`): the
+  translation artifact, `sources/parsed/<doc_id>/document.json` for an original
+  section (with the parsed `block_id`), or `sections.jsonl` when the document has no
+  parsed blocks.
+- The report is where status/debug metadata lives: the reading pages carry the title,
+  the table of contents, and book content only. `show_status` records whether the
+  export was made with `--show-status`, which also prints coverage, freshness and
+  fallback notes, TOC status markers, and *Missing asset* placeholders on the pages.
 - `freshness` is the translation's registry status (`fresh`, `stale`, or
   `untracked`) for a `translated` section, `null` otherwise.
 - `generated_at` follows `SOURCE_DATE_EPOCH` when it is set. With unchanged inputs and
   a pinned timestamp, the assembled HTML is byte-identical.
 - Stable warning codes:
   - `asset_missing`, `asset_remote`, `asset_unsupported`: an asset is not in the
-    export. `--strict` refuses these.
+    export (its caption and surrounding prose are). `--strict` refuses these.
   - `translation_stale`: the source section changed after the translation was
-    registered. Rendered with a note; `--strict` refuses it.
+    registered. Rendered (with a note under `--show-status`); `--strict` refuses it.
   - `translation_missing_assets`: a registered prose-only translation
     (`includes_assets: false`) of a section that has figures/tables. `--strict`
     refuses it.
   - `translation_untracked`: no valid registry record, or the body was edited after
-    registration. Rendered with a note; never refused.
+    registration. Rendered (with a note under `--show-status`); never refused.
+  - `translation_structure_changed`: the rendered translation dropped, added, or
+    rewrote a link destination, image path, reference definition, HTML anchor, or
+    heading id of its section (see the structure rule above). Rendered as written;
+    `--strict` refuses it.
   - `translation_empty`, `translation_unreadable`: the section falls back.
   - `asset_captions_only` / `asset_text_sparse`: ingest quality warnings, passed
     through for rendered sections whose source prose is mostly captions.

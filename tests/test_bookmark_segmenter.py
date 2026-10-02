@@ -136,3 +136,41 @@ def test_bookmark_segmenter_never_emits_a_negative_page_end() -> None:
     sections = BookmarkSegmenter(bookmarks=bookmarks).segment(document)
 
     assert [(s.page_start, s.page_end) for s in sections] == [(0, 0), (0, 0)]
+
+
+def test_bookmark_segmenter_keeps_outline_order_for_bookmarks_on_the_same_page() -> None:
+    # Real Iceberg outline: both subsections start on the same page. They used to be
+    # tie-broken by title, putting "Feedback" before "Conventions".
+    bookmarks = [
+        PdfBookmark(title="Preface", page_index=1, level=1),
+        PdfBookmark(title="Feedback and Questions", page_index=2, level=2),
+        PdfBookmark(title="Conventions Used in This Book", page_index=2, level=2),
+        PdfBookmark(title="Chapter 1", page_index=3, level=1),
+    ]
+
+    sections = BookmarkSegmenter(bookmarks=bookmarks, split_level=2).segment(_document())
+
+    assert [section.title for section in sections] == [
+        "Preface",
+        "Feedback and Questions",
+        "Conventions Used in This Book",
+        "Chapter 1",
+    ]
+
+
+def test_bookmark_segmenter_heading_path_is_the_outline_ancestry() -> None:
+    bookmarks = [
+        PdfBookmark(title="Part I", page_index=1, level=1),
+        PdfBookmark(title="Chapter 1", page_index=1, level=2),
+        PdfBookmark(title="Storage", page_index=2, level=3),
+        PdfBookmark(title="Chapter 2", page_index=3, level=2),
+    ]
+
+    sections = BookmarkSegmenter(bookmarks=bookmarks, split_level=3).segment(_document())
+
+    assert [section.heading_path for section in sections] == [
+        ["Part I"],
+        ["Part I", "Chapter 1"],
+        ["Part I", "Chapter 1", "Storage"],
+        ["Part I", "Chapter 2"],
+    ]

@@ -263,7 +263,9 @@ bookgraph segment /path/to/workspace <doc_id> --segmenter token-page --max-token
 Reads `sources/parsed/<doc_id>/document.json` (fails if missing). The `bookmark`
 segmenter also reads `sources/inbox/<doc_id>/book.json` and uses its
 `pdf.bookmarks` array when present; without usable bookmarks it falls back to the
-heading segmenter. The `token-page` segmenter is a deterministic fallback for
+heading segmenter. Bookmark sections come out in page order; bookmarks on the same
+page keep their outline (TOC) order, and each section's `heading_path` is its
+outline ancestry (`["Part I", "Chapter 1", "Storage"]`). The `token-page` segmenter is a deterministic fallback for
 documents with weak/missing headings or bookmarks: it keeps blocks whole,
 chunks by a token budget, and prefers page boundaries when a page break is
 available near the budget.
@@ -668,6 +670,30 @@ The server binds to that one workspace; tool arguments never take a workspace
 path. If the `mcp` extra is not installed, the command fails with a message
 telling the user to `uv sync --extra mcp`.
 
+### Server instructions
+
+The server sends MCP `instructions` (`bookgraph.mcp.server.SERVER_INSTRUCTIONS`) to
+every client at connect time, so the contract binds any agent, not only one that
+loaded a `bookgraph-reader` skill:
+
+- Artifacts hold book content only. Translated text goes in
+  `write_section_translation(content=...)`, with figures/tables linked by
+  `AssetRef.link` (relative). QA/terminology remarks go in `notes`. `MEDIA:` markers
+  and progress lines go in the agent's final chat reply. Export status stays in the
+  export report.
+- The translation registry is the only translation store: check
+  `get_section_translation` first, and save only with `write_section_translation`.
+  Translation files written anywhere else (under `translations/` by hand, or in an
+  agent's own directory such as `translation_cache/`) are never read.
+- A job that translates or annotates finishes each batch with
+  `complete_reading_batch`, not `mark_read`. A translation job always passes
+  `translation_lang`; without it nothing checks that a translation was saved. A
+  translation-only job also passes `require_annotation=False` and `index="ignore"`
+  (or `"deferred"`), since the defaults require an annotation and a fresh index.
+
+A test asserts these rules are present, so they cannot be dropped silently. The tool
+docstrings (`write_section_translation`, `mark_read`) and both skills repeat them.
+
 ### Tools
 
 - `get_next_section(plan_id, include_assets=True, stop_at_boundary=False,
@@ -690,8 +716,10 @@ telling the user to `uv sync --extra mcp`.
   `mark_read` calls stay correct (same semantics as `bookgraph reading-plan progress`).
 - `get_section(doc_id, section_id, include_assets=True)` → one section's full
   reading content, its `<section_id>.md` path, its figure/table `assets` (each
-  `{block_id, type, path, caption, order, page_idx, type_confidence,
-  suggested_type}`), and its `warnings`. `type_confidence` scores the parser's
+  `{block_id, type, path, link, caption, order, page_idx, type_confidence,
+  suggested_type}`), and its `warnings`. `path` is the absolute file to open; `link`
+  is the same file relative to `sources/parsed/<doc_id>/` (e.g. `images/fig1.png`),
+  the reference to write into a translation. `type_confidence` scores the parser's
   classification against the caption's label and `suggested_type` is set only when
   the caption contradicts it, so a figure emitted as a `table` is flagged rather
   than passed off as correct. `warnings` are the same data-quality anomalies the
@@ -804,19 +832,27 @@ telling the user to `uv sync --extra mcp`.
   `untracked` / `missing`, see `artifacts.md`), `path`, `metadata_path`,
   `source_section_hash`, `current_section_hash`, `includes_assets`,
   `section_has_assets` (whether the section owns any figure/table block), `model`,
-  `created_at`, and `content` (the body, unless `include_content=False`). A missing
-  translation is a normal result, not an error.
+  `created_at`, `notes` (the writer's side-channel remarks), `content` (the body,
+  unless `include_content=False`), and `structure_issues` (the link destinations,
+  image paths, reference definitions, HTML anchors, and heading ids the body dropped
+  or added relative to the section; see the structure rule in `artifacts.md`). A
+  missing translation is a normal result, not an error.
 - `write_section_translation(doc_id, section_id, lang, content, includes_assets=False,
-  model=None, source_section_hash=None)` → write
+  model=None, source_section_hash=None, notes=None)` → write
   `translations/<lang>/<doc_id>/<section_id>.md` and its registry sidecar,
   replacing any previous translation; returns the entry (status `fresh`, no
-  `content`). Empty `content` is rejected. When `source_section_hash` is given and
+  `content`, with `structure_issues` for the body just written — the write is kept
+  either way). Empty `content` is rejected. When `source_section_hash` is given and
   differs from the section's current hash the write is refused, so a translation of
-  outdated content is never registered as fresh.
+  outdated content is never registered as fresh. `content` is the translated book
+  content only, with figures/tables linked by their `AssetRef.link`. `notes`
+  (optional) is the side channel for QA/checker results and terminology decisions:
+  stored in the registry sidecar, returned as `notes` by the read tools, never in the
+  body (see *Artifact channels* in `artifacts.md`).
 - `list_section_artifacts(doc_id=None, lang=None, type="translation")` → every
   cached translation (filtered by `doc_id` / `lang`) with its status, including
-  `orphaned` ones whose section no longer exists; no bodies. Only
-  `type="translation"` exists.
+  `orphaned` ones whose section no longer exists; no bodies, but each entry carries
+  its `structure_issues`. Only `type="translation"` exists.
 - `list_documents()` → the workspace's segmented documents, each with `doc_id`,
   `title` (from the parsed `document.json`, falling back to `doc_id`), and
   `section_count`. Lets an agent discover what there is to read before picking a
@@ -898,6 +934,10 @@ Issue codes (`blocking` unless noted):
   the section; re-translate with `write_section_translation`.
 - `translation_untracked` — non-blocking; the body has no registry record, so its
   freshness is unknown.
+- `translation_structure_changed` — a fresh or untracked translation dropped, added,
+  or rewrote a link destination, image path, reference definition, HTML anchor, or
+  heading id of the section; the message lists the changes. Translate labels and
+  prose only and rewrite it (see the structure rule in `artifacts.md`).
 
 Request errors — unknown/invalid `plan_id`, an unsegmented document, an empty
 `section_ids`, a plan that is already complete when `section_ids` is omitted, an
@@ -1036,15 +1076,50 @@ bookgraph llmwiki serve /path/to/workspace --print
 
 **Status:** Implemented.
 
-Assemble a partially translated book into one reading edition. Sections come out in
-`sections.jsonl` order. A section with a translation artifact for `--lang` renders that
-artifact; any other section follows `--fallback`. This produces a clean reading
-edition. It does not reproduce the publisher's page layout.
+Assemble a partially translated book into one reading edition. A section with a
+translation artifact for `--lang` renders that artifact; any other section follows
+`--fallback`. This produces a clean reading edition. It does not reproduce the
+publisher's page layout.
+
+**Structure.** Sections are arranged into the book's structure:
+
+- When `sources/inbox/<doc_id>/book.json` carries a PDF outline (`pdf.bookmarks`), it
+  is the canonical table of contents. Sections are matched to bookmarks by title
+  (ignoring case, punctuation, and quote style). When both pages are known, the
+  bookmark must point into the section's page span, give or take one page, so a
+  heading the outline does not list never takes a same-titled bookmark from another
+  chapter. A repeated title such as *Conclusion* goes to the bookmark on the nearest
+  page. Matched sections take the
+  bookmark's level as their depth and are put in outline order. A section no bookmark
+  names stays right after the matched section before it, one level deeper.
+- Otherwise, or when no section title matches, `sections.jsonl` order and
+  `Section.level` are kept.
+
+A section renders inside its parent (`<section>` elements nest, and the TOC nests the
+same way), with headings at its depth. A **chapter** starts a new page: every
+top-level section, and each child of a top-level section that is a *part*. A part is
+recognised by its title (*Part I*, *Book 2*, *Volume III*), or by its shape: at least
+two children in the outline (or the manifest, without one), each with children of
+its own, and at most ~300 words of its own. Shape is decided once for the whole book:
+it counts only when most top-level sections that have children share it, and never
+for a section titled as a chapter (*Chapter 3*), so page breaks do not differ between
+chapters of one book. A section whose bookmark sits directly under a bookmark titled
+as a part is a chapter too. Other sections flow inside their chapter. This matters for PDFs: MinerU marks every title as level
+1, so a heading-segmented PDF has a flat manifest that the outline restores.
+
+Two reader-facing modes (`--mode`):
+
+```text
+translated = mixed edition: translation where available, --fallback otherwise
+bilingual  = original | mixed   (side by side, one row per section)
+```
 
 ```bash
 bookgraph export translated-pdf /path/to/workspace ddia --lang vi
 bookgraph export translated-pdf /path/to/workspace ddia --lang vi --fallback skip \
   --out exports/ddia.vi-progress.pdf
+bookgraph export translated-pdf /path/to/workspace ddia --lang vi --mode bilingual \
+  --out exports/ddia.en-vi.pdf
 bookgraph export translated-pdf /path/to/workspace ddia --renderer html   # no PDF extra needed
 bookgraph export translated-pdf /path/to/workspace ddia --check           # coverage + QA only
 ```
@@ -1054,23 +1129,54 @@ bookgraph export translated-pdf /path/to/workspace ddia --check           # cove
 - `workspace_path`, `doc_id`: workspace root and a segmented document id (slug-validated).
 - `--lang` (default `vi`): translation language code, normalised like the registry
   (lowercased, so `VI` and `pt-BR` work).
+- `--mode translated|bilingual` (default `translated`):
+  - `translated` renders each section once: its translation, or the `--fallback`
+    result.
+  - `bilingual` renders each section as a two-column row on a landscape page. The
+    left column is always the original section (rebuilt the same way as an
+    `original` fallback, under its source title). The right column is exactly what
+    `translated` mode renders for that section, so it follows `--fallback` too.
+    Each section's row sits inside its parent's `<section>`, like the sections in
+    `translated` mode, and both columns put its heading at the outline depth.
+    Rows align at section level: translations are free Markdown without block ids,
+    so finer alignment is not attempted. Figures, tables and code appear in the
+    column whose content carries them (the original's figures on the left, the
+    translation's own image links and code on the right); an untranslated section
+    shows the original in both columns. HTML anchors (`id`, and `name` on `<a>`) are
+    kept only in the right column, so every id on the page is unique and in-page links
+    from either column land in the reading edition. The left column is tagged
+    `lang="und"` (no source language is stored), and only right-column headings feed
+    the PDF outline.
 - `--fallback original|skip|fail` (default `original`). This controls what happens to
-  a section that has no translation:
-  - `original` renders the original section, labelled *Untranslated — original text*;
-  - `skip` renders the title with a *Not translated yet* placeholder;
+  a section that has no translation (in `bilingual` mode, to its right column):
+  - `original` renders the original section;
+  - `skip` renders the title only;
   - `fail` exits `1` and lists every untranslated section. Nothing is written. A
     `stale` or `untracked` translation counts as translated (use `--strict` to refuse
     stale ones).
 - `--out`: output file. A relative path is resolved under the workspace. The default
-  is `exports/<doc_id>.<lang>-progress.pdf`, or `.html` with `--renderer html`.
+  is `exports/<doc_id>.<lang>-progress.pdf` (`exports/<doc_id>.<lang>-bilingual.pdf`
+  with `--mode bilingual`), or `.html` with `--renderer html`.
 - `--renderer auto|weasyprint|playwright|html` (default `auto`). `auto` writes HTML
   for a `.html`/`.htm` output. For any other output it uses the first installed PDF
   backend, trying `weasyprint` first and then `playwright`. Naming a backend that is
   not installed is an error.
 - `--strict`: exit `1` without writing anything if any asset is missing, remote, or
   unsupported, a translation is `stale` (`translation_stale`), or a registered
-  translation left out its section's figures/tables (`translation_missing_assets`).
-  An `untracked` translation only warns.
+  translation left out its section's figures/tables (`translation_missing_assets`),
+  or a translation changed its section's link targets, anchors, or paths
+  (`translation_structure_changed`). An `untracked` translation only warns. In
+  `bilingual` mode the left column counts too: a missing original asset of a
+  **translated** section is refused, even though `translated` mode never shows it.
+  The same workspace can therefore pass `--strict` in `translated` mode and fail it
+  in `bilingual` mode.
+- `--show-status`: debug view. Also print status metadata on the reading pages:
+  coverage/doc_id/mode/fallback on the title page, TOC status markers (`(original)`,
+  `(may be outdated)`, `(not tracked)`, `(skipped)`), the *Untranslated — original
+  text* / *Not translated yet* / freshness notes, *Missing asset* placeholders, and
+  in `bilingual` mode the legend's sentence on how untranslated rows read. Without it
+  that metadata is only in the report and the CLI output, so a reading edition
+  carries book content only (a `bilingual` page still names its two columns).
 - `--check`: preflight only. Prints coverage and warnings and writes nothing. With
   `--strict`, it exits `1` whenever the real export would be refused.
 - The `--out` suffix must match the renderer: `.pdf` for `weasyprint`/`playwright`,
@@ -1079,7 +1185,9 @@ bookgraph export translated-pdf /path/to/workspace ddia --check           # cove
 
 ### Reads
 
-- `sources/sections/<doc_id>/sections.jsonl`: the skeleton and reading order.
+- `sources/sections/<doc_id>/sections.jsonl`: the skeleton.
+- `sources/inbox/<doc_id>/book.json`, when present: its PDF outline sets reading
+  order and hierarchy (see *Structure* above).
 - `sources/parsed/<doc_id>/document.json`, when present. Original sections are
   rebuilt from their `block_ids`, so figures, tables and equations stay next to the
   prose around them in the source. Without it, original sections render
@@ -1087,8 +1195,8 @@ bookgraph export translated-pdf /path/to/workspace ddia --check           # cove
 - Translations, through the translation registry (`bookgraph.translations`) only:
   `translations/<lang>/<doc_id>/<section_id>.md` plus its `.json` sidecar, which
   decides the section's `fresh` / `stale` / `untracked` status (the sidecar is never
-  rendered). Stale and untracked translations render with a visible note and a
-  warning; see `artifacts.md`. `translation_cache/` is not read.
+  rendered). Stale and untracked translations render with a warning (and a visible
+  note under `--show-status`); see `artifacts.md`. `translation_cache/` is not read.
 
 ### Asset handling
 
@@ -1101,9 +1209,12 @@ All images are embedded as `data:` URIs, so the output is self-contained.
   workspace.
 - Original asset blocks use the shared `bookgraph.assets.resolve_asset_path` resolver.
 - A link is rejected if it leaves the workspace (including through symlinks), is a
-  remote URL, or is not a png/jpeg/gif/svg/webp file. A rejected link is replaced by a
-  visible *Missing asset* placeholder and reported. It does not crash the export
-  unless `--strict` is set.
+  remote URL, or is not a png/jpeg/gif/svg/webp file. A rejected link, or an asset
+  block whose file is missing, is left out of the page and reported with its section,
+  reference, and the file carrying it. A block's caption and the surrounding prose
+  stay, and a paragraph that held nothing but the image is dropped. `--show-status`
+  shows a *Missing asset* placeholder in its place. It does not crash the export
+  unless `--strict` is set. To get the figure back, run `bookgraph assets repair`.
 - The page carries a CSP that allows only `data:` images and inline styles, and both
   PDF backends refuse any URL that is not `data:`. Rendering never reads the network
   or arbitrary files, and scripts in artifact HTML never run.
@@ -1121,15 +1232,16 @@ All images are embedded as `data:` URIs, so the output is self-contained.
 
 ### Prints
 
-- `doc_id`, `lang`, `fallback`, and `coverage: <translated>/<total> (<pct>%)`.
-- One `warning: <code>: <section_id>: <message>` line per warning.
+- `doc_id`, `lang`, `mode`, `fallback`, and `coverage: <translated>/<total> (<pct>%)`.
+- One `warning: <code>: <section_id>: <message>` line per warning, followed by
+  ` (in <source_path>)` when the warning names the file carrying the reference.
 - `renderer`, `export`, and `report` paths. With `--check` it prints
   `export: (check only, not written)` instead.
 
 ### Errors
 
 - Missing sections manifest → `Sections manifest not found` (exit 2).
-- Unknown `--fallback` / `--renderer`, an invalid `--lang`, or an `--out` suffix that
+- Unknown `--mode` / `--fallback` / `--renderer`, an invalid `--lang`, or an `--out` suffix that
   does not match the renderer → exit 2.
 - `--fallback fail` with untranslated sections (including empty or unreadable
   artifacts; stale and untracked translations count as translated), `--strict` with
@@ -1143,6 +1255,74 @@ All images are embedded as `data:` URIs, so the output is self-contained.
 | `weasyprint` | `uv sync --extra pdf` (also needs the Pango system library, e.g. `brew install pango`) |
 | `playwright` | `uv sync --extra pdf-chromium && uv run playwright install chromium` |
 | `html` | built in |
+
+## `bookgraph assets repair`
+
+**Status:** Implemented.
+
+Recover image/table files that a parsed document references but never staged (the
+`asset_file_missing` quality warning, `asset_missing` in an export).
+
+```bash
+bookgraph assets repair /path/to/workspace ddia --dry-run
+bookgraph assets repair /path/to/workspace ddia
+bookgraph assets repair /path/to/workspace ddia --from ~/ddia-figures
+```
+
+### Inputs
+
+- `workspace_path`, `doc_id`: workspace root and a parsed document id (slug-validated).
+- `--from DIR` (repeatable): extra directories to search after the parser output.
+- `--dry-run`: report what would be recovered and write nothing.
+- `--json`: print the repair report as JSON instead of lines.
+
+### Behavior
+
+Every asset block whose reference does not resolve (through the shared
+`bookgraph.assets.resolve_asset_path`) is looked up, in order, in:
+
+1. the parser output: any file under `sources/parsed/<doc_id>/` whose path ends with
+   the reference, else whose basename matches it (hidden directories and symlinks
+   are skipped);
+2. the source EPUB (`document.metadata.source_path`), when there is one, matched like
+   the parse-time EPUB stager matches members;
+3. each `--from` directory, matched like the parser output.
+
+The first source with exactly one match wins. Byte-identical copies count as one
+match. When several different files match, the asset is reported as `ambiguous` and
+left alone, because guessing could show the wrong figure. A recovered file is copied
+into `sources/parsed/<doc_id>/images/` under a link-safe, non-clashing name, and its
+block is repointed there (see *Repaired asset blocks* in `artifacts.md`). Remote and
+absolute references are not repair candidates.
+
+### Writes
+
+- `sources/parsed/<doc_id>/images/<name>` for each recovered file.
+- `sources/parsed/<doc_id>/document.json`, atomically, only when something was
+  recovered.
+- `sources/sections/<doc_id>/quality.json`, re-checked against the repaired document,
+  when a sections manifest exists and something was recovered.
+
+### Must not do
+
+- Must not change block text, ids, or order, sections, or translation artifacts.
+- Must not rewrite a reference it could not recover. The export already leaves
+  such an asset out and keeps its caption.
+- Must not fetch remote assets.
+
+### Prints
+
+- `doc_id`, `missing: <n>`, `recovered: <n>`.
+- One line per missing asset: `recovered: <block_id> [<section_ids>]: <reference> ->
+  images/<name> (from <source>)`, `ambiguous: … <n> candidate files, none used: …`,
+  or `unrecoverable: <block_id> [<section_ids>]: <reference>`.
+- `quality: <path> (refreshed)` when the quality report was rewritten, and
+  `repair: (dry run, nothing written)` with `--dry-run`.
+
+### Errors
+
+- Exit `2` when `document.json` is missing, the sections manifest is invalid, or a
+  `--from` path is not a directory. An unrecoverable asset is not an error.
 
 ## Book-level parse / wiki compile contracts
 

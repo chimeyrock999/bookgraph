@@ -14,6 +14,12 @@ from pydantic import BaseModel, Field
 FallbackPolicy = Literal["original", "skip", "fail"]
 FALLBACK_POLICIES: tuple[str, ...] = ("original", "skip", "fail")
 
+# The reader-facing layout: ``translated`` is the mixed reading edition (each section's
+# translation, else the ``--fallback`` result); ``bilingual`` puts the original section
+# on the left and that same mixed rendering on the right.
+ExportMode = Literal["translated", "bilingual"]
+EXPORT_MODES: tuple[str, ...] = ("translated", "bilingual")
+
 # How one section ended up in the export: its translation artifact, the original
 # source text (``--fallback original``), or a placeholder (``--fallback skip``).
 SectionSource = Literal["translated", "original", "skipped"]
@@ -31,6 +37,7 @@ ASSET_UNSUPPORTED = "asset_unsupported"
 TRANSLATION_EMPTY = "translation_empty"
 TRANSLATION_MISSING_ASSETS = "translation_missing_assets"
 TRANSLATION_STALE = "translation_stale"
+TRANSLATION_STRUCTURE_CHANGED = "translation_structure_changed"
 TRANSLATION_UNREADABLE = "translation_unreadable"
 TRANSLATION_UNTRACKED = "translation_untracked"
 
@@ -38,11 +45,13 @@ TRANSLATION_UNTRACKED = "translation_untracked"
 ASSET_WARNING_CODES: frozenset[str] = frozenset({ASSET_MISSING, ASSET_REMOTE, ASSET_UNSUPPORTED})
 
 # ``--strict`` refuses to write an export carrying any of these: a missing asset, or a
-# translation known to be outdated or to have left out the section's figures/tables.
+# translation known to be outdated, to have left out the section's figures/tables, or to
+# have changed a link destination / anchor / path of its source section.
 # ``translation_untracked`` only warns — its freshness is unknown, not known-bad.
 STRICT_WARNING_CODES: frozenset[str] = ASSET_WARNING_CODES | {
     TRANSLATION_MISSING_ASSETS,
     TRANSLATION_STALE,
+    TRANSLATION_STRUCTURE_CHANGED,
 }
 
 
@@ -51,50 +60,116 @@ class ExportWarning(BaseModel):
 
     ``reference`` is the raw asset reference (a Markdown image link or a parsed
     block's asset path) for an asset-scoped warning, ``None`` otherwise.
+    ``source_path`` is the workspace-relative file that carries that reference — the
+    translation artifact, or the parsed ``document.json`` for an original section —
+    and ``block_id`` the parsed block when the reference came from one.
     """
 
     code: str
     message: str
     section_id: str | None = None
     reference: str | None = None
+    source_path: str | None = None
+    block_id: str | None = None
 
 
 class ExportSection(BaseModel):
-    """Where one section's content came from in the export.
+    """Where one section's content came from in the export, and where it sits.
 
     ``freshness`` is the translation's registry status when ``source`` is
-    ``translated``, ``None`` otherwise.
+    ``translated``, ``None`` otherwise. ``level`` is the manifest's ``Section.level``;
+    ``depth`` (heading level in the export) and ``parent_id`` (the section it renders
+    inside, ``None`` for a top-level one) are its place in the book's structure, which
+    follows the source PDF outline when there is one. ``assets_*`` count the mixed
+    rendering (the whole section in ``translated`` mode, the right column in
+    ``bilingual`` mode); ``original_assets_*`` count the bilingual left column and stay
+    ``None`` in ``translated`` mode.
     """
 
     section_id: str
     title: str
     level: int
+    depth: int = 1
+    parent_id: str | None = None
     source: SectionSource
     artifact: str | None = None
     freshness: TranslationFreshness | None = None
     assets_embedded: int = 0
     assets_missing: int = 0
+    original_assets_embedded: int | None = None
+    original_assets_missing: int | None = None
 
 
 class ExportReport(BaseModel):
-    """Coverage + QA report for one translated export, in reading order.
+    """Coverage + QA report for one translated export, in the export's reading order.
 
     ``coverage`` is ``translated_sections / total_sections`` (``0.0`` for an empty
-    document). ``output``/``renderer`` stay ``None`` for a preflight-only run.
+    document). ``original_sections`` / ``skipped_sections`` count the sections that
+    took the ``--fallback`` path. ``unpaired_sections`` counts bilingual rows with no
+    translation to compare against (``0`` in ``translated`` mode), and
+    ``assets_missing`` the asset references that could not be embedded, per column.
+    ``output``/``renderer`` stay ``None`` for a preflight-only run.
+    ``show_status`` records whether status/debug metadata was also printed on the
+    reading pages (``--show-status``); by default it lives only in this report.
     """
 
     doc_id: str
     title: str
     lang: str
+    mode: ExportMode = "translated"
     fallback: FallbackPolicy
     generated_at: str
     total_sections: int
     translated_sections: int
+    original_sections: int = 0
+    skipped_sections: int = 0
+    unpaired_sections: int = 0
+    assets_missing: int = 0
     coverage: float
     sections: list[ExportSection] = Field(default_factory=list)
     warnings: list[ExportWarning] = Field(default_factory=list)
     renderer: str | None = None
     output: str | None = None
+    show_status: bool = False
+
+    @classmethod
+    def from_sections(
+        cls,
+        sections: list[ExportSection],
+        *,
+        mode: ExportMode,
+        doc_id: str,
+        title: str,
+        lang: str,
+        fallback: FallbackPolicy,
+        generated_at: str,
+        warnings: list[ExportWarning],
+        show_status: bool = False,
+    ) -> ExportReport:
+        """A report for ``sections`` with its coverage and fallback counts filled in."""
+
+        translated = sum(1 for entry in sections if entry.source == "translated")
+        total = len(sections)
+        return cls(
+            mode=mode,
+            sections=sections,
+            total_sections=total,
+            translated_sections=translated,
+            original_sections=sum(1 for entry in sections if entry.source == "original"),
+            skipped_sections=sum(1 for entry in sections if entry.source == "skipped"),
+            unpaired_sections=total - translated if mode == "bilingual" else 0,
+            assets_missing=sum(
+                entry.assets_missing + (entry.original_assets_missing or 0) for entry in sections
+            ),
+            coverage=round(translated / total, 4) if total else 0.0,
+            doc_id=doc_id,
+            title=title,
+            lang=lang,
+            fallback=fallback,
+            generated_at=generated_at,
+            warnings=warnings,
+            show_status=show_status,
+        )
 
     @property
     def untranslated(self) -> list[str]:

@@ -20,7 +20,8 @@ convention into a registry a workflow can query:
 The body file is the deliverable. A write removes any previous sidecar, then writes the
 body, then the new sidecar, so a crash (or a racing writer) mid-write leaves at worst an
 ``untracked`` body — never a sidecar vouching for a body it does not describe; the body
-hash check backs this up. See ``docs/cli/artifacts.md``.
+hash check backs this up. Remarks about a translation (QA results, terminology
+decisions) go in the sidecar's ``notes``, never in the body. See ``docs/cli/artifacts.md``.
 """
 
 from __future__ import annotations
@@ -77,6 +78,34 @@ def _check_section_id(section_id: str) -> str:
     return section_id
 
 
+def split_frontmatter(text: str) -> tuple[dict[str, object], str]:
+    """Split an optional leading ``---`` YAML frontmatter block from Markdown.
+
+    Only flat ``key: value`` lines are read (values as JSON scalars when they parse,
+    raw strings otherwise) — enough for the ``title``/provenance fields translation
+    artifacts carry, without a YAML dependency. Text without frontmatter is returned
+    unchanged.
+    """
+
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return {}, text
+    end = next((i for i, line in enumerate(lines[1:], start=1) if line.strip() == "---"), None)
+    if end is None:
+        return {}, text
+    fields: dict[str, object] = {}
+    for line in lines[1:end]:
+        key, sep, value = line.partition(":")
+        if not sep or not key.strip():
+            continue
+        value = value.strip()
+        try:
+            fields[key.strip()] = json.loads(value)
+        except ValueError:
+            fields[key.strip()] = value.strip("'\"")
+    return fields, "\n".join(lines[end + 1 :])
+
+
 @dataclass(frozen=True)
 class TranslationPaths:
     """Where one section's translation body and its registry sidecar live."""
@@ -129,11 +158,15 @@ def write_translation(
     includes_assets: bool = False,
     model: str | None = None,
     created_at: str | None = None,
+    notes: str | None = None,
 ) -> SectionArtifact:
     """Persist a translation body and register it against the section's current content.
 
     Overwrites any previous translation of the same section/lang: the registry is a
     cache, and the newest translation of the current content is the one to keep.
+
+    ``content`` is the book content only; anything about the translation that is not
+    (QA results, terminology notes) goes in ``notes``, stored in the sidecar only.
     """
 
     paths = translation_paths(workspace, lang, section.doc_id, section.id)
@@ -148,6 +181,7 @@ def write_translation(
         includes_assets=includes_assets,
         model=model,
         created_at=created_at,
+        notes=notes or None,
     )
     # Drop the old sidecar, then body, then the new sidecar (the commit record): between
     # the renames the body is untracked, never described by a previous write's sidecar.

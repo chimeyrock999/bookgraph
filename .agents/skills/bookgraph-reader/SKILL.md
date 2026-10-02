@@ -71,7 +71,15 @@ Optional translation cache tools (when the user wants sections translated):
   `stale`/`missing`, or a fresh prose-only translation of a section with
   figures/tables, means translate again.
 - `write_section_translation(doc_id, section_id, lang, content, includes_assets=...,
-  source_section_hash=<current_section_hash>)` — cache a new translation.
+  source_section_hash=<current_section_hash>, notes=...)` — cache a new
+  translation. `content` is book content only; QA/checker results and terminology
+  decisions go in `notes` (see *Artifact channels* below).
+  Translate content, preserve structural Markdown: translate prose, captions, and
+  link labels, but keep link destinations and fragment ids, image and file paths,
+  reference-style identifiers, HTML `id`/`name` anchors, and `{#id}` heading ids
+  byte-for-byte. A non-empty `structure_issues` in the result lists what changed;
+  fix and rewrite it (`complete_reading_batch` blocks on
+  `translation_structure_changed`).
 - `list_section_artifacts(doc_id=None, lang=None)` — list cached translations and
   their freshness.
 
@@ -129,6 +137,38 @@ Optional translation cache tools (when the user wants sections translated):
 - Only `create_plan`, `mark_read`, and `complete_reading_batch` write reading
   progress; `annotate_section` and `write_section_translation` write their
   artifacts. Treat all other tools as read-only.
+
+## Artifact channels
+
+A cached translation is reused by later runs and printed in the reading PDF, so it
+holds **book content only**. Keep the channels separate:
+
+- translated headings/prose/tables/figures → `content` of `write_section_translation`;
+- QA/checker results, terminology decisions, doubts about the source → `notes` of
+  `write_section_translation` (stored beside the translation, never exported);
+- `MEDIA:/path` delivery markers, "Đã lưu cache/enrich và mark read: …", progress and
+  job status → the final chat reply only;
+- export coverage/freshness/missing assets → the export's `.report.json`.
+
+Rules:
+
+- Write translations only through `write_section_translation`, the only translation
+  store. Never write translation files yourself, not under `translations/` and not in
+  any directory of your own (such as a `translation_cache/`): nothing reads them, so
+  the section stays untranslated in the export and in batch completion. Never paste
+  the chat reply into `content`.
+- Link each figure/table by its `AssetRef.link` (relative, e.g. `images/fig1-1.png`),
+  never by `AssetRef.path` (absolute — it is for opening the file).
+- Never copy export labels (`(original)`, `(untracked)`, "Translation status
+  unknown", "Missing asset: …") into a translation.
+- Annotation summaries and glosses follow the same rule: book explanation only.
+- After translating, advance with `complete_reading_batch(plan_id,
+  translation_lang=...)`, and always pass `translation_lang` in a translation job:
+  only then does it verify the translation exists and is fresh. Without it the batch
+  completes with nothing saved. A translation-only job (no annotating, no index
+  build) also passes `require_annotation=False` and `index="ignore"` (or
+  `"deferred"`), and lists the figures it opened in `inspected_assets`: the defaults
+  require an annotation and a fresh index, which such a job never produces.
 
 ## Client-specific packaging
 

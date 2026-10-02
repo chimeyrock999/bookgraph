@@ -121,6 +121,9 @@ class SectionArtifact(BaseModel):
     registration is no longer vouched for by this record.
     ``includes_assets`` records whether the section's figures/tables were carried into
     the artifact (a translation of the prose alone is incomplete for an asset section).
+    ``notes`` is the writer's free-text side channel — QA/checker results, terminology
+    decisions, job remarks. It lives only here, never in the body, so a translator has
+    a place for everything that is not book content.
     """
 
     type: SectionArtifactType = "translation"
@@ -133,3 +136,24 @@ class SectionArtifact(BaseModel):
     includes_assets: bool = False
     model: str | None = None
     created_at: str | None = None
+    notes: str | None = None
+
+
+# What a translation must carry over unchanged from its source section (see
+# ``bookgraph.translation_structure``): link and image destinations, reference-style
+# link definitions, HTML ``id``/``name`` anchors, and explicit heading ids (``{#id}``).
+StructuralTargetKind = Literal["link", "image", "reference", "html_id", "heading_id"]
+
+
+class TranslationStructureIssue(BaseModel):
+    """One structural target a translation changed relative to its source section.
+
+    ``missing`` means the source has ``target`` (``count`` more times) than the
+    translation; ``added`` means the translation has it and the source does not. A
+    rewritten destination shows up as one ``missing`` plus one ``added`` entry.
+    """
+
+    kind: StructuralTargetKind
+    target: str
+    change: Literal["missing", "added"]
+    count: int = 1

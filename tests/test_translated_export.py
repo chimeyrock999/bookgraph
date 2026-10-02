@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-import base64
 import json
 from pathlib import Path
 
 import pytest
 
-from bookgraph.documents import write_document
 from bookgraph.exports.models import (
     ASSET_MISSING,
     ASSET_REMOTE,
@@ -16,7 +14,6 @@ from bookgraph.exports.models import (
     TRANSLATION_STALE,
     TRANSLATION_UNREADABLE,
     TRANSLATION_UNTRACKED,
-    ExportReport,
 )
 from bookgraph.exports.renderers import (
     ExportRenderer,
@@ -34,101 +31,21 @@ from bookgraph.exports.translated import (
     split_frontmatter,
     write_translated_export,
 )
-from bookgraph.models import CanonicalBlock, Document, Section
+from bookgraph.models import Section
 from bookgraph.plugins import PluginRegistry
-from bookgraph.sections import read_sections, write_sections
-from bookgraph.segmenters.heading import HeadingSegmenter
-from bookgraph.translations import write_translation
+from bookgraph.sections import write_sections
 from bookgraph.workspace import WorkspacePaths
-
-# 1x1 transparent PNG.
-PNG = base64.b64decode(
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
+from translated_export_support import (
+    DOC,
+    GENERATED_AT,
+    PNG,
+    PNG_URI,
+    _change_section_text,
+    _codes,
+    _register,
+    _section_ids,
+    _translate,
 )
-PNG_URI = "data:image/png;base64," + base64.b64encode(PNG).decode("ascii")
-GENERATED_AT = "2026-10-02T00:00:00Z"
-DOC = "tiny"
-
-
-def _blocks() -> list[CanonicalBlock]:
-    return [
-        CanonicalBlock(id="b0", type="title", text="Chapter One", level=1, page_idx=0),
-        CanonicalBlock(id="b1", type="text", text="Intro prose in English.", page_idx=0),
-        CanonicalBlock(
-            id="b2",
-            type="image",
-            text="Figure 1. A diagram.",
-            asset_path="fig1.png",
-            page_idx=0,
-        ),
-        CanonicalBlock(id="b3", type="text", text="Prose after the figure.", page_idx=0),
-        CanonicalBlock(id="b4", type="title", text="Section Two", level=2, page_idx=1),
-        CanonicalBlock(id="b5", type="text", text="Second section English text.", page_idx=1),
-        CanonicalBlock(
-            id="b6",
-            type="table",
-            text="Table 1. Lost table.",
-            asset_path="missing-table.png",
-            page_idx=1,
-        ),
-        CanonicalBlock(id="b7", type="title", text="Section Three", level=2, page_idx=2),
-        CanonicalBlock(id="b8", type="equation", text="E = mc^2", page_idx=2),
-        CanonicalBlock(id="b9", type="text", text="Third section English text.", page_idx=2),
-    ]
-
-
-@pytest.fixture
-def workspace(tmp_path: Path) -> WorkspacePaths:
-    paths = WorkspacePaths(tmp_path)
-    document = Document(doc_id=DOC, title="Tiny Book", blocks=_blocks())
-    parsed_dir = paths.sources_parsed / DOC
-    write_document(document, parsed_dir)
-    (parsed_dir / "images").mkdir()
-    (parsed_dir / "images" / "fig1.png").write_bytes(PNG)
-    sections = HeadingSegmenter(target_level=2).segment(document)
-    write_sections(sections, paths.sources_sections / DOC)
-    return paths
-
-
-def _section_ids(paths: WorkspacePaths) -> list[str]:
-    manifest = paths.sources_sections / DOC / "sections.jsonl"
-    return [json.loads(line)["id"] for line in manifest.read_text().splitlines()]
-
-
-def _translate(paths: WorkspacePaths, section_id: str, body: str) -> Path:
-    """Drop a body at the registry path with no sidecar: an ``untracked`` translation."""
-
-    path = paths.translations_root / "vi" / DOC / f"{section_id}.md"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(body, encoding="utf-8")
-    return path
-
-
-def _sections(paths: WorkspacePaths) -> list[Section]:
-    return read_sections(paths.sources_sections / DOC / "sections.jsonl")
-
-
-def _register(
-    paths: WorkspacePaths, section_id: str, body: str, *, includes_assets: bool = True
-) -> None:
-    """Write a translation through the registry: ``fresh`` against the current section."""
-
-    section = next(s for s in _sections(paths) if s.id == section_id)
-    write_translation(paths, section, "vi", body, includes_assets=includes_assets)
-
-
-def _change_section_text(paths: WorkspacePaths, section_id: str) -> None:
-    """Simulate a re-segment that changed the section's words, making it stale."""
-
-    sections = [
-        s.model_copy(update={"text": s.text + " Revised."}) if s.id == section_id else s
-        for s in _sections(paths)
-    ]
-    write_sections(sections, paths.sources_sections / DOC)
-
-
-def _codes(report: ExportReport, section_id: str) -> list[str]:
-    return [w.code for w in report.warnings if w.section_id == section_id]
 
 
 def test_mixed_sections_render_translation_or_original_in_reading_order(
@@ -160,12 +77,19 @@ def test_mixed_sections_render_translation_or_original_in_reading_order(
     assert "Văn bản tiếng Việt." in html
     assert "Intro prose in English." not in html  # translated sections drop the original
     assert "Second section English text." in html  # untranslated falls back to English
-    assert "Untranslated — original text" in html
     body = html[html.index("<main>") :]
     assert body.index("Chương Một") < body.index("Second section") < body.index("Phần Ba")
     assert PNG_URI in html
-    assert "2/3 sections translated (66.7%)" in html
-    assert GENERATED_AT in html
+    # Reader-facing by default: coverage and per-section status stay in the report.
+    for status in ("Untranslated — original text", "sections translated", GENERATED_AT):
+        assert status not in html
+
+    debug = build_translated_export(
+        workspace, DOC, lang="vi", generated_at=GENERATED_AT, show_status=True
+    ).html
+    assert "Untranslated — original text" in debug
+    assert "2/3 sections translated (66.7%)" in debug
+    assert GENERATED_AT in debug
 
 
 def test_original_fallback_keeps_assets_and_equations_in_block_order(
@@ -187,7 +111,10 @@ def test_original_fallback_keeps_assets_and_equations_in_block_order(
     assert [(w.section_id, w.reference) for w in missing] == [
         (second_entry.section_id, "missing-table.png")
     ]
-    assert "Missing asset: missing-table.png" in html
+    # The image is left out of the book (its caption stays); the path is in the report.
+    assert "missing-table.png" not in html
+    assert "missing-asset" not in html[html.index("<body>") :]
+    assert "<figcaption>Table 1. Lost table.</figcaption>" in html
 
 
 def test_translated_headings_are_relevelled_to_the_section_level(
@@ -257,7 +184,11 @@ def test_broken_remote_and_escaping_image_links_are_reported_not_embedded(
     assert export.report.sections[0].assets_missing == 5
     assert 'src="https://' not in export.html
     assert f'src="{outside}"' not in export.html
-    assert "Missing asset: https://example.com/x.png" in export.html
+    assert "Missing asset" not in export.html
+    debug = build_translated_export(
+        workspace, DOC, lang="vi", generated_at=GENERATED_AT, show_status=True
+    )
+    assert "Missing asset: https://example.com/x.png" in debug.html
 
 
 def test_empty_translation_falls_back_with_a_warning(workspace: WorkspacePaths) -> None:
@@ -282,7 +213,13 @@ def test_skip_fallback_renders_placeholders(workspace: WorkspacePaths) -> None:
 
     assert [e.source for e in export.report.sections] == ["translated", "skipped", "skipped"]
     assert "Second section English text." not in export.html
-    assert export.html.count("Not translated yet") == 2
+    # The reader keeps the chapter's headings; only the report says they were skipped.
+    assert "<h2>Section Two</h2></section>" in export.html
+    assert "Not translated yet" not in export.html
+    debug = build_translated_export(
+        workspace, DOC, lang="vi", fallback="skip", generated_at=GENERATED_AT, show_status=True
+    )
+    assert debug.html.count("Not translated yet") == 2
     # Assets of skipped sections are not rendered, so they are not reported missing.
     assert not [w for w in export.report.warnings if w.code == ASSET_MISSING]
 
@@ -554,7 +491,7 @@ def test_raw_html_img_scanning_is_attribute_aware(workspace: WorkspacePaths) -> 
     # Custom elements named ``img-*`` are not images.
     assert '<img-zoom src="x"></img-zoom>' in html
     assert "<img-comparison-slider>" in html
-    assert [w for w in export.report.warnings if w.section_id == chapter] == []
+    assert [w for w in export.report.asset_warnings if w.section_id == chapter] == []
     assert export.report.sections[0].assets_embedded == 2
     assert export.report.sections[0].assets_missing == 0
 
@@ -630,9 +567,14 @@ def test_stale_translation_renders_flagged_and_counts_as_translated(
     assert export.report.translated_sections == 3
     assert _codes(export.report, chapter) == [TRANSLATION_STALE]
     assert "Bản dịch cũ." in export.html
-    # The note sits right under the section heading, and the TOC flags it too.
-    assert '<h1>Chương Một</h1>\n<p class="source-note">Translation may be outdated' in export.html
-    assert 'Chương Một</a> <span class="status">(may be outdated)</span>' in export.html
+    assert "may be outdated" not in export.html
+    # With ``show_status`` the note sits right under the section heading, and the TOC
+    # flags it too.
+    debug = build_translated_export(
+        workspace, DOC, lang="vi", fallback="fail", generated_at=GENERATED_AT, show_status=True
+    )
+    assert '<h1>Chương Một</h1>\n<p class="source-note">Translation may be outdated' in debug.html
+    assert 'Chương Một</a> <span class="status">(may be outdated)</span>' in debug.html
 
     # ``--strict`` refuses to present it as current.
     with pytest.raises(ExportError, match="strict mode"):
@@ -657,8 +599,13 @@ def test_untracked_translation_renders_with_a_warning(
     assert export.report.sections[0].freshness == "untracked"
     assert _codes(export.report, chapter) == [TRANSLATION_UNTRACKED]
     assert "Sửa tay." in export.html
-    assert "Translation status unknown — it may be outdated" in export.html
-    assert 'Chương Một</a> <span class="status">(not tracked)</span>' in export.html
+    assert "Translation status unknown" not in export.html
+    assert "not tracked" not in export.html
+    debug = build_translated_export(
+        workspace, DOC, lang="vi", fallback="skip", generated_at=GENERATED_AT, show_status=True
+    )
+    assert "Translation status unknown — it may be outdated" in debug.html
+    assert 'Chương Một</a> <span class="status">(not tracked)</span>' in debug.html
     # Freshness unknown is not known-bad: ``--strict`` still writes the export.
     report = write_translated_export(export, tmp_path / "out.html", HtmlRenderer(), strict=True)
     assert report.sections[0].freshness == "untracked"

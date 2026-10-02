@@ -298,8 +298,6 @@ def _current_batch(
     return progress.next_section_ids
 
 
-
-
 def _segmented_doc_ids(workspace: WorkspacePaths) -> list[str]:
     """Slug-shaped document directories that have a sections manifest.
 

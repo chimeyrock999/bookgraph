@@ -80,6 +80,8 @@ def _hits_from_sections(sections: list[Section], terms: list[str]) -> list[Searc
                 )
             )
     return hits
+
+
 def search_sections(
     workspace: WorkspacePaths,
     query: str,
@@ -167,9 +169,7 @@ def _scoped_nodes(
     if max_depth is not None and max_depth < 1:
         raise ReadingServiceError("max_depth must be at least 1")
     if root_id is not None and all(node.id != root_id for node in graph.nodes):
-        raise SectionNotFoundError(
-            f"Section '{root_id}' not found in document '{graph.doc_id}'."
-        )
+        raise SectionNotFoundError(f"Section '{root_id}' not found in document '{graph.doc_id}'.")
 
     depths: dict[str, int] = {}
     kept: list[SectionNode] = []

@@ -267,7 +267,7 @@ src/bookgraph/
     markdown_graph.py       # Linked markdown wiki: book pages + wikilinks (uses concepts.py)
   mcp/
     service.py              # Reading/query API facade (FastMCP-free, unit-tested)
-    reading_tools.py        # next section, progress, get_section, mark_read, plans
+    reading_tools.py        # next section, progress, get_section, mark_read, documents, plans
     query_tools.py          # search, outlines, related sections, section context
     concept_tools.py        # get_concept, concept_hygiene, annotate_section
     translation_tools.py    # section translation registry tools

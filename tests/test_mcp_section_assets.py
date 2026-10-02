@@ -186,9 +186,7 @@ def test_asset_warning_not_raised_for_genuine_short_prose(tmp_path: Path) -> Non
         Document(
             doc_id="deep-work",
             title="Deep Work",
-            blocks=[
-                CanonicalBlock(id="img1", type="image", text="Pipeline", asset_path="p.jpg")
-            ],
+            blocks=[CanonicalBlock(id="img1", type="image", text="Pipeline", asset_path="p.jpg")],
         ),
         workspace.sources_parsed / "deep-work",
     )
@@ -278,9 +276,7 @@ def test_doc_blocks_cache_invalidates_on_same_mtime_size_change(tmp_path: Path) 
             Document(
                 doc_id="deep-work",
                 title="Deep Work",
-                blocks=[
-                    CanonicalBlock(id="img1", type="image", text=caption, asset_path="a.jpg")
-                ],
+                blocks=[CanonicalBlock(id="img1", type="image", text=caption, asset_path="a.jpg")],
             ),
             workspace.sources_parsed / "deep-work",
         )

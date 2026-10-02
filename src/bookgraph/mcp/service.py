@@ -917,8 +917,10 @@ class SectionArtifactView(BaseModel):
     only). ``current_section_hash`` is the section's live content hash — pass it back as
     ``source_section_hash`` to ``write_section_translation`` to pin the write to the
     content you translated. ``section_has_assets`` together with ``includes_assets``
-    tells whether a translation is complete: one that left out the section's
-    figures/tables (``includes_assets=False`` on an asset section) is prose-only.
+    tells whether a translation is complete: reuse it as-is only when ``status`` is
+    ``fresh`` **and** (``includes_assets`` or not ``section_has_assets``). A translation
+    that left out the section's figures/tables is prose-only even when fresh, because
+    the section hash covers only its title and text.
     ``content`` is the translation body when requested and present.
     """
 
@@ -1061,17 +1063,19 @@ def list_section_artifacts(
     workspace: WorkspacePaths,
     doc_id: str | None = None,
     lang: str | None = None,
-    type: str = "translation",
+    artifact_type: str = "translation",
 ) -> SectionArtifactList:
     """List cached section artifacts with their freshness (no bodies).
 
     Each entry is checked against the document's current sections, so a reading job can
     find stale translations to redo — and ``orphaned`` ones whose section is gone —
-    in one call. Only ``type="translation"`` exists today.
+    in one call. Only ``artifact_type="translation"`` exists today.
     """
 
-    if type != "translation":
-        raise ReadingServiceError(f"unknown artifact type {type!r}; supported: 'translation'")
+    if artifact_type != "translation":
+        raise ReadingServiceError(
+            f"unknown artifact type {artifact_type!r}; supported: 'translation'"
+        )
     resolved_doc_id = _validate_id(doc_id, "doc_id") if doc_id is not None else None
     resolved_lang = _validate_lang(lang) if lang is not None else None
 

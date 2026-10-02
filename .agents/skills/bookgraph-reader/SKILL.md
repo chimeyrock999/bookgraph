@@ -57,10 +57,10 @@ Optional navigation tools:
 
 Optional translation cache tools (when the user wants sections translated):
 
-- `get_section_translation(doc_id, section_id, lang)` — reuse `content` when
-  `status` is `fresh`; `stale`/`missing` means translate again. Compare
-  `includes_assets` with `section_has_assets` to spot translations that left out
-  figures/tables.
+- `get_section_translation(doc_id, section_id, lang)` — reuse `content` only when
+  `status` is `fresh` and (`includes_assets` or not `section_has_assets`);
+  `stale`/`missing`, or a fresh prose-only translation of a section with
+  figures/tables, means translate again.
 - `write_section_translation(doc_id, section_id, lang, content, includes_assets=...,
   source_section_hash=<current_section_hash>)` — cache a new translation.
 - `list_section_artifacts(doc_id=None, lang=None)` — list cached translations and

@@ -179,8 +179,9 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
         Check this before translating a section. ``status`` is 'fresh' (reuse
         ``content`` as-is), 'stale' (the section changed since — retranslate),
         'untracked' (a cached file with no registry record — freshness unknown), or
-        'missing' (translate it). ``includes_assets`` vs ``section_has_assets`` tells
-        whether the cached translation carried the section's figures/tables. Pass
+        'missing' (translate it). Reuse only when status is 'fresh' AND
+        (includes_assets or not section_has_assets): a fresh prose-only translation of
+        a section with figures/tables is incomplete. Pass
         ``current_section_hash`` back to write_section_translation to pin your write.
         """
 

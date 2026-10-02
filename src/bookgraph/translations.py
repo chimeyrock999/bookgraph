@@ -4,20 +4,23 @@ A reading job that translates sections caches each result so a reset/replay neve
 to retranslate it. The cache keeps the established path convention for the body —
 ``translations/<lang>/<doc_id>/<section_id>.md`` — and adds a JSON sidecar beside it
 (``<section_id>.json``, a :class:`~bookgraph.models.SectionArtifact`) that records what
-the translation was generated *from*: the section's content hash and whether its
-figures/tables were included. That sidecar is what turns a path convention into a
-registry a workflow can query:
+the translation was generated *from* — the section's content hash and whether its
+figures/tables were included — and the hash of the body it describes, so a body later
+overwritten by path convention is not vouched for. That sidecar is what turns a path
+convention into a registry a workflow can query:
 
 - ``fresh`` — a tracked translation of the section's current content.
 - ``stale`` — tracked, but the section changed since (re-segment / re-parse).
-- ``untracked`` — a body file with no (valid) sidecar, e.g. a cache written before the
-  registry existed; it may be reused, but its freshness is unknown.
+- ``untracked`` — a body file with no valid sidecar for it: a cache written before the
+  registry existed, or a body overwritten/edited after registration (its hash no longer
+  matches the sidecar's ``content_hash``); it may be reused, but its freshness is unknown.
 - ``missing`` — no translation body.
 - ``orphaned`` — a translation whose section no longer exists (listing only).
 
-The body file is the deliverable; the sidecar is written after it, so a crash mid-write
-leaves at worst an ``untracked`` body, never a sidecar vouching for a body that is not
-there. See ``docs/cli/artifacts.md``.
+The body file is the deliverable. A write removes any previous sidecar, then writes the
+body, then the new sidecar, so a crash (or a racing writer) mid-write leaves at worst an
+``untracked`` body — never a sidecar vouching for a body it does not describe; the body
+hash check backs this up. See ``docs/cli/artifacts.md``.
 """
 
 from __future__ import annotations
@@ -25,7 +28,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import tempfile
+import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -52,6 +55,12 @@ def section_content_hash(section: Section) -> str:
         {"title": section.title, "text": section.text}, ensure_ascii=False, sort_keys=True
     )
     return _HASH_PREFIX + hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def body_content_hash(content: bytes) -> str:
+    """Fingerprint of a translation body as stored on disk (UTF-8 bytes)."""
+
+    return _HASH_PREFIX + hashlib.sha256(content).hexdigest()
 
 
 def validate_lang(lang: str) -> str:
@@ -94,13 +103,18 @@ def _atomic_write(path: Path, text: str) -> None:
     """Write via a same-directory temp file + rename so readers never see a partial file."""
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    # os.open with 0o666 lets the kernel apply the umask (mkstemp would force 0600 and
+    # lock a delivery job running as another user out of the cache).
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
         os.replace(tmp, path)
     except BaseException:
-        Path(tmp).unlink(missing_ok=True)
+        tmp.unlink(missing_ok=True)
         raise
 
 
@@ -128,11 +142,14 @@ def write_translation(
         section_id=section.id,
         path=paths.body.relative_to(workspace.root).as_posix(),
         source_section_hash=section_content_hash(section),
+        content_hash=body_content_hash(content.encode("utf-8")),
         includes_assets=includes_assets,
         model=model,
         created_at=created_at,
     )
-    # Body first, sidecar last: the sidecar is the commit record.
+    # Drop the old sidecar, then body, then the new sidecar (the commit record): between
+    # the renames the body is untracked, never described by a previous write's sidecar.
+    paths.metadata.unlink(missing_ok=True)
     _atomic_write(paths.body, content)
     _atomic_write(paths.metadata, artifact.model_dump_json(indent=2) + "\n")
     return artifact
@@ -189,8 +206,18 @@ def translation_state(
     lang = validate_lang(lang)
     paths = translation_paths(workspace, lang, doc_id, section_id)
     artifact = _read_metadata(paths, lang, doc_id, section_id)
+    try:
+        body: bytes | None = paths.body.read_bytes()
+    except OSError:
+        body = None
+    if body is None:
+        artifact = None
+    elif artifact is not None and artifact.content_hash != body_content_hash(body):
+        # The body was replaced after registration (path-convention writer, manual edit):
+        # the sidecar's provenance no longer describes it.
+        artifact = None
     status: TranslationStatus
-    if not paths.body.is_file():
+    if body is None:
         status = "missing"
     elif current_section_hash is None:
         status = "orphaned"
@@ -206,7 +233,7 @@ def translation_state(
         section_id=section_id,
         status=status,
         paths=paths,
-        artifact=artifact if paths.body.is_file() else None,
+        artifact=artifact,
         current_section_hash=current_section_hash,
     )
 

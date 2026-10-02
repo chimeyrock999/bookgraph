@@ -107,10 +107,11 @@ A self-serve agent drives an entire session with these tools alone:
      the section (each `{title, gloss}`, `slug` optional) and a prose summary. This is
      optional per section but is how the concept graph gets smarter over time.
    - Translating for delivery? `get_section_translation(doc_id, section_id, lang)`
-     first: reuse `content` when `status` is `fresh`; otherwise translate the section
+     first: reuse `content` only when `status` is `fresh` **and** (`includes_assets`
+     or not `section_has_assets`) — `fresh` alone does not mean figures/tables were
+     carried over; otherwise translate the section
      and cache it with `write_section_translation(..., content, includes_assets=...,
-     source_section_hash=<current_section_hash>)`. Compare `includes_assets` with
-     `section_has_assets` to spot prose-only translations of figure-bearing sections.
+     source_section_hash=<current_section_hash>)`.
      `list_section_artifacts(doc_id, lang)` lists every cached translation with its
      status, so a job can redo the `stale` ones after a re-segment.
    - `mark_read(plan_id)` — mark the section read (defaults to the next unread) and

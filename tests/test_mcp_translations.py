@@ -203,4 +203,4 @@ def test_list_section_artifacts_orphans_unsegmented_documents(tmp_path: Path) ->
 
 def test_list_section_artifacts_rejects_unknown_type(tmp_path: Path) -> None:
     with pytest.raises(ReadingServiceError, match="unknown artifact type"):
-        service.list_section_artifacts(WorkspacePaths(tmp_path), type="summary")
+        service.list_section_artifacts(WorkspacePaths(tmp_path), artifact_type="summary")

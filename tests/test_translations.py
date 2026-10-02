@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import os
+import stat
 from pathlib import Path
 
 import pytest
 
+from bookgraph import translations
 from bookgraph.models import Section, SectionArtifact
 from bookgraph.translations import (
+    body_content_hash,
     iter_translation_keys,
     section_content_hash,
     translation_paths,
@@ -153,3 +157,67 @@ def test_iter_keys_lists_bodies_with_filters(tmp_path: Path) -> None:
         ("vi", "deep-work", "deep-work.alpha"),
     ]
     assert list(iter_translation_keys(workspace, doc_id="other")) == []
+
+
+def test_sidecar_records_the_body_hash(tmp_path: Path) -> None:
+    workspace = WorkspacePaths(tmp_path)
+
+    artifact = write_translation(workspace, _section(), "vi", "Xin chào.")
+
+    assert artifact.content_hash == body_content_hash("Xin chào.".encode())
+
+
+def test_body_overwritten_after_registration_is_untracked(tmp_path: Path) -> None:
+    # A path-convention writer replaces the body behind the registry's back: the old
+    # sidecar (model, includes_assets) must no longer vouch for it.
+    workspace = WorkspacePaths(tmp_path)
+    section = _section()
+    write_translation(workspace, section, "vi", "Xin chào.", includes_assets=True)
+    paths = translation_paths(workspace, "vi", "deep-work", section.id)
+    paths.body.write_text("Bản dịch khác, chỉ có văn xuôi.")
+
+    current = section_content_hash(section)
+    state = translation_state(workspace, "vi", "deep-work", section.id, current)
+
+    assert state.status == "untracked"
+    assert state.artifact is None
+
+
+def test_rewrite_drops_the_old_sidecar_before_replacing_the_body(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Simulate a crash after the new body lands but before its sidecar is written: the
+    # previous write's sidecar must not describe the new body.
+    workspace = WorkspacePaths(tmp_path)
+    section = _section()
+    write_translation(workspace, section, "vi", "Bản đầu.", includes_assets=True)
+    paths = translation_paths(workspace, "vi", "deep-work", section.id)
+    real_write = translations._atomic_write
+
+    def crash_on_sidecar(path: Path, text: str) -> None:
+        if path == paths.metadata:
+            raise RuntimeError("crash")
+        real_write(path, text)
+
+    monkeypatch.setattr(translations, "_atomic_write", crash_on_sidecar)
+    with pytest.raises(RuntimeError):
+        write_translation(workspace, section, "vi", "Bản hai.", includes_assets=False)
+
+    assert paths.body.read_text() == "Bản hai."
+    assert not paths.metadata.exists()
+    current = section_content_hash(section)
+    state = translation_state(workspace, "vi", "deep-work", section.id, current)
+    assert state.status == "untracked"
+
+
+def test_cache_files_follow_the_umask(tmp_path: Path) -> None:
+    workspace = WorkspacePaths(tmp_path)
+    previous = os.umask(0o022)
+    try:
+        write_translation(workspace, _section(), "vi", "Xin chào.")
+    finally:
+        os.umask(previous)
+    paths = translation_paths(workspace, "vi", "deep-work", "deep-work.alpha")
+
+    assert stat.S_IMODE(paths.body.stat().st_mode) == 0o644
+    assert stat.S_IMODE(paths.metadata.stat().st_mode) == 0o644

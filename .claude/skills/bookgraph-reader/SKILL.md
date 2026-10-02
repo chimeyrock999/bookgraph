@@ -76,9 +76,10 @@ Operational details live in `docs/cli/parse-book-large-pdfs.md`.
 When the user wants sections translated (e.g. read in Vietnamese, or delivered to a
 chat), reuse the cache instead of retranslating:
 
-1. `get_section_translation(doc_id, section_id, lang)` — if `status` is `fresh`,
-   use its `content` as-is. If `includes_assets` is false but `section_has_assets`
-   is true, the cached text left out figures/tables; mention that or redo it.
+1. `get_section_translation(doc_id, section_id, lang)` — reuse its `content` as-is
+   only when `status` is `fresh` **and** (`includes_assets` or not
+   `section_has_assets`). A fresh translation with `includes_assets` false on a
+   section that has assets left out figures/tables; mention that or redo it.
 2. Otherwise (`missing`, `stale`, or `untracked` you don't trust) translate the
    section's real text, then `write_section_translation(doc_id, section_id, lang,
    content, includes_assets=..., source_section_hash=<current_section_hash>)` so

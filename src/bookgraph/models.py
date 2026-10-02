@@ -117,6 +117,8 @@ class SectionArtifact(BaseModel):
     relative to the workspace root. ``source_section_hash`` is the
     :func:`bookgraph.translations.section_content_hash` of the section the artifact was
     generated from: when the section's current hash differs, the artifact is stale.
+    ``content_hash`` fingerprints the body itself, so a body overwritten after
+    registration is no longer vouched for by this record.
     ``includes_assets`` records whether the section's figures/tables were carried into
     the artifact (a translation of the prose alone is incomplete for an asset section).
     """
@@ -127,6 +129,7 @@ class SectionArtifact(BaseModel):
     section_id: str
     path: str
     source_section_hash: str
+    content_hash: str
     includes_assets: bool = False
     model: str | None = None
     created_at: str | None = None

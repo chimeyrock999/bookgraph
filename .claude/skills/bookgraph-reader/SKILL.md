@@ -143,7 +143,11 @@ Rules:
   translation_lang=..., ...)`, not plain `mark_read`, and **always pass
   `translation_lang`** in a translation job: only then does it verify the cached
   translation exists and is fresh before marking the batch read. Without it the
-  batch completes with nothing saved.
+  batch completes with nothing saved. A **translation-only** job (no annotating, no
+  index build) also passes `require_annotation=False` and `index="ignore"` (or
+  `"deferred"`), and lists the block ids of the figures it opened in
+  `inspected_assets` — the defaults require an annotation and a fresh index, which
+  such a job never produces.
 
 ## Behavior
 

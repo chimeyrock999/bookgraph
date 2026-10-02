@@ -238,5 +238,8 @@ def test_server_instructions_tell_agents_where_diagnostics_go(tmp_path: Path) ->
         "get_section_translation",
         "any directory of your own",
         "always pass translation_lang",
+        "require_annotation=False",
+        'index="ignore"',
+        "inspected_assets",
     ):
         assert rule in instructions

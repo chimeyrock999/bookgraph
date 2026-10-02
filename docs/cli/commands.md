@@ -685,7 +685,9 @@ loaded a `bookgraph-reader` skill:
   agent's own directory such as `translation_cache/`) are never read.
 - A job that translates or annotates finishes each batch with
   `complete_reading_batch`, not `mark_read`. A translation job always passes
-  `translation_lang`; without it nothing checks that a translation was saved.
+  `translation_lang`; without it nothing checks that a translation was saved. A
+  translation-only job also passes `require_annotation=False` and `index="ignore"`
+  (or `"deferred"`), since the defaults require an annotation and a fresh index.
 
 A test asserts these rules are present, so they cannot be dropped silently. The tool
 docstrings (`write_section_translation`, `mark_read`) and both skills repeat them.

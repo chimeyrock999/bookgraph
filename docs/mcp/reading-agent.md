@@ -135,16 +135,21 @@ A self-serve agent drives an entire session with these tools alone:
        progress lines → your final chat reply;
      - export coverage/freshness/missing assets → the export's `.report.json`.
 
-     Write translations only through `write_section_translation`, never by creating
-     files under `translations/`, and link each figure/table by its `AssetRef.link`
-     (relative, e.g. `images/fig1.png`) — `AssetRef.path` is the absolute file to
-     open, not to write. The server sends these rules as its MCP `instructions` at
-     connect time, and the `bookgraph-reader` skill
+     Write translations only through `write_section_translation`, the only
+     translation store. Never write translation files yourself, not under
+     `translations/` and not in any directory of your own (such as a
+     `translation_cache/`): nothing reads them, so the section stays untranslated in
+     the export and in batch completion. Link each figure/table by its
+     `AssetRef.link` (relative, e.g. `images/fig1.png`) — `AssetRef.path` is the
+     absolute file to open, not to write. In a translation job, always pass
+     `translation_lang` to `complete_reading_batch`: without it, nothing checks that
+     a translation was saved. The server sends these rules as its MCP `instructions`
+     at connect time, and the `bookgraph-reader` skill
      (`.claude/skills/bookgraph-reader/SKILL.md`) spells out the workflow.
    - `mark_read(plan_id)` — mark the section read (defaults to the next unread) and
      persist progress. It checks nothing: when the batch involved translation or
      annotation, advance with `complete_reading_batch` instead (see below), which runs
-     the readiness and hygiene checks first.
+     the readiness checks first.
 4. `list_plans()` — resume or report progress across sessions (`completed`/`total`/`done`).
    For "how many sections are left in this chapter?", call
    `get_plan_progress(plan_id)` — it answers from the plan + hierarchy without
@@ -161,7 +166,7 @@ and the report lists every reason:
 
 ```text
 get_next_section(plan_id)                       # the batch
-  … translate → translations/vi/<doc_id>/<section_id>.md
+  … write_section_translation(doc_id, section_id, "vi", content, ...)
   … open each asset path, annotate_section(...)
   … bookgraph index build <ws> <doc_id>         # or index="deferred", see below
 complete_reading_batch(plan_id,
@@ -177,7 +182,9 @@ By default it requires, per section, a valid annotation, an index that reflects 
 Relax what does not apply: `require_annotation=False`, `require_assets=False`,
 `index="deferred"` (report a stale index as `index_rebuild_needed` without blocking —
 for agents that cannot run the CLI and rely on the nightly rebuild) or
-`index="ignore"`. Add `translation_lang` and `artifacts` (path templates with
+`index="ignore"`. A translation-only job (no annotating, no index build) passes
+`translation_lang="vi", require_annotation=False, index="ignore"` (or `"deferred"`)
+plus the `inspected_assets` it opened. Add `translation_lang` and `artifacts` (path templates with
 `{doc_id}`/`{section_id}`/`{plan_id}`) for outputs your job produces. If you read
 boundary-clipped batches (`get_next_section(plan_id, stop_at_boundary=True)`), pass the
 same `stop_at_boundary` / `chapter_level` here so the default batch is the one you were

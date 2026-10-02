@@ -159,7 +159,10 @@ Rules:
 - After translating, advance with `complete_reading_batch(plan_id,
   translation_lang=...)`, and always pass `translation_lang` in a translation job:
   only then does it verify the translation exists and is fresh. Without it the batch
-  completes with nothing saved.
+  completes with nothing saved. A translation-only job (no annotating, no index
+  build) also passes `require_annotation=False` and `index="ignore"` (or
+  `"deferred"`), and lists the figures it opened in `inspected_assets`: the defaults
+  require an annotation and a fresh index, which such a job never produces.
 
 ## Client-specific packaging
 

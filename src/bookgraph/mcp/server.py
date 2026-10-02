@@ -61,8 +61,11 @@ nothing reads them, so the section stays untranslated in the export and in batch
 completion.
 In a job that translates or annotates, do not call mark_read. Finish each batch with
 complete_reading_batch, and in a translation job always pass translation_lang: without
-it the batch completes without checking that anything was saved. If committed is
-false, fix every blocking issue and call it again.
+it the batch completes without checking that anything was saved. A translation-only
+job (no annotating, no index build) also passes require_annotation=False and
+index="ignore" (or "deferred"), and lists the block ids of the figures it opened in
+inspected_assets; the defaults require an annotation and a fresh index. If committed
+is false, fix every blocking issue and call it again.
 """
 
 

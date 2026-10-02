@@ -584,7 +584,7 @@ the `.json` sidecar beside it is the registry record, mirroring
   the translation (declared by the writer, not inferred).
 - `notes` (optional): the writer's free-text side channel — QA/checker results,
   terminology decisions, job remarks. Stored only here, never in the body; returned by
-  `get_section_translation` / `list_section_artifacts`; not hygiene-checked.
+  `get_section_translation` / `list_section_artifacts`.
 
 Freshness is **derived, never stored**: each read recomputes the section's current
 hash and compares it with the sidecar.

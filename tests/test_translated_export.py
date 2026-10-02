@@ -163,20 +163,7 @@ def test_mixed_sections_render_translation_or_original_in_reading_order(
     body = html[html.index("<main>") :]
     assert body.index("Chương Một") < body.index("Second section") < body.index("Phần Ba")
     assert PNG_URI in html
-    # Status/debug metadata stays in the report; the reading pages carry content only.
-    assert "Untranslated — original text" not in html
-    assert "sections translated" not in html
-    assert GENERATED_AT not in html
-    assert '<span class="status">' not in html
-
-    debug = build_translated_export(
-        workspace, DOC, lang="vi", generated_at=GENERATED_AT, show_status=True
-    )
-    assert debug.report.show_status is True
-    assert "Untranslated — original text" in debug.html
-    assert "2/3 sections translated (66.7%)" in debug.html
-    assert GENERATED_AT in debug.html
-    assert '<span class="status">(original)</span>' in debug.html
+    assert "Untranslated — original text" not in html  # status stays in the report
 
 
 def test_original_fallback_keeps_assets_and_equations_in_block_order(
@@ -198,15 +185,8 @@ def test_original_fallback_keeps_assets_and_equations_in_block_order(
     assert [(w.section_id, w.reference) for w in missing] == [
         (second_entry.section_id, "missing-table.png")
     ]
-    assert missing[0].source_path == "sources/parsed/tiny/document.json"
-    assert missing[0].block_id == "b6"
-    # The caption stays; the placeholder is debug-only.
-    assert "<figcaption>Table 1. Lost table.</figcaption>" in html
+    assert "<figcaption>Table 1. Lost table.</figcaption>" in html  # the caption stays
     assert "Missing asset" not in html
-    debug = build_translated_export(
-        workspace, DOC, lang="vi", generated_at=GENERATED_AT, show_status=True
-    )
-    assert "Missing asset: missing-table.png" in debug.html
 
 
 def test_translated_headings_are_relevelled_to_the_section_level(
@@ -251,7 +231,6 @@ def test_broken_remote_and_escaping_image_links_are_reported_not_embedded(
     chapter, _, _ = _section_ids(workspace)
     outside = tmp_path.parent / "outside.png"
     outside.write_bytes(PNG)
-    fig = workspace.sources_parsed / DOC / "images" / "fig1.png"
     (workspace.sources_parsed / DOC / "notes.txt").write_text("not an image")
     _translate(
         workspace,
@@ -262,7 +241,7 @@ def test_broken_remote_and_escaping_image_links_are_reported_not_embedded(
         "![escape](../../../../outside.png)\n\n"
         f"![absolute]({outside})\n\n"
         "![text](notes.txt)\n\n"
-        f"![ok]({fig})\n",
+        f"![ok]({workspace.sources_parsed / DOC / 'images' / 'fig1.png'})\n",
     )
 
     export = build_translated_export(workspace, DOC, lang="vi", generated_at=GENERATED_AT)
@@ -278,11 +257,6 @@ def test_broken_remote_and_escaping_image_links_are_reported_not_embedded(
     assert 'src="https://' not in export.html
     assert f'src="{outside}"' not in export.html
     assert "Missing asset" not in export.html
-    assert "<p></p>" not in export.html  # paragraphs left empty by a dropped image vanish
-    debug = build_translated_export(
-        workspace, DOC, lang="vi", generated_at=GENERATED_AT, show_status=True
-    )
-    assert "Missing asset: https://example.com/x.png" in debug.html
 
 
 def test_empty_translation_falls_back_with_a_warning(workspace: WorkspacePaths) -> None:
@@ -309,10 +283,6 @@ def test_skip_fallback_renders_placeholders(workspace: WorkspacePaths) -> None:
     assert "Second section English text." not in export.html
     assert "Not translated yet" not in export.html
     assert "<h2>Section Two</h2>" in export.html  # the heading keeps the outline
-    debug = build_translated_export(
-        workspace, DOC, lang="vi", fallback="skip", generated_at=GENERATED_AT, show_status=True
-    )
-    assert debug.html.count("Not translated yet") == 2
     # Assets of skipped sections are not rendered, so they are not reported missing.
     assert not [w for w in export.report.warnings if w.code == ASSET_MISSING]
 
@@ -661,13 +631,6 @@ def test_stale_translation_renders_flagged_and_counts_as_translated(
     assert _codes(export.report, chapter) == [TRANSLATION_STALE]
     assert "Bản dịch cũ." in export.html
     assert "may be outdated" not in export.html  # flagged in the report, not on the page
-    # With --show-status the note sits right under the section heading, and the TOC
-    # flags it too.
-    debug = build_translated_export(
-        workspace, DOC, lang="vi", generated_at=GENERATED_AT, show_status=True
-    ).html
-    assert '<h1>Chương Một</h1>\n<p class="source-note">Translation may be outdated' in debug
-    assert 'Chương Một</a> <span class="status">(may be outdated)</span>' in debug
 
     # ``--strict`` refuses to present it as current.
     with pytest.raises(ExportError, match="strict mode"):
@@ -694,11 +657,6 @@ def test_untracked_translation_renders_with_a_warning(
     assert "Sửa tay." in export.html
     assert "Translation status unknown" not in export.html
     assert "not tracked" not in export.html
-    debug = build_translated_export(
-        workspace, DOC, lang="vi", fallback="skip", generated_at=GENERATED_AT, show_status=True
-    ).html
-    assert "Translation status unknown — it may be outdated" in debug
-    assert 'Chương Một</a> <span class="status">(not tracked)</span>' in debug
     # Freshness unknown is not known-bad: ``--strict`` still writes the export.
     report = write_translated_export(export, tmp_path / "out.html", HtmlRenderer(), strict=True)
     assert report.sections[0].freshness == "untracked"

@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-import base64
 import json
 from pathlib import Path
 
 import pytest
 
-from bookgraph.documents import write_document
 from bookgraph.exports.models import (
     ASSET_MISSING,
     ASSET_REMOTE,
@@ -16,8 +14,6 @@ from bookgraph.exports.models import (
     TRANSLATION_STALE,
     TRANSLATION_UNREADABLE,
     TRANSLATION_UNTRACKED,
-    ExportReport,
-    FallbackPolicy,
 )
 from bookgraph.exports.renderers import (
     ExportRenderer,
@@ -35,101 +31,21 @@ from bookgraph.exports.translated import (
     split_frontmatter,
     write_translated_export,
 )
-from bookgraph.models import CanonicalBlock, Document, Section
+from bookgraph.models import Section
 from bookgraph.plugins import PluginRegistry
-from bookgraph.sections import read_sections, write_sections
-from bookgraph.segmenters.heading import HeadingSegmenter
-from bookgraph.translations import write_translation
+from bookgraph.sections import write_sections
 from bookgraph.workspace import WorkspacePaths
-
-# 1x1 transparent PNG.
-PNG = base64.b64decode(
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
+from translated_export_support import (
+    DOC,
+    GENERATED_AT,
+    PNG,
+    PNG_URI,
+    _change_section_text,
+    _codes,
+    _register,
+    _section_ids,
+    _translate,
 )
-PNG_URI = "data:image/png;base64," + base64.b64encode(PNG).decode("ascii")
-GENERATED_AT = "2026-10-02T00:00:00Z"
-DOC = "tiny"
-
-
-def _blocks() -> list[CanonicalBlock]:
-    return [
-        CanonicalBlock(id="b0", type="title", text="Chapter One", level=1, page_idx=0),
-        CanonicalBlock(id="b1", type="text", text="Intro prose in English.", page_idx=0),
-        CanonicalBlock(
-            id="b2",
-            type="image",
-            text="Figure 1. A diagram.",
-            asset_path="fig1.png",
-            page_idx=0,
-        ),
-        CanonicalBlock(id="b3", type="text", text="Prose after the figure.", page_idx=0),
-        CanonicalBlock(id="b4", type="title", text="Section Two", level=2, page_idx=1),
-        CanonicalBlock(id="b5", type="text", text="Second section English text.", page_idx=1),
-        CanonicalBlock(
-            id="b6",
-            type="table",
-            text="Table 1. Lost table.",
-            asset_path="missing-table.png",
-            page_idx=1,
-        ),
-        CanonicalBlock(id="b7", type="title", text="Section Three", level=2, page_idx=2),
-        CanonicalBlock(id="b8", type="equation", text="E = mc^2", page_idx=2),
-        CanonicalBlock(id="b9", type="text", text="Third section English text.", page_idx=2),
-    ]
-
-
-@pytest.fixture
-def workspace(tmp_path: Path) -> WorkspacePaths:
-    paths = WorkspacePaths(tmp_path)
-    document = Document(doc_id=DOC, title="Tiny Book", blocks=_blocks())
-    parsed_dir = paths.sources_parsed / DOC
-    write_document(document, parsed_dir)
-    (parsed_dir / "images").mkdir()
-    (parsed_dir / "images" / "fig1.png").write_bytes(PNG)
-    sections = HeadingSegmenter(target_level=2).segment(document)
-    write_sections(sections, paths.sources_sections / DOC)
-    return paths
-
-
-def _section_ids(paths: WorkspacePaths) -> list[str]:
-    manifest = paths.sources_sections / DOC / "sections.jsonl"
-    return [json.loads(line)["id"] for line in manifest.read_text().splitlines()]
-
-
-def _translate(paths: WorkspacePaths, section_id: str, body: str) -> Path:
-    """Drop a body at the registry path with no sidecar: an ``untracked`` translation."""
-
-    path = paths.translations_root / "vi" / DOC / f"{section_id}.md"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(body, encoding="utf-8")
-    return path
-
-
-def _sections(paths: WorkspacePaths) -> list[Section]:
-    return read_sections(paths.sources_sections / DOC / "sections.jsonl")
-
-
-def _register(
-    paths: WorkspacePaths, section_id: str, body: str, *, includes_assets: bool = True
-) -> None:
-    """Write a translation through the registry: ``fresh`` against the current section."""
-
-    section = next(s for s in _sections(paths) if s.id == section_id)
-    write_translation(paths, section, "vi", body, includes_assets=includes_assets)
-
-
-def _change_section_text(paths: WorkspacePaths, section_id: str) -> None:
-    """Simulate a re-segment that changed the section's words, making it stale."""
-
-    sections = [
-        s.model_copy(update={"text": s.text + " Revised."}) if s.id == section_id else s
-        for s in _sections(paths)
-    ]
-    write_sections(sections, paths.sources_sections / DOC)
-
-
-def _codes(report: ExportReport, section_id: str) -> list[str]:
-    return [w.code for w in report.warnings if w.section_id == section_id]
 
 
 def test_mixed_sections_render_translation_or_original_in_reading_order(
@@ -373,15 +289,6 @@ def test_sections_only_workspace_renders_section_text(tmp_path: Path) -> None:
 def test_missing_manifest_is_an_export_error(tmp_path: Path) -> None:
     with pytest.raises(ExportError, match="Sections manifest not found"):
         build_translated_export(WorkspacePaths(tmp_path), DOC, lang="vi")
-
-
-def test_duplicate_section_ids_are_an_export_error(workspace: WorkspacePaths) -> None:
-    manifest = workspace.sources_sections / DOC / "sections.jsonl"
-    first = manifest.read_text().splitlines()[0]
-    manifest.write_text(manifest.read_text() + first + "\n")
-
-    with pytest.raises(ExportError, match="duplicate section ids: tiny.chapter-one"):
-        build_translated_export(workspace, DOC, lang="vi")
 
 
 def test_frontmatter_split() -> None:
@@ -759,113 +666,3 @@ def test_body_that_exists_but_cannot_be_read_is_unreadable(workspace: WorkspaceP
     with pytest.raises(UntranslatedSectionsError) as excinfo:
         build_translated_export(workspace, DOC, lang="vi", fallback="fail")
     assert excinfo.value.report.untranslated == [chapter]
-
-
-def _write_outline(paths: WorkspacePaths, bookmarks: list[tuple[str, int, int]]) -> None:
-    manifest = paths.sources_inbox / DOC / "book.json"
-    manifest.parent.mkdir(parents=True, exist_ok=True)
-    manifest.write_text(
-        json.dumps(
-            {
-                "pdf": {
-                    "bookmarks": [
-                        {"title": title, "page_index": page, "level": level}
-                        for title, page, level in bookmarks
-                    ]
-                }
-            }
-        ),
-        encoding="utf-8",
-    )
-
-
-def test_child_sections_render_inside_their_chapter(workspace: WorkspacePaths) -> None:
-    chapter, second, third = _section_ids(workspace)
-    _register(workspace, second, "# Phần Hai\n\nNội dung.\n")
-
-    export = build_translated_export(workspace, DOC, lang="vi", generated_at=GENERATED_AT)
-    html = export.html
-
-    assert [(e.depth, e.parent_id) for e in export.report.sections] == [
-        (1, None),
-        (2, chapter),
-        (2, chapter),
-    ]
-    # One chapter <section> holding both child sections; only the chapter opens a page.
-    main = html[html.index("<main>") :]
-    assert main.count('class="section depth-1 chapter"') == 1
-    assert main.count('class="section depth-2"') == 2
-    chapter_open = main.index(f'id="{chapter}"')
-    chapter_close = main.rindex("</section>")
-    assert chapter_open < main.index(f'id="{second}"') < main.index(f'id="{third}"')
-    assert main.index(f'id="{third}"') < chapter_close
-    assert main.count("</section>\n</section>") == 1  # children close before the chapter
-    # The TOC nests the same way.
-    assert (
-        f'<ol><li><a href="#{chapter}">Chapter One</a><ol><li><a href="#{second}">Phần Hai</a>'
-        in html
-    )
-
-
-def test_pdf_outline_sets_reading_order_and_chapters(workspace: WorkspacePaths) -> None:
-    # The manifest is flat (every MinerU title is level 1) and in the wrong order.
-    chapter, second, third = _section_ids(workspace)
-    sections = {s.id: s for s in _sections(workspace)}
-    flat = [
-        sections[i].model_copy(update={"level": 1})
-        for i in (third, chapter, second)
-    ]
-    write_sections(flat, workspace.sources_sections / DOC)
-    _write_outline(
-        workspace,
-        [("Part One", 0, 1), ("Chapter One", 0, 2), ("Section Two", 1, 3), ("Section Three", 2, 3)],
-    )
-
-    export = build_translated_export(workspace, DOC, lang="vi", generated_at=GENERATED_AT)
-
-    assert [(e.section_id, e.depth, e.parent_id) for e in export.report.sections] == [
-        (chapter, 2, None),
-        (second, 3, chapter),
-        (third, 3, chapter),
-    ]
-    toc = export.html[export.html.index('<nav class="toc">') : export.html.index("</nav>")]
-    assert toc.index("Chapter One") < toc.index("Section Two") < toc.index("Section Three")
-    assert "<h2>Chapter One</h2>" in export.html
-    assert "<h3>Section Two</h3>" in export.html
-
-
-@pytest.mark.parametrize("fallback", ["original", "skip"])
-def test_default_export_has_no_status_text(
-    workspace: WorkspacePaths, fallback: FallbackPolicy
-) -> None:
-    chapter, second, third = _section_ids(workspace)
-    _register(workspace, chapter, "# Chương Một\n\nCũ.\n")
-    _translate(workspace, second, "# Phần Hai\n\nSửa tay.\n")  # untracked
-    _change_section_text(workspace, chapter)  # stale
-
-    export = build_translated_export(
-        workspace, DOC, lang="vi", fallback=fallback, generated_at=GENERATED_AT
-    )
-
-    assert [e.freshness for e in export.report.sections] == ["stale", "untracked", None]
-    assert {TRANSLATION_STALE, TRANSLATION_UNTRACKED} <= {w.code for w in export.report.warnings}
-    # The rendered book (not the stylesheet), with section anchors — ids, not text — removed.
-    body = export.html[export.html.index("<body>") :]
-    body = body.replace(f'id="{DOC}.', 'id="').replace(f'href="#{DOC}.', 'href="#')
-    for leak in (
-        "(original)",
-        "(skipped)",
-        "(not tracked)",
-        "(may be outdated)",
-        "may be outdated",
-        "Translation status unknown",
-        "Untranslated",
-        "Not translated yet",
-        "Missing asset",
-        "coverage",
-        "fallback",
-        "data-source",
-        "source-",
-        DOC,
-    ):
-        assert leak not in body, leak

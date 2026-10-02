@@ -18,9 +18,10 @@ parsers = [
   "pypdf>=4.0",
 ]
 mineru = [
-  "mineru[pipeline]>=3.4.4",
-  "six>=1.17.0",
-  "accelerate>=1.0",
+  "mineru>=4.0.10,<5",
+]
+mineru-torch = [
+  "mineru[torch]>=4.0.10,<5",
 ]
 mcp = [
   "fastmcp>=2.0",

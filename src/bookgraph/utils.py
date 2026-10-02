@@ -4,6 +4,8 @@ import re
 from pathlib import Path
 
 MINERU_MIDDLE_JSON_SUFFIX = "_middle.json"
+# Section slugs become ``<doc_id>.<slug>.md`` filenames; keep them well under NAME_MAX.
+MAX_SECTION_SLUG_CHARS = 80
 ID_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
 
@@ -23,9 +25,14 @@ def slugify(value: str) -> str:
 
 
 def unique_slug(value: str, used_slugs: set[str]) -> str:
-    """Return a deterministic slug that does not collide with already-used slugs."""
+    """Return a deterministic slug that does not collide with already-used slugs.
 
-    base = slugify(value)
+    The slug is capped at ``MAX_SECTION_SLUG_CHARS`` on a ``-`` boundary, because a
+    heading can be a whole misclassified code or TOC line. The collision suffix
+    keeps capped slugs unique.
+    """
+
+    base = _cap_slug(slugify(value), MAX_SECTION_SLUG_CHARS)
     candidate = base
     suffix = 2
     while candidate in used_slugs:
@@ -33,6 +40,15 @@ def unique_slug(value: str, used_slugs: set[str]) -> str:
         suffix += 1
     used_slugs.add(candidate)
     return candidate
+
+
+def _cap_slug(slug: str, limit: int) -> str:
+    if len(slug) <= limit:
+        return slug
+    head = slug[:limit]
+    cut = head.rfind("-")
+    # Cut on a word boundary unless that would throw most of the slug away.
+    return head[:cut] if cut >= limit // 2 else head.rstrip("-")
 
 
 def doc_id_from_path(source: Path) -> str:

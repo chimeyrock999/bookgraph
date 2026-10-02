@@ -1,0 +1,311 @@
+{
+  "metadata": {
+    "file_suffix": "pdf",
+    "producer": {
+      "name": "mineru",
+      "version": "4.0.10"
+    },
+    "document": {
+      "page_count": 3,
+      "page_count_kind": "physical"
+    }
+  },
+  "extensions": {
+    "mineru": {
+      "tier": "flash",
+      "parse_mode": "txt"
+    },
+    "docvortex_layout": {
+      "version": 1,
+      "pages": [
+        {
+          "page_idx": 0,
+          "width_pt": 595.0,
+          "height_pt": 842.0
+        },
+        {
+          "page_idx": 1,
+          "width_pt": 595.0,
+          "height_pt": 842.0
+        },
+        {
+          "page_idx": 2,
+          "width_pt": 595.0,
+          "height_pt": 842.0
+        }
+      ]
+    }
+  },
+  "pages": [
+    {
+      "page_idx": 0,
+      "blocks": [
+        {
+          "type": "header",
+          "index": 0,
+          "bbox": [
+            0.121,
+            0.039,
+            0.268,
+            0.05
+          ],
+          "content": [
+            {
+              "type": "text",
+              "content": "Designing Data Systems"
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "index": 1,
+          "bbox": [
+            0.121,
+            0.107,
+            0.526,
+            0.181
+          ],
+          "content": [
+            {
+              "type": "text",
+              "content": "Designing Data Systems A short book about reliable data systems."
+            }
+          ]
+        },
+        {
+          "type": "page_number",
+          "index": 2,
+          "bbox": [
+            0.504,
+            0.94,
+            0.513,
+            0.952
+          ],
+          "content": [
+            {
+              "type": "text",
+              "content": "1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "page_idx": 1,
+      "blocks": [
+        {
+          "type": "header",
+          "index": 0,
+          "bbox": [
+            0.121,
+            0.039,
+            0.268,
+            0.05
+          ],
+          "content": [
+            {
+              "type": "text",
+              "content": "Designing Data Systems"
+            }
+          ]
+        },
+        {
+          "type": "paragraph_title",
+          "index": 1,
+          "bbox": [
+            0.121,
+            0.111,
+            0.412,
+            0.135
+          ],
+          "content": [
+            {
+              "type": "text",
+              "content": "Chapter 1 Replication"
+            }
+          ],
+          "level": 2
+        },
+        {
+          "type": "paragraph_title",
+          "index": 2,
+          "bbox": [
+            0.121,
+            0.163,
+            0.398,
+            0.182
+          ],
+          "content": [
+            {
+              "type": "text",
+              "content": "1.1 Leaders and Followers"
+            }
+          ],
+          "level": 2
+        },
+        {
+          "type": "text",
+          "index": 3,
+          "bbox": [
+            0.121,
+            0.202,
+            0.648,
+            0.24
+          ],
+          "content": [
+            {
+              "type": "text",
+              "content": "Replication keeps copies of the same data on several machines. A leader accepts writes and followers apply the change log."
+            }
+          ]
+        },
+        {
+          "type": "image",
+          "index": 4,
+          "bbox": [
+            0.121,
+            0.273,
+            0.592,
+            0.439
+          ],
+          "content": [
+            {
+              "type": "image_body",
+              "index": 4,
+              "bbox": [
+                0.121,
+                0.273,
+                0.592,
+                0.439
+              ],
+              "image_path": "images/page_1_image_4.jpg",
+              "content": ""
+            },
+            {
+              "type": "image_caption",
+              "index": 5,
+              "bbox": [
+                0.121,
+                0.454,
+                0.38,
+                0.465
+              ],
+              "content": [
+                {
+                  "type": "text",
+                  "content": "Figure 1-1. A leader and two followers."
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "page_number",
+          "index": 6,
+          "bbox": [
+            0.504,
+            0.94,
+            0.513,
+            0.952
+          ],
+          "content": [
+            {
+              "type": "text",
+              "content": "2"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "page_idx": 2,
+      "blocks": [
+        {
+          "type": "header",
+          "index": 0,
+          "bbox": [
+            0.121,
+            0.039,
+            0.268,
+            0.05
+          ],
+          "content": [
+            {
+              "type": "text",
+              "content": "Designing Data Systems"
+            }
+          ]
+        },
+        {
+          "type": "paragraph_title",
+          "index": 1,
+          "bbox": [
+            0.121,
+            0.111,
+            0.368,
+            0.135
+          ],
+          "content": [
+            {
+              "type": "text",
+              "content": "Chapter 2 Storage"
+            }
+          ],
+          "level": 2
+        },
+        {
+          "type": "paragraph_title",
+          "index": 2,
+          "bbox": [
+            0.121,
+            0.163,
+            0.407,
+            0.182
+          ],
+          "content": [
+            {
+              "type": "text",
+              "content": "2.1 Log-Structured Engines"
+            }
+          ],
+          "level": 2
+        },
+        {
+          "type": "text",
+          "index": 3,
+          "bbox": [
+            0.121,
+            0.202,
+            0.627,
+            0.24
+          ],
+          "content": [
+            {
+              "type": "text",
+              "content": "Storage engines append records to a log and compact it later. Indexes speed up reads at the cost of slower writes."
+            }
+          ]
+        },
+        {
+          "type": "page_number",
+          "index": 4,
+          "bbox": [
+            0.504,
+            0.94,
+            0.513,
+            0.952
+          ],
+          "content": [
+            {
+              "type": "text",
+              "content": "3"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "is_full_document": true,
+  "schema": "docvortex.middle",
+  "schema_version": "2.0"
+}

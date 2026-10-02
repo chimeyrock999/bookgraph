@@ -30,10 +30,10 @@ def test_parse_book_dry_run_writes_placeholder_contract(tmp_path: Path) -> None:
             "deep-work",
             "--runner",
             "mineru",
-            "--method",
+            "--tier",
+            "advanced",
+            "--ocr-mode",
             "ocr",
-            "--backend",
-            "pipeline",
             "--timeout-seconds",
             "7200",
             "--dry-run",
@@ -46,13 +46,10 @@ def test_parse_book_dry_run_writes_placeholder_contract(tmp_path: Path) -> None:
     assert payload["book_id"] == "deep-work"
     assert payload["runner"] == {
         "name": "mineru",
-        "command": "mineru",
+        "command": "mineru-kit",
         "profile": "balanced",
-        "method": "ocr",
-        "backend": "pipeline",
-        "effort": None,
-        "formula": None,
-        "table": None,
+        "tier": "advanced",
+        "ocr_mode": "ocr",
         "image_analysis": None,
         "url": None,
         "start_page": None,
@@ -70,14 +67,11 @@ def test_parse_book_dry_run_writes_placeholder_contract(tmp_path: Path) -> None:
             tmp_path / "sources" / "parsed" / "deep-work" / "deep-work_middle.json"
         ),
         "markdown": str(tmp_path / "sources" / "parsed" / "deep-work" / "deep-work.md"),
-        "layout_pdf": str(
-            tmp_path / "sources" / "parsed" / "deep-work" / "deep-work_layout.pdf"
+        "structured_content": str(
+            tmp_path / "sources" / "parsed" / "deep-work" / "deep-work_structured_content.json"
         ),
-        "span_pdf": str(
-            tmp_path / "sources" / "parsed" / "deep-work" / "deep-work_span.pdf"
-        ),
-        "content_list": str(
-            tmp_path / "sources" / "parsed" / "deep-work" / "deep-work_content_list.json"
+        "model_output": str(
+            tmp_path / "sources" / "parsed" / "deep-work" / "deep-work_model_output.json"
         ),
         "images_dir": str(tmp_path / "sources" / "parsed" / "deep-work" / "images"),
     }

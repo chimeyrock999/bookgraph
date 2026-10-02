@@ -77,18 +77,18 @@ def export_translated_pdf(
             "stale, or a translation left out the section's figures/tables.",
         ),
     ] = False,
-    check: Annotated[
-        bool,
-        typer.Option("--check", help="Preflight only: print coverage and warnings, write nothing."),
-    ] = False,
     show_status: Annotated[
         bool,
         typer.Option(
             "--show-status",
-            help="Also print export/translation status into the book (coverage page, "
-            "'original text' and 'may be outdated' notes, TOC markers, asset paths). "
-            "By default the book is content-only and status stays in the .report.json.",
+            help="Debug: also print translation status, fallback notes, coverage and "
+            "missing-asset placeholders on the reading pages (by default they are only "
+            "in the report).",
         ),
+    ] = False,
+    check: Annotated[
+        bool,
+        typer.Option("--check", help="Preflight only: print coverage and warnings, write nothing."),
     ] = False,
 ) -> None:
     """Export a partially translated book as one reading PDF with original-text fallback."""

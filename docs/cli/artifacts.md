@@ -602,9 +602,14 @@ way the registry does it (`VI` → `vi`). Per section:
 | Registry status | Export |
 | --- | --- |
 | `fresh` | Rendered. `freshness: "fresh"`. |
-| `stale` | Rendered; `freshness: "stale"` + `translation_stale`. With `--show-status`, also a *Translation may be outdated* note and a `(may be outdated)` TOC marker. |
-| `untracked` | Rendered; `freshness: "untracked"` + `translation_untracked`. With `--show-status`, also a *Translation status unknown — it may be outdated* note and a `(not tracked)` TOC marker. |
+| `stale` | Rendered; `freshness: "stale"` + `translation_stale`. |
+| `untracked` | Rendered; `freshness: "untracked"` + `translation_untracked`. |
 | `missing` | Untranslated: follows `--fallback`. |
+
+Freshness lives in the report, not on the reading pages. With `--show-status` (a
+debug view) the page also shows it: a *Translation may be outdated* /
+*Translation status unknown — it may be outdated* note under the heading and a
+`(may be outdated)` / `(not tracked)` TOC marker.
 
 Stale and untracked translations count as translated, so `--fallback fail` accepts
 them. `--strict` refuses `translation_stale` (known outdated) but not
@@ -635,10 +640,8 @@ then reads as `untracked`), or re-register it with `write_section_translation`.
 ## `exports/<doc_id>.<lang>-progress.pdf` + `.report.json`
 
 Owner: `bookgraph export translated-pdf`. This is derived, reader-facing output and
-can be regenerated at any time. The export itself carries only the book's content;
-export and translation status lives in the report
-(`bookgraph.exports.models.ExportReport`) written beside it, and is rendered into the
-book only with `--show-status`:
+can be regenerated at any time. The report (`bookgraph.exports.models.ExportReport`)
+is written beside the export:
 
 ```json
 {
@@ -672,8 +675,10 @@ book only with `--show-status`:
   renders at, and `parent_id` is the section it renders inside (`null` at the top
   level).
 - `source` is `translated`, `original`, or `skipped`.
-- `show_status` records whether the status above was also printed into the book
-  (`--show-status`).
+- The report is where status/debug metadata lives: the reading pages carry the title,
+  the table of contents, and book content only. `show_status` records whether the
+  export was made with `--show-status`, which also prints coverage, freshness and
+  fallback notes, TOC status markers, and *Missing asset* placeholders on the pages.
 - `freshness` is the translation's registry status (`fresh`, `stale`, or
   `untracked`) for a `translated` section, `null` otherwise.
 - `generated_at` follows `SOURCE_DATE_EPOCH` when it is set. With unchanged inputs and

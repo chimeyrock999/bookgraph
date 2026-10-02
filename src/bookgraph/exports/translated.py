@@ -650,10 +650,7 @@ class _Assembler:
         return uri
 
     def _missing(self, reference: str) -> str:
-        """Where an asset could not be embedded: a visible placeholder only with
-        ``show_status``. By default the image is left out (an original figure keeps its
-        caption) and the reason is in ``report.warnings``.
-        """
+        """Where an asset could not be embedded: a visible placeholder only in debug mode."""
 
         if not self.show_status:
             return ""

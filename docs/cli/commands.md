@@ -1043,12 +1043,6 @@ translation artifact for `--lang` renders that artifact; any other section follo
 `--fallback`. This produces a clean reading edition. It does not reproduce the
 publisher's page layout.
 
-The book is **reader-facing and content-only** by default: a title page, a table of
-contents, and the sections. Export and translation state (coverage, which sections
-are original text or skipped, stale or untracked translations, asset paths) is not
-rendered; it is in the `.report.json` and the printed warnings. `--show-status`
-renders it into the book as well.
-
 **Structure.** Sections are arranged into the book's structure:
 
 - When `sources/inbox/<doc_id>/book.json` carries a PDF outline (`pdf.bookmarks`), it
@@ -1088,10 +1082,8 @@ bookgraph export translated-pdf /path/to/workspace ddia --check           # cove
   (lowercased, so `VI` and `pt-BR` work).
 - `--fallback original|skip|fail` (default `original`). This controls what happens to
   a section that has no translation:
-  - `original` renders the original section (with `--show-status`, labelled
-    *Untranslated — original text*);
-  - `skip` renders only the section title (with `--show-status`, followed by a
-    *Not translated yet* placeholder), so the chapter's structure stays whole;
+  - `original` renders the original section;
+  - `skip` renders the title only;
   - `fail` exits `1` and lists every untranslated section. Nothing is written. A
     `stale` or `untracked` translation counts as translated (use `--strict` to refuse
     stale ones).
@@ -1105,14 +1097,14 @@ bookgraph export translated-pdf /path/to/workspace ddia --check           # cove
   unsupported, a translation is `stale` (`translation_stale`), or a registered
   translation left out its section's figures/tables (`translation_missing_assets`).
   An `untracked` translation only warns.
+- `--show-status`: debug view. Also print status metadata on the reading pages:
+  coverage/doc_id/fallback on the title page, TOC status markers (`(original)`,
+  `(may be outdated)`, `(not tracked)`, `(skipped)`), the *Untranslated — original
+  text* / *Not translated yet* / freshness notes, and *Missing asset* placeholders.
+  Without it that metadata is only in the report and the CLI output, so a reading
+  edition carries book content only.
 - `--check`: preflight only. Prints coverage and warnings and writes nothing. With
   `--strict`, it exits `1` whenever the real export would be refused.
-- `--show-status`: also render the export status into the book: a title page with
-  `doc_id`, language, timestamp, coverage, and fallback; the per-section notes
-  (*Untranslated — original text*, *Translation may be outdated*, *Translation status
-  unknown — it may be outdated*, *Not translated yet*); TOC markers (`(original)`,
-  `(skipped)`, `(may be outdated)`, `(not tracked)`); and a *Missing asset: <reference>*
-  placeholder where an image could not be embedded. Off by default.
 - The `--out` suffix must match the renderer: `.pdf` for `weasyprint`/`playwright`,
   `.html`/`.htm` for `html`. A mismatch, or a suffix that `auto` cannot map to a
   format, exits `2`.
@@ -1129,9 +1121,8 @@ bookgraph export translated-pdf /path/to/workspace ddia --check           # cove
 - Translations, through the translation registry (`bookgraph.translations`) only:
   `translations/<lang>/<doc_id>/<section_id>.md` plus its `.json` sidecar, which
   decides the section's `fresh` / `stale` / `untracked` status (the sidecar is never
-  rendered). Stale and untracked translations render and are reported as warnings
-  (with `--show-status`, also as a visible note); see `artifacts.md`.
-  `translation_cache/` is not read.
+  rendered). Stale and untracked translations render with a warning (and a visible
+  note under `--show-status`); see `artifacts.md`. `translation_cache/` is not read.
 
 ### Asset handling
 
@@ -1144,10 +1135,9 @@ All images are embedded as `data:` URIs, so the output is self-contained.
   workspace.
 - Original asset blocks use the shared `bookgraph.assets.resolve_asset_path` resolver.
 - A link is rejected if it leaves the workspace (including through symlinks), is a
-  remote URL, or is not a png/jpeg/gif/svg/webp file. A rejected link is replaced by a
-  reported. By default the image is left out of the book (an original figure keeps its
-  caption); with `--show-status` a visible *Missing asset: <reference>* placeholder
-  takes its place. It does not crash the export
+  remote URL, or is not a png/jpeg/gif/svg/webp file. A rejected link is left out of
+  the page (a block's caption stays) and reported; `--show-status` shows a *Missing
+  asset* placeholder in its place. It does not crash the export
   unless `--strict` is set.
 - The page carries a CSP that allows only `data:` images and inline styles, and both
   PDF backends refuse any URL that is not `data:`. Rendering never reads the network

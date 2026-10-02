@@ -68,8 +68,8 @@ Operational details live in `docs/cli/parse-book-large-pdfs.md`.
 - `get_chapter_outline(plan_id)` — the current chapter's subtree (two levels by
   default) with per-section `read` flags and `completed`/`remaining`/`total` for
   the chapter. This is the cheap answer to "where am I / what's left in this
-  chapter". If the "chapter" comes back as the book title or a Part, retry with
-  `chapter_level=2`.
+  chapter". A lone book-title root is skipped automatically; if the "chapter"
+  comes back as a Part, retry with `chapter_level=2`.
 - `get_section_tree(doc_id, section_id)` — a section's breadcrumb, siblings and
   children.
 - `get_outline(doc_id, root_id=None, max_depth=None)` — the heading hierarchy, for

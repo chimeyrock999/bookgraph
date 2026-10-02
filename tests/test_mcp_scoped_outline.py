@@ -304,11 +304,32 @@ def _book_root_workspace(tmp_path: Path) -> WorkspacePaths:
     return workspace
 
 
-def test_get_chapter_outline_stays_small_under_a_single_book_root(tmp_path: Path) -> None:
-    # Without chapter_level the "chapter" is the whole book, but the default depth
-    # keeps the response to the root and its chapters.
+def test_get_chapter_outline_skips_a_lone_book_root(tmp_path: Path) -> None:
+    # One ``# Book`` root above every chapter: the scope is the chapter, not the book
+    # (the shared resolve_chapter rule, so this matches get_plan_progress).
     chapter = service.get_chapter_outline(_book_root_workspace(tmp_path), "bk")
 
+    assert chapter.current_section_id == "bk.ch-2"
+    assert chapter.chapter is not None and chapter.chapter.id == "bk.ch-2"
+    assert [node.id for node in chapter.nodes] == ["bk.ch-2", "bk.s-2-1", "bk.s-2-2"]
+    assert (chapter.completed, chapter.remaining, chapter.total) == (0, 3, 3)
+
+
+def test_get_chapter_outline_keeps_the_lone_root_while_it_is_being_read(
+    tmp_path: Path,
+) -> None:
+    workspace = _book_root_workspace(tmp_path)
+    write_reading_plan(
+        ReadingPlan(
+            plan_id="bk", doc_id="bk",
+            section_ids=["bk.book", "bk.ch-1", "bk.s-1-1", "bk.s-1-2"],
+        ),
+        workspace.reading_plans_root / "bk.json",
+    )
+
+    chapter = service.get_chapter_outline(workspace, "bk")
+
+    # The root is the scope, and the default depth keeps it to the root + chapters.
     assert chapter.chapter is not None and chapter.chapter.id == "bk.book"
     assert [node.id for node in chapter.nodes] == ["bk.book", "bk.ch-1", "bk.ch-2"]
     assert chapter.truncated is True

@@ -105,7 +105,7 @@ A self-serve agent drives an entire session with these tools alone:
        orient cheaply: the current chapter's subtree (two levels by default) with
        read flags and in-chapter counts, or a section's breadcrumb, windowed
        siblings and children. Pass `chapter_level=2` when chapters sit under
-       parts or a single book-title heading.
+       parts (a lone book-title root is skipped automatically).
      - `get_outline(doc_id, root_id=None, max_depth=None)` /
        `get_related(doc_id, section_id)` — navigate structure. Scope the outline
        with `root_id` / `max_depth` (e.g. `max_depth=1` for the chapter list); a

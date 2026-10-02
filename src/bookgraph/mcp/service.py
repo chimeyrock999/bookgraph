@@ -24,7 +24,7 @@ from bookgraph.annotations import (
 )
 from bookgraph.assets import asset_reference, resolve_asset_path
 from bookgraph.documents import read_document
-from bookgraph.graph import SectionGraph, SectionNode, build_section_graph
+from bookgraph.graph import SectionGraph, SectionNode, build_section_graph, resolve_chapter
 from bookgraph.index import default_index_backend, tokenize
 from bookgraph.models import (
     ASSET_BLOCK_TYPES,
@@ -227,11 +227,11 @@ class ChapterOutline(BaseModel):
     """The outline of the chapter a reading plan is currently in.
 
     The chapter is the scope ancestor of ``current_section_id`` (the plan's next unread
-    section) — see :func:`_chapter_scope`. ``completed`` / ``remaining`` / ``total``
-    count the plan's sections in the chapter's whole subtree, by membership (unaffected
-    by ``max_depth``); ``plan_completed`` / ``plan_total`` are plan-wide. When the plan
-    is ``done`` there is no current section, so ``chapter`` is ``None``, ``nodes`` is
-    empty, and the chapter counts are zero.
+    section) — see :func:`bookgraph.graph.resolve_chapter`. ``completed`` /
+    ``remaining`` / ``total`` count the plan's sections in the chapter's whole subtree,
+    by membership (unaffected by ``max_depth``); ``plan_completed`` / ``plan_total`` are
+    plan-wide. When the plan is ``done`` there is no current section, so ``chapter`` is
+    ``None``, ``nodes`` is empty, and the chapter counts are zero.
     """
 
     plan_id: str
@@ -875,25 +875,6 @@ def get_section_tree(
     )
 
 
-def _chapter_scope(
-    by_id: dict[str, SectionNode], node: SectionNode, chapter_level: int | None
-) -> SectionNode:
-    """The chapter holding ``node``: its scope ancestor-or-self.
-
-    The outermost ancestor-or-self by default; with ``chapter_level``, the nearest
-    ancestor-or-self whose heading ``level`` is at most ``chapter_level`` (e.g. ``2``
-    for chapters nested under level-1 parts), falling back to the outermost ancestor.
-    Same rule as ``chapter_progress`` in #53 — keep them in step until they share it.
-    """
-
-    chain = [*_ancestors(by_id, node), node]  # root-first
-    if chapter_level is not None:
-        for candidate in reversed(chain):
-            if candidate.level <= chapter_level:
-                return candidate
-    return chain[0]
-
-
 def get_chapter_outline(
     workspace: WorkspacePaths,
     plan_id: str,
@@ -902,12 +883,14 @@ def get_chapter_outline(
 ) -> ChapterOutline:
     """Return the outline of the chapter a reading plan is currently in.
 
-    The chapter is the scope ancestor of the plan's next unread section (outermost by
-    default; pass ``chapter_level`` when chapters sit under parts or a single book-title
-    heading). Its subtree comes back with a per-node ``read`` flag plus chapter and plan
-    progress counts. ``max_depth`` limits the subtree as in ``get_outline``; it defaults
-    to ``2`` (the chapter and its direct subsections) so a chapter that turns out to be
-    the whole book stays small — pass ``None`` for the full subtree.
+    The chapter is the scope ancestor of the plan's next unread section, resolved by the
+    shared :func:`~bookgraph.graph.resolve_chapter` (so it always matches
+    ``get_plan_progress``): the outermost ancestor by default, skipping a lone book-title
+    root; pass ``chapter_level`` when chapters sit under parts. Its subtree comes back
+    with a per-node ``read`` flag plus chapter and plan progress counts. ``max_depth``
+    limits the subtree as in ``get_outline``; it defaults to ``2`` (the chapter and its
+    direct subsections) so a chapter that turns out to be the whole book stays small —
+    pass ``None`` for the full subtree.
     """
 
     if chapter_level is not None and chapter_level < 1:
@@ -934,7 +917,7 @@ def get_chapter_outline(
             f"Reading plan '{plan_id}' references unknown section '{current_id}' "
             f"in document '{plan.doc_id}'."
         )
-    chapter = _chapter_scope(by_id, current, chapter_level)
+    chapter = resolve_chapter(graph.nodes, current.id, chapter_level=chapter_level)
     nodes, truncated = _scoped_nodes(graph, chapter.id, max_depth)
     subtree = {node.id for node in _scoped_nodes(graph, chapter.id, None)[0]}
     in_chapter = [section_id for section_id in plan.section_ids if section_id in subtree]

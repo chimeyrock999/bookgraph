@@ -234,5 +234,7 @@ def test_server_instructions_tell_agents_where_diagnostics_go(tmp_path: Path) ->
         "AssetRef.link",
         "MEDIA:",
         "complete_reading_batch",
+        "translation_lang",
+        "get_section_translation",
     ):
         assert rule in instructions

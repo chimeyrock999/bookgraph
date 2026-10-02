@@ -54,9 +54,14 @@ hold book content only. Keep the channels separate:
   -> your final chat reply only;
 - export coverage/freshness/missing-asset status -> the export's .report.json; never
   copy labels such as (original), (untracked) or "Missing asset:" into a translation.
-Write translations only through write_section_translation, never as files under
-translations/. After a batch that translated or annotated, advance with
-complete_reading_batch (it verifies the work) instead of mark_read.
+The translation registry is the only translation store: check get_section_translation
+first, and save a translation ONLY with write_section_translation. Do not write
+translation files yourself, under translations/ or in any directory of your own:
+nothing reads them, so the section stays untranslated in the export and in batch
+completion.
+In a job that translates or annotates, do not call mark_read. Finish each batch with
+complete_reading_batch, passing translation_lang; if committed is false, fix every
+blocking issue and call it again.
 """
 
 

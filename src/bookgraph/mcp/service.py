@@ -23,6 +23,16 @@ from bookgraph.annotations import (
     write_annotation,
 )
 from bookgraph.assets import asset_reference, resolve_asset_path
+from bookgraph.concept_hygiene import (
+    DEFAULT_MERGE_THRESHOLD,
+    LintFinding,
+    MergeSuggestion,
+    ReviewItem,
+    lint_concepts,
+    review_queue,
+    suggest_merges,
+)
+from bookgraph.concept_registry import ConceptRegistry, read_registry
 from bookgraph.documents import read_document
 from bookgraph.graph import SectionGraph, build_section_graph
 from bookgraph.index import default_index_backend, tokenize
@@ -246,6 +256,7 @@ class ConceptMentionView(BaseModel):
     gloss: str = ""
     source: str = "auto"
     summary: str = ""
+    raw_slug: str = ""
 
 
 class ConceptInput(BaseModel):
@@ -282,6 +293,12 @@ class ConceptView(BaseModel):
     summary — meaningful in **both** modes (the compact card leaves the summaries empty
     but still counts them), so a cheap card read tells an agent whether a concept has
     deeper context worth an ``include_annotations=True`` call.
+
+    ``slug`` / ``title`` are the **canonical** concept. ``aliases`` lists the slugs that
+    resolve to it — the registry's deprecated aliases plus any alias slug observed on a
+    mention (``ConceptMentionView.raw_slug``). ``canonical`` is true when a reviewer
+    marked the concept canonical in ``concepts/registry.json``; ``resolved_from`` is the
+    requested slug when it was an alias that resolved here (``None`` otherwise).
     """
 
     slug: str
@@ -289,7 +306,25 @@ class ConceptView(BaseModel):
     doc_count: int
     mention_count: int
     annotated_mention_count: int = 0
+    aliases: list[str] = Field(default_factory=list)
+    canonical: bool = False
+    resolved_from: str | None = None
     mentions: list[ConceptMentionView] = Field(default_factory=list)
+
+
+class ConceptHygieneReport(BaseModel):
+    """Concept-maintenance signals over the built graph (see ``concept_hygiene``).
+
+    ``merge_suggestions`` are likely duplicates (best first), ``lint`` flags concepts
+    that probably should not be durable, and ``review_queue`` lists agent-created
+    concepts no reviewer has accepted, aliased, or ignored yet. Act on them with the
+    ``bookgraph concepts`` CLI, then re-run ``bookgraph index build``.
+    """
+
+    concept_count: int
+    merge_suggestions: list[MergeSuggestion] = Field(default_factory=list)
+    lint: list[LintFinding] = Field(default_factory=list)
+    review_queue: list[ReviewItem] = Field(default_factory=list)
 
 
 def _section_markdown_path(workspace: WorkspacePaths, doc_id: str, section_id: str) -> Path:
@@ -781,8 +816,15 @@ def get_concept(
     the section it came from, so the long-form context remains provenance-aware.
     """
 
-    slug = _validate_id(concept, "concept")
-    result = default_index_backend().get_concept(workspace, slug)
+    requested = _validate_id(concept, "concept")
+    registry = _load_registry(workspace)
+    slug = registry.resolve(requested)
+    backend = default_index_backend()
+    result = backend.get_concept(workspace, slug)
+    if result is None and slug != requested:
+        # The alias was registered after the last build, so its mentions still sit
+        # under the alias slug; serve them rather than miss until the next rebuild.
+        result = backend.get_concept(workspace, requested)
     if result is None:
         raise ConceptNotFoundError(
             f"Concept '{slug}' not found. Run 'bookgraph index build' then "
@@ -798,12 +840,18 @@ def get_concept(
             # The compact card omits the summary to stay lightweight; the detail view
             # surfaces it so the mention reads as long-form, source-grounded context.
             summary=mention.summary if include_annotations else "",
+            raw_slug=mention.raw_slug,
         )
         for mention in result.mentions
     ]
+    record = registry.record(result.node.slug)
+    aliases = list(record.aliases) if record is not None else []
+    for mention in result.mentions:
+        if mention.raw_slug and mention.raw_slug not in aliases:
+            aliases.append(mention.raw_slug)
     return ConceptView(
         slug=result.node.slug,
-        title=result.node.title,
+        title=record.title if record is not None else result.node.title,
         doc_count=result.node.doc_count,
         mention_count=result.node.mention_count,
         # Count from the raw backend mentions, not the (possibly redacted) view list:
@@ -811,7 +859,44 @@ def get_concept(
         # still signal "this concept carries N annotated sections" — a cheap cue for an
         # agent deciding whether an include_annotations=True call is worth it.
         annotated_mention_count=sum(1 for m in result.mentions if m.summary),
+        aliases=aliases,
+        canonical=record is not None,
+        resolved_from=requested if requested != result.node.slug else None,
         mentions=mentions,
+    )
+
+
+def _load_registry(workspace: WorkspacePaths) -> ConceptRegistry:
+    try:
+        return read_registry(workspace.concept_registry)
+    except ValueError as exc:
+        raise ReadingServiceError(str(exc)) from exc
+
+
+def concept_hygiene(
+    workspace: WorkspacePaths,
+    limit: int = 20,
+    threshold: float = DEFAULT_MERGE_THRESHOLD,
+) -> ConceptHygieneReport:
+    """Merge suggestions, lint findings, and the agent-concept review queue.
+
+    Read-only: it reports over the built index and the concept registry. ``limit``
+    caps each list (``merge_suggestions``, ``lint``, ``review_queue``) independently;
+    ``threshold`` is the minimum merge-suggestion score (0–1).
+    """
+
+    if limit < 1:
+        raise ReadingServiceError("limit must be at least 1")
+    if not 0 <= threshold <= 1:
+        raise ReadingServiceError("threshold must be between 0 and 1")
+    registry = _load_registry(workspace)
+    concepts = default_index_backend().concepts(workspace)
+    nodes = [concept.node for concept in concepts]
+    return ConceptHygieneReport(
+        concept_count=len(concepts),
+        merge_suggestions=suggest_merges(nodes, registry, threshold=threshold, limit=limit),
+        lint=lint_concepts(concepts, registry)[:limit],
+        review_queue=review_queue(concepts, registry)[:limit],
     )
 
 

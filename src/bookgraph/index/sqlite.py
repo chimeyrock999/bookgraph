@@ -8,6 +8,8 @@ One workspace-wide database at ``indexes/bookgraph.db`` holds:
 - ``concept_mentions`` — per-section concept backlinks (+ the ``concept_nodes``
   view aggregating them across books) backing ``get_concept``. Each row carries a
   ``gloss`` and a ``source`` (``auto``/``agent``) from the Tier-1/Tier-2 merge.
+  Edges are canonicalized through the concept registry (``concepts/registry.json``)
+  at build time; ``raw_slug`` keeps an aliased edge's original slug.
 - ``section_annotations`` — per-section Tier-2 summaries/provenance (not a concept
   edge). Not a required table, so a pre-feature database still reads cleanly.
 
@@ -24,6 +26,7 @@ from typing import TypeVar
 from urllib.parse import quote
 
 from bookgraph.annotations import merge_section_concepts, read_annotations_for_doc
+from bookgraph.concept_registry import ConceptRegistry, canonicalize_edges, read_registry
 from bookgraph.graph import SectionGraph, SectionNode, build_section_graph
 from bookgraph.index.base import (
     Concept,
@@ -77,6 +80,7 @@ CREATE TABLE IF NOT EXISTS concept_mentions (
     section_id    TEXT NOT NULL,
     gloss         TEXT NOT NULL DEFAULT '',
     source        TEXT NOT NULL DEFAULT 'auto',
+    raw_slug      TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (doc_id, section_id, concept_slug)
 );
 CREATE INDEX IF NOT EXISTS concept_mentions_slug ON concept_mentions (concept_slug);
@@ -104,6 +108,7 @@ CREATE TABLE IF NOT EXISTS section_annotations (
 _CONCEPT_MENTION_ADDED_COLUMNS = {
     "gloss": "TEXT NOT NULL DEFAULT ''",
     "source": "TEXT NOT NULL DEFAULT 'auto'",
+    "raw_slug": "TEXT NOT NULL DEFAULT ''",
 }
 
 
@@ -130,9 +135,12 @@ class SqliteIndexBackend(IndexBackend):
         conn.row_factory = sqlite3.Row
         annotations = read_annotations_for_doc(workspace.annotations_root, doc_id)
         try:
+            # Read before touching the db: an invalid registry raises ValueError and
+            # must abort the build rather than silently un-merge every alias.
+            registry = read_registry(workspace.concept_registry)
             _ensure_schema(conn)
             _ensure_columns(conn)
-            return _build_document(conn, doc_id, title, sections, annotations)
+            return _build_document(conn, doc_id, title, sections, annotations, registry)
         except sqlite3.OperationalError as exc:
             if "locked" in str(exc).lower():
                 raise IndexUnavailableError(
@@ -201,6 +209,7 @@ class SqliteIndexBackend(IndexBackend):
                     gloss=row["gloss"],
                     source=row["source"],
                     summary=row["summary"],
+                    raw_slug=row["raw_slug"],
                 )
                 for row in _concept_mentions(conn, slug)
             ]
@@ -220,6 +229,7 @@ class SqliteIndexBackend(IndexBackend):
                         gloss=row["gloss"],
                         source=row["source"],
                         summary=row["summary"],
+                        raw_slug=row["raw_slug"],
                     )
                 )
             return [
@@ -352,6 +362,7 @@ def _build_document(
     title: str,
     sections: list[Section],
     annotations: dict[str, SectionAnnotation],
+    registry: ConceptRegistry,
 ) -> int:
     graph = build_section_graph(doc_id, sections)
     graph_rows = [
@@ -369,8 +380,8 @@ def _build_document(
         for ordinal, node in enumerate(graph.nodes)
     ]
     concept_rows = [
-        (edge.slug, edge.title, doc_id, edge.section_id, edge.gloss, edge.source)
-        for edge in merge_section_concepts(sections, annotations)
+        (edge.slug, edge.title, doc_id, edge.section_id, edge.gloss, edge.source, edge.raw_slug)
+        for edge in canonicalize_edges(merge_section_concepts(sections, annotations), registry)
     ]
     # Scope stored summaries to sections that still exist, mirroring concept_rows:
     # a stale annotation left over from a re-segment (its section id is gone) must not
@@ -399,8 +410,8 @@ def _build_document(
         )
         conn.executemany(
             "INSERT INTO concept_mentions "
-            "(concept_slug, concept_title, doc_id, section_id, gloss, source) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "(concept_slug, concept_title, doc_id, section_id, gloss, source, raw_slug) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
             concept_rows,
         )
         conn.executemany(
@@ -536,7 +547,8 @@ def _all_concept_mentions(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     return conn.execute(
         "SELECT cm.concept_slug AS slug, cm.doc_id AS doc_id, cm.section_id AS section_id, "
         "       COALESCE(sg.title, cm.section_id) AS title, cm.gloss AS gloss, "
-        "       cm.source AS source, COALESCE(sa.summary, '') AS summary "
+        "       cm.source AS source, COALESCE(sa.summary, '') AS summary, "
+        "       cm.raw_slug AS raw_slug "
         "FROM concept_mentions cm "
         "LEFT JOIN section_graph sg "
         "  ON sg.doc_id = cm.doc_id AND sg.section_id = cm.section_id "
@@ -557,7 +569,8 @@ def _concept_mentions(conn: sqlite3.Connection, slug: str) -> list[sqlite3.Row]:
     return conn.execute(
         "SELECT cm.doc_id AS doc_id, cm.section_id AS section_id, "
         "       COALESCE(sg.title, cm.section_id) AS title, cm.gloss AS gloss, "
-        "       cm.source AS source, COALESCE(sa.summary, '') AS summary "
+        "       cm.source AS source, COALESCE(sa.summary, '') AS summary, "
+        "       cm.raw_slug AS raw_slug "
         "FROM concept_mentions cm "
         "LEFT JOIN section_graph sg "
         "  ON sg.doc_id = cm.doc_id AND sg.section_id = cm.section_id "

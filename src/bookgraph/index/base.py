@@ -70,7 +70,9 @@ class ConceptMention(BaseModel):
     ``source`` is ``"auto"`` (deterministic Tier-1) or ``"agent"`` (Tier-2 annotation).
     ``summary`` is the mentioning section's Tier-2 annotation summary (empty when the
     section has none) — the long-form context that turns a bare backlink into a
-    readable, source-grounded concept note.
+    readable, source-grounded concept note. ``raw_slug`` is the slug the mention was
+    asserted under when the concept registry resolved it as an alias of this concept
+    (empty when it was stored under its own slug) — alias provenance.
     """
 
     doc_id: str
@@ -79,6 +81,7 @@ class ConceptMention(BaseModel):
     gloss: str = ""
     source: str = "auto"
     summary: str = ""
+    raw_slug: str = ""
 
 
 class ConceptNode(BaseModel):

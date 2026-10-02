@@ -511,6 +511,35 @@ bookgraph index build /path/to/workspace --doc-id ddia   # index one document
 
 - No `--doc-id` and nothing segmented → `No segmented documents under …`.
 - `--doc-id` given but its `sections.jsonl` is missing → `Sections manifest not found`.
+- An invalid `concepts/registry.json` → `Invalid concept registry …` (the build
+  refuses to guess rather than silently un-merge aliases).
+
+## `bookgraph concepts`
+
+**Status:** Implemented.
+
+Curate the concept registry (`concepts/registry.json`) and report concept hygiene:
+merge suggestions, lint, and the agent-concept review queue. Report commands
+(`suggest`, `lint`, `review`) read the built index plus the registry. Write commands
+(`alias`, `unalias`, `canonical`, `ignore`, `distinct`) edit only the registry and
+take effect on the next `bookgraph index build`. See `docs/cli/concepts.md` for the
+full contract.
+
+```bash
+bookgraph concepts suggest /path/to/workspace
+bookgraph concepts alias /path/to/workspace metadata-file table-metadata
+bookgraph index build /path/to/workspace
+```
+
+### Must not do
+
+- Must not write the index, annotations, or wiki output. Only `concepts/registry.json`.
+
+### Errors
+
+- Report commands without a built index → `No concepts in … Run 'bookgraph index build' first.`
+- An invalid registry, or a mutation that would break its invariants (an alias chain,
+  ignoring a canonical slug, a non-slug id) → a `BadParameter` naming the conflict.
 
 ## `bookgraph index concepts`
 
@@ -522,19 +551,24 @@ build` it is not per-document).
 
 ```bash
 bookgraph index concepts /path/to/workspace
+bookgraph index concepts /path/to/workspace --durable-only
 ```
 
 ### Inputs
 
 - `workspace_path`: workspace/output root. Must already exist and have a built
   `indexes/bookgraph.db`.
+- `--durable-only`: skip concepts with a lint **warning** (generic, one-off, stale
+  alias/ignored; see `concepts.md`) unless they are canonical in
+  `concepts/registry.json`. Prints `skipped: N`.
 
 ### Writes
 
 - `wiki/concepts/<concept_slug>.md` — one page per concept, with cross-book
   backlinks, rendered from `concept_nodes` + `concept_mentions`. Each backlink shows
   its per-mention `gloss` when present and an `(agent-verified)` marker when the
-  mention's `source` is `agent`. Rewrites the whole `wiki/concepts/` directory so it
+  mention's `source` is `agent`. A concept in `concepts/registry.json` takes its
+  canonical title, and a concept with aliases gets an `Also known as:` line. Rewrites the whole `wiki/concepts/` directory so it
   reflects exactly the currently indexed concepts (see `docs/cli/artifacts.md`).
 
 > Backlinks point into `wiki/books/<doc_id>/sections/`, which is materialized by
@@ -624,7 +658,14 @@ telling the user to `uv sync --extra mcp`.
   (`doc_id`, `section_id`, `title`, `gloss`, `source`) across every indexed book,
   grouped by document. Returns empty when the slug is unknown. Backed by
   `concept_nodes` / `concept_mentions`; no live-scan fallback (a document's concepts
-  exist only once it is built).
+  exist only once it is built). An alias slug from `concepts/registry.json` resolves
+  to its canonical concept: the result also carries `aliases`, `canonical`, and
+  `resolved_from`, and each mention carries its `raw_slug` (see `concepts.md`).
+- `concept_hygiene(limit=20, threshold=0.5)` → a read-only concept-maintenance report:
+  `merge_suggestions` (likely duplicates with a suggested canonical side),
+  `lint` (generic / one-off / over-granular / stale concepts), and `review_queue`
+  (agent-created concepts not yet canonical, aliased, or ignored), each capped at
+  `limit`. Decisions are applied by a human with the `bookgraph concepts` CLI.
 - `annotate_section(doc_id, section_id, concepts=[], summary="", model=None)` →
   write a Tier-2 annotation for one section: the agent's authoritative concept edge
   set (each `{slug?, title, gloss?}`; `slug` defaults to a slugified `title`, and an

@@ -483,6 +483,29 @@ The concept edges here are the authoritative set for that section and, on the ne
 prunes that section's mentions). See **`annotations.md`** for the field rules, the
 presence-based merge rule, and the `markdown-graph` non-goal.
 
+## `concepts/registry.json`
+
+Owner: the `bookgraph concepts` CLI (`bookgraph.concept_registry`). Read by
+`index build`, `index concepts`, and the MCP `get_concept` / `concept_hygiene` tools.
+
+A **human-curated source of truth**, like `annotations/`: canonical concepts with
+their deprecated aliases, ignored slugs, and reviewed-distinct pairs. A missing file is
+an empty registry. An invalid one is an error. `index build` rewrites alias edges to
+their canonical slug (keeping the original in `concept_mentions.raw_slug`) and drops
+ignored slugs.
+
+```json
+{
+  "canonical": [
+    {"slug": "table-metadata", "title": "Table Metadata", "aliases": ["metadata-file"], "note": ""}
+  ],
+  "ignored": ["however"],
+  "distinct": [["snapshot", "snapshot-id"]]
+}
+```
+
+See **`concepts.md`** for the invariants, canonicalization rules, and hygiene reports.
+
 ## Future artifacts
 
 Do not implement these without updating this file.

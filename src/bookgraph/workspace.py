@@ -81,6 +81,15 @@ class WorkspacePaths:
         return self.root / "annotations"
 
     @property
+    def concepts_root(self) -> Path:
+        """Curated concept artifacts (the registry); distinct from ``wiki/concepts``."""
+        return self.root / "concepts"
+
+    @property
+    def concept_registry(self) -> Path:
+        return self.concepts_root / "registry.json"
+
+    @property
     def reading_plans_root(self) -> Path:
         return self.root / "reading_plans"
 

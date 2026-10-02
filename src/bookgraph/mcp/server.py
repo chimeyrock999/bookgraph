@@ -17,6 +17,7 @@ from fastmcp.exceptions import ToolError
 from bookgraph.mcp import service
 from bookgraph.mcp.service import (
     AnnotationResult,
+    ConceptHygieneReport,
     ConceptInput,
     ConceptView,
     CreatedPlan,
@@ -131,6 +132,9 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
     def get_concept(concept: str, include_annotations: bool = False) -> ConceptView:
         """Return a concept and its cross-book backlink mentions across all books.
 
+        An alias slug resolves to its canonical concept: the result carries the
+        canonical slug/title, its aliases, and resolved_from (the requested alias).
+
         Defaults to a compact card (bare backlinks with per-section glosses) for
         lightweight graph traversal. Pass include_annotations=True for the detail
         view, where each mention also carries its section's Tier-2 summary, so a
@@ -139,6 +143,22 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
 
         try:
             return service.get_concept(workspace, concept, include_annotations)
+        except ReadingServiceError as exc:
+            raise ToolError(str(exc)) from exc
+
+    @mcp.tool
+    def concept_hygiene(limit: int = 20, threshold: float = 0.5) -> ConceptHygieneReport:
+        """Report concept-graph hygiene: likely duplicates, lint, and a review queue.
+
+        merge_suggestions pairs concepts that look like duplicates (inflections,
+        acronyms, one subsuming the other, near-identical spelling) with a suggested
+        canonical side; lint flags generic, one-off, over-granular, or stale concepts;
+        review_queue lists agent-created concepts not yet reviewed. Read-only — a human
+        applies decisions with the 'bookgraph concepts' CLI and then rebuilds the index.
+        """
+
+        try:
+            return service.concept_hygiene(workspace, limit, threshold)
         except ReadingServiceError as exc:
             raise ToolError(str(exc)) from exc
 

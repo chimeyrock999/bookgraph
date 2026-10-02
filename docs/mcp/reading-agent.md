@@ -143,6 +143,14 @@ bookgraph index build /path/to/ws              # per-doc: re-merge Tier-1 + Tier
 bookgraph index concepts /path/to/ws           # global: re-render wiki/concepts/<slug>.md
 ```
 
+As annotations pile up, near-duplicate concepts appear (`metadata-file` vs
+`table-metadata`). `concept_hygiene()` reports likely merges, lint findings, and the
+agent concepts still awaiting review. Surface it to your user rather than acting on it
+yourself: a human curates `concepts/registry.json` with `bookgraph concepts
+alias|canonical|ignore|distinct`, and the next `index build` folds the aliases in.
+After that, `get_concept` resolves an alias slug to its canonical concept (see
+`docs/cli/concepts.md`).
+
 ## Agent skills
 
 The repo ships the **`bookgraph-reader`** workflow in two packaging forms:

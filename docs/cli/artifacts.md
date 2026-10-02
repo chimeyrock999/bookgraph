@@ -595,51 +595,24 @@ not `mkstemp`'s 0600). A crash or a racing writer between the steps leaves an
 annotations, the cache is **not** rebuildable from sources (regenerating it costs
 model calls), so `index build`, `segment`, and `wiki` never delete it.
 
-### Artifact hygiene
+### Artifact channels
 
-A translation body (and an annotation's `summary`/`gloss`) is **publication-clean
-book content**: it is reused by later jobs and printed in reading PDFs. Job
-diagnostics belong in the chat reply, the job log, or a report JSON — never in the
-artifact, and each has its own channel: QA/checker results and terminology
-decisions go in the sidecar's `notes` (`write_section_translation(..., notes=...)`),
-`MEDIA:` markers and progress lines in the agent's chat reply, export status in the
-export report. The `bookgraph-reader` skills tell agents to use them.
+A translation body (and an annotation's `summary`/`gloss`) is **book content
+only**: it is reused by later jobs and printed in reading PDFs. Everything else a
+reading/translation job produces has its own channel, and the agent contract says so
+— the MCP server `instructions`, the tool docstrings, and the `bookgraph-reader`
+skills (`.claude/` and `.agents/`):
 
-As a safety net behind those channels, `bookgraph.artifact_hygiene` recognises a
-deliberately small set of lines that are never book content, in prose only:
-fenced and indented code blocks and inline code spans are skipped, so a code listing
-quoting `WARNING: …` or a mention of `` `mark_read` `` is content. The rules are kept
-narrow — a false positive refuses a faithful translation — so look-alike book text
-(`Media: print and radio`, a heading `The Iliad (original)`, a site link
-`[docs](/docs/intro)`) is not flagged. Free-form QA prose is not guessed at: any rule
-loose enough to catch it also refuses real text (`QA: quality assurance`,
-`Self-check: …`); it belongs in `notes`.
-
-| Code | Example |
+| What | Channel |
 | --- | --- |
-| `media_marker` | `MEDIA:/Users/me/exports/ddia.vi-progress.pdf` — upper-case `MEDIA:` followed by a local path; a chat delivery marker, valid only in the final reply. |
-| `progress_footer` | `Đã lưu cache/enrich và mark read: ddia.ch1`, `called mark_read`, `Marked read: …` |
-| `export_status` | `Translation status unknown`, `Untranslated — original text`, `Missing asset: …`, or `(original)` / `(tracked)` / `(untracked)` / `(may be outdated)` alone on its line |
-| `export_warning` | an export warning code (`asset_missing`, `translation_stale`, …) or `Renderer warning: …` |
-| `absolute_asset_link` | an image pointing at an absolute local path: `![…](/Users/…/fig1.png)`, `file:` or `C:\` targets, `<img src="/…">`, or a reference definition of an image file (`[fig]: /Users/…/fig1.png`). Link parsed assets relatively (e.g. `images/fig1.png`). Plain links and protocol-relative `//host/…` URLs are not assets. |
+| Translated headings, prose, tables, figures | `write_section_translation(content=...)` |
+| Figure/table references inside a translation | the asset's `AssetRef.link` from `get_section` / `get_context` — relative to `sources/parsed/<doc_id>/` (e.g. `images/fig1-1.png`); `AssetRef.path` is the absolute file to *open*, not to write |
+| QA/checker results, terminology decisions, doubts about the source | `write_section_translation(notes=...)` — the sidecar's `notes` |
+| `MEDIA:/path` delivery markers, cache/mark-read progress, job status | the agent's final chat reply |
+| Export coverage, freshness, missing assets | the export's `.report.json` (the reading pages do not print them unless `--show-status`) |
 
-Enforcement:
-
-- `write_translation` / `write_section_translation` refuse such a body before
-  touching anything (the previous translation stays registered); `annotate_section`
-  refuses such a summary or gloss (every rule, absolute asset links included).
-- `complete_reading_batch` / `validate_reading_batch` block on a body written by path
-  convention or a stored annotation that carries them (`translation_contaminated`,
-  `annotation_contaminated`). A stored summary/gloss is one line, so it is scanned in
-  *collapsed* mode: the line-start rules (`MEDIA:`, `Renderer warning:`) also match
-  mid-text. Required `.md`/`.markdown`/`.txt` `artifacts` are checked only with
-  `clean_artifacts=true` (`artifact_contaminated`), since a run/QA log legitimately
-  carries such lines.
-- `bookgraph export translated-pdf` drops the operational lines (every code except
-  `absolute_asset_link`) from the page and reports each as `translation_contaminated`.
-  An absolute image link is still rendered — an in-workspace image embeds — but is
-  reported with the same code, so `--strict` refuses every artifact the batch
-  boundary would block.
+The tool does not try to detect or strip text that went into the wrong channel:
+that is agent behavior, fixed in the agent contract above.
 
 ## Translation bodies as read by `bookgraph export translated-pdf`
 
@@ -735,9 +708,6 @@ is written beside the export:
     refuses it.
   - `translation_untracked`: no valid registry record, or the body was edited after
     registration. Rendered (with a note under `--show-status`); never refused.
-  - `translation_contaminated`: the body carried job diagnostics (see *Artifact
-    hygiene*); `reference` is the dropped line. The line is left out of the page;
-    `--strict` refuses it until the artifact is rewritten clean.
   - `translation_empty`, `translation_unreadable`: the section falls back.
   - `asset_captions_only` / `asset_text_sparse`: ingest quality warnings, passed
     through for rendered sections whose source prose is mostly captions.

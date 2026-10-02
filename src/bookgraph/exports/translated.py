@@ -9,10 +9,8 @@ all. The export only reads the registry: a translation's freshness (``fresh`` /
 
 The reading pages carry book content only. Status and debug metadata — freshness
 labels, "untranslated" notes, coverage, missing-asset placeholders — go to the report
-JSON, and are printed on the pages only with ``show_status`` (``--show-status``). Job
-diagnostics that leaked into a translation body (``MEDIA:`` markers, progress footers,
-export labels; see :mod:`bookgraph.artifact_hygiene`) are dropped from the page and
-reported as ``translation_contaminated``.
+JSON, and are printed on the pages only with ``show_status`` (``--show-status``), so a
+reading agent never meets BookGraph's own status text in a page it reads back.
 
 Original sections are rebuilt from their parsed ``document.json`` blocks (via
 ``Section.block_ids``) when available, so figures, tables and equations land next
@@ -42,14 +40,12 @@ from urllib.parse import unquote
 from markdown_it import MarkdownIt
 from markdown_it.token import Token
 
-from bookgraph.artifact_hygiene import scan_artifact_text, strip_operational_lines
 from bookgraph.assets import asset_reference, resolve_asset_path
 from bookgraph.documents import read_document
 from bookgraph.exports.models import (
     ASSET_MISSING,
     ASSET_REMOTE,
     ASSET_UNSUPPORTED,
-    TRANSLATION_CONTAMINATED,
     TRANSLATION_EMPTY,
     TRANSLATION_MISSING_ASSETS,
     TRANSLATION_STALE,
@@ -376,27 +372,6 @@ class _Assembler:
             )
             return None
         frontmatter, body = split_frontmatter(raw)
-        body, dropped = strip_operational_lines(body)
-        for finding in dropped:
-            self._warn(
-                TRANSLATION_CONTAMINATED,
-                f"translation artifact {relative} carries job diagnostics ({finding.code}) "
-                "that were left out of the export; remove them and rewrite it with "
-                "write_section_translation",
-                section.id,
-                finding.excerpt,
-            )
-        # What is left is an absolute asset link: rendered (an in-workspace image still
-        # embeds) but reported, so ``--strict`` agrees with the reading batch boundary.
-        for finding in scan_artifact_text(body):
-            self._warn(
-                TRANSLATION_CONTAMINATED,
-                f"translation artifact {relative} links an asset by absolute path "
-                f"({finding.code}); link parsed assets relatively and rewrite it with "
-                "write_section_translation",
-                section.id,
-                finding.excerpt,
-            )
         if not body.strip():
             self._warn(
                 TRANSLATION_EMPTY,

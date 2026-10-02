@@ -148,15 +148,13 @@ Rules:
 
 - Write translations only through `write_section_translation`; never create or edit
   files under `translations/` directly, and never paste the chat reply into `content`.
-- Link figures relatively to the parsed assets (`images/fig1-1.png`), never by
-  absolute path.
+- Link each figure/table by its `AssetRef.link` (relative, e.g. `images/fig1-1.png`),
+  never by `AssetRef.path` (absolute — it is for opening the file).
 - Never copy export labels (`(original)`, `(untracked)`, "Translation status
   unknown", "Missing asset: …") into a translation.
-- The write tools refuse `MEDIA:` markers, cache/mark-read footers, export labels and
-  absolute asset paths in `content` or an annotation summary/gloss. If refused, move
-  those lines to `notes` or the chat reply and retry; do not reword them to pass.
+- Annotation summaries and glosses follow the same rule: book explanation only.
 - After translating, advance with `complete_reading_batch(plan_id,
-  translation_lang=...)`, which blocks on a contaminated translation.
+  translation_lang=...)`, which verifies the translation exists and is fresh.
 
 ## Client-specific packaging
 

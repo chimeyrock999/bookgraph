@@ -690,8 +690,10 @@ telling the user to `uv sync --extra mcp`.
   `mark_read` calls stay correct (same semantics as `bookgraph reading-plan progress`).
 - `get_section(doc_id, section_id, include_assets=True)` → one section's full
   reading content, its `<section_id>.md` path, its figure/table `assets` (each
-  `{block_id, type, path, caption, order, page_idx, type_confidence,
-  suggested_type}`), and its `warnings`. `type_confidence` scores the parser's
+  `{block_id, type, path, link, caption, order, page_idx, type_confidence,
+  suggested_type}`), and its `warnings`. `path` is the absolute file to open; `link`
+  is the same file relative to `sources/parsed/<doc_id>/` (e.g. `images/fig1.png`),
+  the reference to write into a translation. `type_confidence` scores the parser's
   classification against the caption's label and `suggested_type` is set only when
   the caption contradicts it, so a figure emitted as a `table` is flagged rather
   than passed off as correct. `warnings` are the same data-quality anomalies the
@@ -813,12 +815,11 @@ telling the user to `uv sync --extra mcp`.
   replacing any previous translation; returns the entry (status `fresh`, no
   `content`). Empty `content` is rejected. When `source_section_hash` is given and
   differs from the section's current hash the write is refused, so a translation of
-  outdated content is never registered as fresh. `content` must be the translated
-  book content only: a body carrying a `MEDIA:` marker, a cache/mark-read footer, an
-  export status label, or an absolute asset link is refused. `notes` (optional) is
-  the side channel for QA/checker results and terminology decisions: stored in the
-  registry sidecar, returned as `notes` by the read tools, never in the body (see
-  *Artifact hygiene* in `artifacts.md`).
+  outdated content is never registered as fresh. `content` is the translated book
+  content only, with figures/tables linked by their `AssetRef.link`. `notes`
+  (optional) is the side channel for QA/checker results and terminology decisions:
+  stored in the registry sidecar, returned as `notes` by the read tools, never in the
+  body (see *Artifact channels* in `artifacts.md`).
 - `list_section_artifacts(doc_id=None, lang=None, type="translation")` → every
   cached translation (filtered by `doc_id` / `lang`) with its status, including
   `orphaned` ones whose section no longer exists; no bodies. Only
@@ -860,7 +861,6 @@ empty list is rejected. Each requirement applies to every section of the batch:
 | `inspected_assets` | `[]` | Block ids the caller inspected. |
 | `translation_lang` | `null` | When set (a slug such as `vi`, `pt-br`; lowercased), the section's cached translation `translations/<lang>/<doc_id>/<section_id>.md` exists, is non-empty, and is not `stale` in the translation registry (see `artifacts.md`). An `untracked` body (no valid registry sidecar) passes with a warning. |
 | `artifacts` | `[]` | Extra workspace-relative path templates that must exist and be non-empty per section. `{doc_id}`, `{section_id}`, `{plan_id}` expand; an absolute path, a `..` segment, an unknown field, or a path resolving outside the workspace is rejected as a request error. |
-| `clean_artifacts` | `false` | Opt-in: the `artifacts` that are Markdown/text (`.md`, `.markdown`, `.txt`) must also be free of job diagnostics (see *Artifact hygiene* in `artifacts.md`). Set it for cache/deliverable artifacts; leave it off for run/QA logs. |
 
 Both return a report:
 
@@ -905,11 +905,6 @@ Issue codes (`blocking` unless noted):
   the section; re-translate with `write_section_translation`.
 - `translation_untracked` — non-blocking; the body has no registry record, so its
   freshness is unknown.
-- `translation_contaminated`, `annotation_contaminated`, `artifact_contaminated` —
-  the translation body, the annotation's summary/glosses, or (with
-  `clean_artifacts`) a required text artifact carries job diagnostics (`MEDIA:` markers, progress footers,
-  export labels, absolute asset links; see *Artifact hygiene* in `artifacts.md`).
-  The message names the first offending lines; rewrite the artifact clean.
 
 Request errors — unknown/invalid `plan_id`, an unsegmented document, an empty
 `section_ids`, a plan that is already complete when `section_ids` is omitted, an
@@ -1080,9 +1075,8 @@ bookgraph export translated-pdf /path/to/workspace ddia --check           # cove
   backend, trying `weasyprint` first and then `playwright`. Naming a backend that is
   not installed is an error.
 - `--strict`: exit `1` without writing anything if any asset is missing, remote, or
-  unsupported, a translation is `stale` (`translation_stale`) or carries job
-  diagnostics (`translation_contaminated`), or a registered translation left out its
-  section's figures/tables (`translation_missing_assets`).
+  unsupported, a translation is `stale` (`translation_stale`), or a registered
+  translation left out its section's figures/tables (`translation_missing_assets`).
   An `untracked` translation only warns.
 - `--show-status`: debug view. Also print status metadata on the reading pages:
   coverage/doc_id/fallback on the title page, TOC status markers (`(original)`,
@@ -1107,9 +1101,7 @@ bookgraph export translated-pdf /path/to/workspace ddia --check           # cove
   `translations/<lang>/<doc_id>/<section_id>.md` plus its `.json` sidecar, which
   decides the section's `fresh` / `stale` / `untracked` status (the sidecar is never
   rendered). Stale and untracked translations render with a warning (and a visible
-  note under `--show-status`); see `artifacts.md`. Job diagnostics in a body
-  (`MEDIA:` markers, progress footers, export labels) are dropped from the page and
-  reported as `translation_contaminated`. `translation_cache/` is not read.
+  note under `--show-status`); see `artifacts.md`. `translation_cache/` is not read.
 
 ### Asset handling
 

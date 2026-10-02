@@ -129,18 +129,16 @@ Rules:
 - Write translations **only** through `write_section_translation`. Never create or
   edit files under `translations/` directly, and never paste your chat reply (or a
   part of it) into `content`.
-- Link figures **relatively** to the parsed assets (`images/fig1-1.png`), never by
-  absolute path; `MEDIA:` belongs to the chat reply, not to `content`.
+- Link each figure/table by its `AssetRef.link` (relative, e.g.
+  `![Hình 1-1](images/fig1-1.png)`), never by `AssetRef.path` (absolute — it is for
+  opening the file). `MEDIA:` belongs to the chat reply, not to `content`.
 - Don't translate export output back into the cache: labels such as `(original)`,
   `(untracked)`, *Translation status unknown* or *Missing asset: …* are BookGraph
   status, not book text.
-- The write tools refuse a `content` (or annotation summary/gloss) carrying
-  `MEDIA:` markers, cache/mark-read footers, export labels, or absolute asset paths.
-  If a write is refused, move those lines to `notes` or the chat reply and retry —
-  don't reword them to slip past the check.
+- Annotation summaries and glosses follow the same rule: book explanation only.
 - After translating, advance with `complete_reading_batch(plan_id,
   translation_lang=..., ...)`, not plain `mark_read`: it verifies the cached
-  translation (and blocks on a contaminated one) before marking the batch read.
+  translation exists and is fresh before marking the batch read.
 
 ## Behavior
 

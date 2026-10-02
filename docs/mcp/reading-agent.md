@@ -80,10 +80,11 @@ A self-serve agent drives an entire session with these tools alone:
      neighbourhood (parent/prev/next/children), its `concepts`, and any `summary`
      already written for it.
    - Both `get_section` and `get_context` return the section's figures/tables as a
-     structured `assets` list (each `{block_id, type, path, caption, order, page_idx,
-     type_confidence, suggested_type}`) so you never have to grep
+     structured `assets` list (each `{block_id, type, path, link, caption, order,
+     page_idx, type_confidence, suggested_type}`) so you never have to grep
      `sources/parsed/<doc_id>/document.json` for image paths. `path` resolves under the
-     workspace; open it directly to OCR/inspect labels or table content. `type` is the
+     workspace; open it directly to OCR/inspect labels or table content. `link` is the
+     relative reference (e.g. `images/fig1.png`) to write into a translation. `type` is the
      parser's guess: when `suggested_type` is set the caption contradicts it (a figure
      emitted as a `table`), so trust the file over the label. Pass
      `include_assets=false` to omit.
@@ -135,11 +136,11 @@ A self-serve agent drives an entire session with these tools alone:
      - export coverage/freshness/missing assets → the export's `.report.json`.
 
      Write translations only through `write_section_translation`, never by creating
-     files under `translations/`, and link figures relatively (`images/fig1.png`).
-     As a safety net the write tools refuse `MEDIA:` markers, cache/mark-read
-     footers, export labels and absolute asset paths, and `complete_reading_batch`
-     blocks on them (`*_contaminated`). The `bookgraph-reader` skill
-     (`.claude/skills/bookgraph-reader/SKILL.md`) spells out this workflow.
+     files under `translations/`, and link each figure/table by its `AssetRef.link`
+     (relative, e.g. `images/fig1.png`) — `AssetRef.path` is the absolute file to
+     open, not to write. The server sends these rules as its MCP `instructions` at
+     connect time, and the `bookgraph-reader` skill
+     (`.claude/skills/bookgraph-reader/SKILL.md`) spells out the workflow.
    - `mark_read(plan_id)` — mark the section read (defaults to the next unread) and
      persist progress. It checks nothing: when the batch involved translation or
      annotation, advance with `complete_reading_batch` instead (see below), which runs

@@ -22,7 +22,6 @@ from bookgraph.annotations import (
     read_annotation,
     write_annotation,
 )
-from bookgraph.artifact_hygiene import ArtifactHygieneError
 from bookgraph.assets import asset_reference, resolve_asset_path
 from bookgraph.concept_hygiene import (
     DEFAULT_MERGE_THRESHOLD,
@@ -112,11 +111,17 @@ class AssetRef(BaseModel):
     label corroborates it) and, when the caption contradicts the parser,
     ``suggested_type`` — the type the caption implies. A client can then trust, correct,
     or open the file instead of taking a silently wrong ``type`` at face value.
+
+    ``path`` is the absolute file to *open*. ``link`` is the same file relative to the
+    document's ``sources/parsed/<doc_id>/`` directory (e.g. ``images/fig1-1.png``) —
+    the reference to *write* into a translation (``![caption](<link>)``): it stays
+    valid when the workspace moves, and the export resolves it.
     """
 
     block_id: str
     type: str
     path: str
+    link: str = ""
     caption: str = ""
     order: int | None = None
     page_idx: int | None = None
@@ -524,6 +529,7 @@ def _section_assets(
                 block_id=block.id,
                 type=block.type,
                 path=path,
+                link=_parsed_link(parsed_dir, path),
                 caption=block.text,
                 order=block.order,
                 page_idx=block.page_idx,
@@ -532,6 +538,17 @@ def _section_assets(
             )
         )
     return assets, summaries
+
+
+def _parsed_link(parsed_dir: Path, path: str) -> str:
+    """``path`` relative to the parsed document dir, for Markdown links in artifacts."""
+
+    try:
+        return Path(path).resolve().relative_to(parsed_dir.resolve()).as_posix()
+    except (OSError, ValueError):
+        # ``resolve_asset_path`` only returns files inside ``parsed_dir``; keep the
+        # basename rather than leak an absolute path if that ever changes.
+        return Path(path).name
 
 
 def _section_view(
@@ -1526,12 +1543,11 @@ def write_section_translation(
     ``includes_assets`` declares whether the section's figures/tables were carried into
     the translation.
 
-    ``content`` must be the translated book content only: a write carrying a
-    ``MEDIA:`` delivery marker, a cache/mark-read progress footer, an export status
-    label, or an absolute asset link is refused (link parsed assets relatively).
-    Everything else the job wants to record about the translation — QA/checker results,
-    terminology decisions — goes in ``notes``: stored in the registry sidecar, returned
-    by ``get_section_translation``, never part of the body or the export.
+    ``content`` is the translated book content only, with figures linked by their
+    ``AssetRef.link``. Everything else the job wants to record about the translation —
+    QA/checker results, terminology decisions — goes in ``notes``: stored in the
+    registry sidecar, returned by ``get_section_translation``, never part of the body
+    or the export.
     """
 
     resolved_doc_id = _validate_id(doc_id, "doc_id")
@@ -1546,19 +1562,16 @@ def write_section_translation(
             f"(translated {source_section_hash}, current {current_hash}); "
             "re-fetch it with get_section and translate the current content"
         )
-    try:
-        write_translation(
-            workspace,
-            section,
-            resolved_lang,
-            content,
-            includes_assets=includes_assets,
-            model=model,
-            created_at=datetime.now(UTC).isoformat(),
-            notes=notes,
-        )
-    except ArtifactHygieneError as exc:
-        raise ReadingServiceError(str(exc)) from exc
+    write_translation(
+        workspace,
+        section,
+        resolved_lang,
+        content,
+        includes_assets=includes_assets,
+        model=model,
+        created_at=datetime.now(UTC).isoformat(),
+        notes=notes,
+    )
     state = translation_state(workspace, resolved_lang, resolved_doc_id, section.id, current_hash)
     return _artifact_view(workspace, state, section, include_content=False)
 

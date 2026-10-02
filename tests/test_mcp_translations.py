@@ -228,34 +228,6 @@ def test_get_serves_the_body_it_validated_not_a_second_read(
     assert view.content == "Bản A"
 
 
-def test_write_refuses_media_markers_and_absolute_asset_paths(tmp_path: Path) -> None:
-    workspace = _workspace(tmp_path, _section("deep-work.a"))
-
-    for body in (
-        "# Bản dịch\n\nMEDIA:/Users/me/exports/deep-work.pdf\n",
-        "# Bản dịch\n\n![Hình 1](/Users/me/ws/sources/parsed/deep-work/images/f1.png)\n",
-    ):
-        with pytest.raises(ReadingServiceError, match="operational text"):
-            service.write_section_translation(workspace, "deep-work", "deep-work.a", "vi", body)
-
-    view = service.get_section_translation(workspace, "deep-work", "deep-work.a", "vi")
-    assert view.status == "missing"
-
-
-def test_annotate_section_refuses_progress_footers(tmp_path: Path) -> None:
-    workspace = _workspace(tmp_path, _section("deep-work.a"))
-
-    with pytest.raises(ReadingServiceError, match="annotation summary"):
-        service.annotate_section(
-            workspace,
-            "deep-work",
-            "deep-work.a",
-            summary="Tóm tắt.\n\nĐã lưu cache/enrich và mark read: deep-work.a",
-        )
-
-    assert not (workspace.annotations_root / "deep-work" / "deep-work.a.json").exists()
-
-
 def test_notes_are_stored_beside_the_translation_not_in_it(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path, _section("deep-work.a"))
     notes = "QA: ✅ glossary checked; kept 'deep work' untranslated.\nMEDIA:/tmp/review.pdf"
@@ -265,7 +237,6 @@ def test_notes_are_stored_beside_the_translation_not_in_it(tmp_path: Path) -> No
     )
     view = service.get_section_translation(workspace, "deep-work", "deep-work.a", "vi")
 
-    # The side channel is not hygiene-checked: it is where diagnostics belong.
     assert view.status == "fresh"
     assert view.notes == notes
     assert view.content == "# Bản dịch\n"

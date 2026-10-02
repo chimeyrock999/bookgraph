@@ -20,9 +20,8 @@ convention into a registry a workflow can query:
 The body file is the deliverable. A write removes any previous sidecar, then writes the
 body, then the new sidecar, so a crash (or a racing writer) mid-write leaves at worst an
 ``untracked`` body — never a sidecar vouching for a body it does not describe; the body
-hash check backs this up. A body carrying job diagnostics (delivery markers, progress
-footers) is refused at write time; remarks about a translation go in the sidecar's
-``notes``. See ``docs/cli/artifacts.md``.
+hash check backs this up. Remarks about a translation (QA results, terminology
+decisions) go in the sidecar's ``notes``, never in the body. See ``docs/cli/artifacts.md``.
 """
 
 from __future__ import annotations
@@ -36,7 +35,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from bookgraph.artifact_hygiene import ensure_clean_artifact
 from bookgraph.models import Section, SectionArtifact
 from bookgraph.utils import validate_slug_id
 from bookgraph.workspace import WorkspacePaths
@@ -139,15 +137,10 @@ def write_translation(
     Overwrites any previous translation of the same section/lang: the registry is a
     cache, and the newest translation of the current content is the one to keep.
 
-    The body must be publication-clean book content: a delivery marker, progress
-    footer, export status label, or absolute asset link raises
-    :class:`~bookgraph.artifact_hygiene.ArtifactHygieneError` before anything is
-    written (see :mod:`bookgraph.artifact_hygiene`). Anything about the translation
-    that is not book content (QA results, terminology notes) goes in ``notes``, which
-    is stored in the sidecar only and is not checked.
+    ``content`` is the book content only; anything about the translation that is not
+    (QA results, terminology notes) goes in ``notes``, stored in the sidecar only.
     """
 
-    ensure_clean_artifact(content, "translation")
     paths = translation_paths(workspace, lang, section.doc_id, section.id)
     artifact = SectionArtifact(
         type="translation",

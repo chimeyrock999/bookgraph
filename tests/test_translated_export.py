@@ -11,7 +11,6 @@ from bookgraph.exports.models import (
     ASSET_MISSING,
     ASSET_REMOTE,
     ASSET_UNSUPPORTED,
-    TRANSLATION_CONTAMINATED,
     TRANSLATION_EMPTY,
     TRANSLATION_MISSING_ASSETS,
     TRANSLATION_STALE,
@@ -273,15 +272,6 @@ def test_broken_remote_and_escaping_image_links_are_reported_not_embedded(
     assert by_ref[str(outside)] == ASSET_MISSING
     assert by_ref["notes.txt"] == ASSET_UNSUPPORTED
     assert export.report.sections[0].assets_embedded == 1  # the absolute in-workspace path
-    # Absolute links still render, but are reported like the batch boundary sees them.
-    contaminated = [
-        w.reference for w in export.report.warnings if w.code == TRANSLATION_CONTAMINATED
-    ]
-    # Excerpts are capped at 120 characters, and temp paths can be longer.
-    assert [ref[:20] for ref in contaminated if ref] == [
-        f"![absolute]({outside})"[:20],
-        f"![ok]({fig})"[:20],
-    ]
     assert export.report.sections[0].assets_missing == 5
     assert 'src="https://' not in export.html
     assert f'src="{outside}"' not in export.html
@@ -767,50 +757,3 @@ def test_body_that_exists_but_cannot_be_read_is_unreadable(workspace: WorkspaceP
     with pytest.raises(UntranslatedSectionsError) as excinfo:
         build_translated_export(workspace, DOC, lang="vi", fallback="fail")
     assert excinfo.value.report.untranslated == [chapter]
-
-
-def test_leaked_job_diagnostics_are_dropped_from_the_page_and_reported(
-    workspace: WorkspacePaths, tmp_path: Path
-) -> None:
-    chapter, _, _ = _section_ids(workspace)
-    # Leaks observed in real DDIA artifacts, written by path convention.
-    _translate(
-        workspace,
-        chapter,
-        "# Chương Một\n\nPhần mở đầu.\n\n"
-        "Missing asset: images/hinh-1.png\n"
-        "MEDIA:/Users/me/ws/exports/tiny.vi-progress.pdf\n\n"
-        "Đoạn hai.\n\n"
-        "✅ Đã lưu cache/enrich và mark read: tiny.chapter-one\n",
-    )
-
-    export = build_translated_export(workspace, DOC, lang="vi", generated_at=GENERATED_AT)
-
-    html = export.html
-    assert "Phần mở đầu." in html and "Đoạn hai." in html
-    for leak in ("Missing asset", "MEDIA:", "Đã lưu cache", "mark read"):
-        assert leak not in html
-    contaminated = [w for w in export.report.warnings if w.code == TRANSLATION_CONTAMINATED]
-    assert [w.reference for w in contaminated] == [
-        "Missing asset: images/hinh-1.png",
-        "MEDIA:/Users/me/ws/exports/tiny.vi-progress.pdf",
-        "✅ Đã lưu cache/enrich và mark read: tiny.chapter-one",
-    ]
-    assert {w.section_id for w in contaminated} == {chapter}
-    # The artifact still needs a clean rewrite: ``--strict`` refuses it.
-    with pytest.raises(ExportError, match="strict mode"):
-        write_translated_export(export, tmp_path / "out.html", HtmlRenderer(), strict=True)
-
-
-def test_translation_of_only_diagnostics_falls_back_as_empty(workspace: WorkspacePaths) -> None:
-    chapter, _, _ = _section_ids(workspace)
-    _translate(workspace, chapter, "MEDIA:/tmp/x.pdf\nĐã lưu cache/enrich và mark read: x\n")
-
-    export = build_translated_export(workspace, DOC, lang="vi", generated_at=GENERATED_AT)
-
-    assert export.report.sections[0].source == "original"
-    assert _codes(export.report, chapter) == [
-        TRANSLATION_CONTAMINATED,
-        TRANSLATION_CONTAMINATED,
-        TRANSLATION_EMPTY,
-    ]

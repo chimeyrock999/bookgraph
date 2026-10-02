@@ -40,11 +40,30 @@ from bookgraph.mcp.service import (
 )
 from bookgraph.workspace import WorkspacePaths
 
+# Sent to every client at connect time, before any tool is called: the rules a reading
+# or translation agent must follow so its artifacts stay reusable book content.
+SERVER_INSTRUCTIONS = """\
+BookGraph serves books section by section. Artifacts you write (translations, annotation
+summaries and glosses) are reused by later runs and printed in reading PDFs, so they
+hold book content only. Keep the channels separate:
+- translated headings/prose/tables/figures -> write_section_translation(content=...);
+  link each figure/table by its AssetRef.link (relative), never by its absolute path;
+- QA/checker results, terminology decisions, doubts about the source ->
+  write_section_translation(notes=...), stored beside the translation, never exported;
+- MEDIA:/path delivery markers, "saved cache / marked read" progress lines, job status
+  -> your final chat reply only;
+- export coverage/freshness/missing-asset status -> the export's .report.json; never
+  copy labels such as (original), (untracked) or "Missing asset:" into a translation.
+Write translations only through write_section_translation, never as files under
+translations/. After a batch that translated or annotated, advance with
+complete_reading_batch (it verifies the work) instead of mark_read.
+"""
+
 
 def build_server(workspace: WorkspacePaths) -> FastMCP:
     """Build a FastMCP server whose tools read/query a single workspace."""
 
-    mcp: FastMCP = FastMCP("bookgraph")
+    mcp: FastMCP = FastMCP("bookgraph", instructions=SERVER_INSTRUCTIONS)
 
     @mcp.tool
     def get_next_section(
@@ -137,7 +156,6 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
         inspected_assets: list[str] | None = None,
         translation_lang: str | None = None,
         artifacts: list[str] | None = None,
-        clean_artifacts: bool = False,
         stop_at_boundary: bool = False,
         chapter_level: int | None = None,
     ) -> ReadingBatchReport:
@@ -156,7 +174,6 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
             inspected_assets=inspected_assets or [],
             translation_lang=translation_lang,
             artifacts=artifacts or [],
-            clean_artifacts=clean_artifacts,
         )
         try:
             return reading_batch.validate_reading_batch(
@@ -180,7 +197,6 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
         inspected_assets: list[str] | None = None,
         translation_lang: str | None = None,
         artifacts: list[str] | None = None,
-        clean_artifacts: bool = False,
         stop_at_boundary: bool = False,
         chapter_level: int | None = None,
     ) -> ReadingBatchReport:
@@ -193,13 +209,8 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
         figure/table file was inspected — list their block ids in inspected_assets
         (require_assets); the cached translation for translation_lang exists and is not
         stale in the translation registry; and each artifacts path template exists ({doc_id},
-        {section_id}, {plan_id} expand). The annotation and the translation must also
-        be clean of job diagnostics (MEDIA: markers, cache/mark-read footers, export
-        labels, absolute asset paths); set clean_artifacts=True to hold
-        Markdown/text artifacts (e.g. a cache) to the same rule — leave it off for
-        run/QA logs, which legitimately contain such lines. If any
-        blocking issue is found, nothing is written: committed=false and issues lists
-        every reason to fix before retrying.
+        {section_id}, {plan_id} expand). If any blocking issue is found, nothing is
+        written: committed=false and issues lists every reason to fix before retrying.
         section_ids defaults to the plan's current batch, resolved exactly like
         get_next_section: if you read with stop_at_boundary=True (and a chapter_level),
         pass the same values here so sections past the chapter boundary are not marked.
@@ -212,7 +223,6 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
             inspected_assets=inspected_assets or [],
             translation_lang=translation_lang,
             artifacts=artifacts or [],
-            clean_artifacts=clean_artifacts,
         )
         try:
             return reading_batch.complete_reading_batch(
@@ -378,8 +388,8 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
         (null) to leave the section's auto concepts untouched (e.g. a summary-only
         annotation); pass [] to prune the section's concepts; pass a list to replace
         them with the agent's authoritative set. Summary and glosses are book
-        explanation only: progress footers, MEDIA: markers, export labels and absolute
-        asset paths are refused.
+        explanation only — keep progress, QA results and MEDIA: markers in your chat
+        reply.
         """
 
         try:
@@ -429,11 +439,10 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
         includes_assets=True when the translation carries the section's figures/
         tables. Pass source_section_hash (the current_section_hash you saw) to refuse
         the write if the section changed while you were translating. content is the
-        translated book content only. Put QA/checker results, terminology decisions and
-        any other remarks in notes (stored beside the translation, never in it); keep
-        MEDIA: markers and progress lines for your chat reply. A content carrying
-        MEDIA: markers, cache/mark-read footers, export status labels, or absolute asset
-        paths (link parsed assets relatively) is refused.
+        translated book content only: link each figure/table by its AssetRef.link
+        (relative), never its absolute path. Put QA/checker results, terminology
+        decisions and any other remarks in notes (stored beside the translation, never
+        in it); keep MEDIA: markers and progress lines for your final chat reply.
         """
 
         try:

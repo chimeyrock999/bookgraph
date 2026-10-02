@@ -411,3 +411,66 @@ def test_get_section_tree_windows_siblings_in_a_flat_document(tmp_path: Path) ->
 def test_get_section_tree_rejects_negative_sibling_window(tmp_path: Path) -> None:
     with pytest.raises(ReadingServiceError, match="sibling_window"):
         service.get_section_tree(_workspace(tmp_path), "doc", "doc.ch-1", sibling_window=-1)
+
+
+def _parts_workspace(tmp_path: Path, completed: list[str]) -> WorkspacePaths:
+    """Two level-1 parts, each wrapping level-2 chapters with level-3 sections."""
+
+    layout = [
+        ("pt.part-1", "Part I", 1),
+        ("pt.ch-1", "Chapter 1", 2),
+        ("pt.s-1-1", "Section 1.1", 3),
+        ("pt.ch-2", "Chapter 2", 2),
+        ("pt.part-2", "Part II", 1),
+        ("pt.ch-3", "Chapter 3", 2),
+    ]
+    workspace = WorkspacePaths(tmp_path)
+    write_sections(
+        [
+            Section(id=sid, doc_id="pt", title=title, level=level, heading_path=[title],
+                    text="x")
+            for sid, title, level in layout
+        ],
+        workspace.sources_sections / "pt",
+    )
+    write_reading_plan(
+        ReadingPlan(
+            plan_id="pt", doc_id="pt", section_ids=[sid for sid, _, _ in layout],
+            completed=completed,
+        ),
+        workspace.reading_plans_root / "pt.json",
+    )
+    return workspace
+
+
+def test_get_chapter_outline_parts_layout_scopes_to_the_chapter(tmp_path: Path) -> None:
+    workspace = _parts_workspace(tmp_path, completed=["pt.part-1", "pt.ch-1"])
+
+    chapter = service.get_chapter_outline(workspace, "pt", chapter_level=2)
+
+    assert chapter.current_section_id == "pt.s-1-1"
+    assert chapter.chapter is not None and chapter.chapter.id == "pt.ch-1"
+    assert [node.id for node in chapter.nodes] == ["pt.ch-1", "pt.s-1-1"]
+    assert (chapter.completed, chapter.remaining, chapter.total) == (1, 1, 2)
+
+    # Without chapter_level the outermost ancestor (the part) is the scope.
+    by_part = service.get_chapter_outline(workspace, "pt")
+    assert by_part.chapter is not None and by_part.chapter.id == "pt.part-1"
+    assert by_part.total == 4
+
+
+def test_get_chapter_outline_part_being_read_is_its_own_scope(tmp_path: Path) -> None:
+    # Part II is the next unread section and is shallower than chapter_level, so it
+    # is a wrapper: the scope is its own section, not the whole part.
+    workspace = _parts_workspace(
+        tmp_path, completed=["pt.part-1", "pt.ch-1", "pt.s-1-1", "pt.ch-2"]
+    )
+
+    chapter = service.get_chapter_outline(workspace, "pt", chapter_level=2)
+
+    assert chapter.current_section_id == "pt.part-2"
+    assert chapter.chapter is not None and chapter.chapter.id == "pt.part-2"
+    assert [node.id for node in chapter.nodes] == ["pt.part-2"]
+    assert chapter.truncated is False
+    assert (chapter.completed, chapter.remaining, chapter.total) == (0, 1, 1)
+    assert chapter.nodes[0].child_ids == ["pt.ch-3"]

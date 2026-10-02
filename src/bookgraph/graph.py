@@ -145,16 +145,24 @@ def chapter_span(
     The chapter comes from :func:`resolve_chapter`; its members are the chapter and the
     contiguous run of strictly deeper sections after it (mirroring how
     :func:`build_section_graph` assigns parents), and ``boundary`` is the first section
-    past that run (``None`` at the end of the document). One exception: while a lone
-    book-title root is itself being read (and no ``chapter_level`` is given), the scope
-    is the root's own section only, with its first child as the boundary — so the first
-    reading tick of a book-rooted document does not span the whole book.
+    past that run (``None`` at the end of the document). One exception: while a
+    wrapper heading is itself being read, the scope is that heading's own section only,
+    with its first child as the boundary — so a tick never spans a whole book or part.
+    A wrapper is a lone book-title root when no ``chapter_level`` is given, or any
+    heading shallower than ``chapter_level`` (e.g. a part with ``chapter_level=2``).
     """
 
     chapter = resolve_chapter(nodes, section_id, chapter_level=chapter_level)
     start = next(index for index, node in enumerate(nodes) if node.id == chapter.id)
     end = start + 1
-    if not (chapter_level is None and _is_lone_root(nodes, chapter)):
+    # A wrapper heading that is itself being read spans only its own section: a lone
+    # book-title root by default, or (with ``chapter_level``) any heading shallower than
+    # the chapter level, such as a part. The ``chapter.id == section_id`` guard keeps a
+    # deeper section under a level jump (``part(1) > sec(3)``) in the part's subtree.
+    wrapper_being_read = chapter.id == section_id and (
+        _is_lone_root(nodes, chapter) if chapter_level is None else chapter.level < chapter_level
+    )
+    if not wrapper_being_read:
         while end < len(nodes) and nodes[end].level > chapter.level:
             end += 1
     return ChapterSpan(

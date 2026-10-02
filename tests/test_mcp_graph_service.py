@@ -455,3 +455,103 @@ def test_empty_annotation_removes_concepts_after_rebuild(tmp_path: Path) -> None
     SqliteIndexBackend().build_document(workspace, "ddia", "DDIA", _sections())
 
     assert service.get_context(workspace, "ddia", "ddia.ch-1").concepts == []
+
+
+def _ddia_plan(workspace: WorkspacePaths, *completed: str, daily_sections: int = 3) -> None:
+    service.create_plan(workspace, "ddia", daily_sections=daily_sections)
+    for section_id in completed:
+        service.mark_read(workspace, "ddia", section_id)
+
+
+def test_get_plan_progress_reports_the_current_chapter_and_boundary(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    _ddia_plan(workspace, "ddia.part-1")
+
+    progress = service.get_plan_progress(workspace, "ddia")
+
+    assert progress.plan_id == "ddia"
+    assert (progress.completed, progress.total, progress.remaining) == (1, 4, 3)
+    assert progress.current_section_id == "ddia.ch-1"
+    chapter = progress.chapter
+    assert chapter is not None
+    assert (chapter.section.id, chapter.section.title, chapter.section.level) == (
+        "ddia.part-1",
+        "Part I",
+        1,
+    )
+    assert (chapter.completed, chapter.remaining, chapter.total) == (1, 2, 3)
+    assert chapter.next_boundary is not None
+    assert chapter.next_boundary.title == "Part II"
+    # the next batch stops at the boundary even though daily_sections is 3
+    assert [ref.id for ref in progress.next_sections] == ["ddia.ch-1", "ddia.ch-2"]
+
+
+def test_get_plan_progress_scopes_to_a_chapter_level(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    _ddia_plan(workspace, "ddia.part-1")
+
+    progress = service.get_plan_progress(workspace, "ddia", chapter_level=2)
+
+    assert progress.chapter is not None
+    assert progress.chapter.section.id == "ddia.ch-1"
+    assert progress.chapter.remaining == 1
+    assert progress.chapter.next_boundary is not None
+    assert progress.chapter.next_boundary.id == "ddia.ch-2"
+    assert [ref.id for ref in progress.next_sections] == ["ddia.ch-1"]
+
+
+def test_get_plan_progress_for_a_finished_plan(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    _ddia_plan(workspace, "ddia.part-1", "ddia.ch-1", "ddia.ch-2", "ddia.part-2")
+
+    progress = service.get_plan_progress(workspace, "ddia")
+
+    assert progress.done
+    assert progress.chapter is None
+    assert progress.next_sections == []
+
+
+def test_get_plan_progress_rejects_a_bad_chapter_level(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    _ddia_plan(workspace)
+
+    with pytest.raises(ReadingServiceError, match="chapter_level"):
+        service.get_plan_progress(workspace, "ddia", chapter_level=0)
+
+
+def test_get_next_section_carries_chapter_progress(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    _ddia_plan(workspace, "ddia.part-1")
+
+    nxt = service.get_next_section(workspace, "ddia")
+
+    # without stop_at_boundary the batch crosses into Part II as before
+    assert [s.id for s in nxt.sections] == ["ddia.ch-1", "ddia.ch-2", "ddia.part-2"]
+    assert nxt.chapter is not None
+    assert nxt.chapter.section.id == "ddia.part-1"
+    assert nxt.chapter.remaining == 2
+
+
+def test_get_next_section_can_stop_at_the_chapter_boundary(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    _ddia_plan(workspace, "ddia.part-1")
+
+    nxt = service.get_next_section(workspace, "ddia", stop_at_boundary=True)
+
+    assert [s.id for s in nxt.sections] == ["ddia.ch-1", "ddia.ch-2"]
+    assert nxt.remaining == 3
+
+    by_chapter = service.get_next_section(
+        workspace, "ddia", stop_at_boundary=True, chapter_level=2
+    )
+    assert [s.id for s in by_chapter.sections] == ["ddia.ch-1"]
+
+
+def test_get_next_section_has_no_chapter_when_done(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    _ddia_plan(workspace, "ddia.part-1", "ddia.ch-1", "ddia.ch-2", "ddia.part-2")
+
+    nxt = service.get_next_section(workspace, "ddia")
+
+    assert nxt.done
+    assert nxt.chapter is None

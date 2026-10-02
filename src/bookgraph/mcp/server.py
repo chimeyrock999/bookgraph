@@ -18,6 +18,7 @@ from bookgraph.mcp import reading_batch, service
 from bookgraph.mcp.reading_batch import BatchRequirements, IndexPolicy, ReadingBatchReport
 from bookgraph.mcp.service import (
     AnnotationResult,
+    ChapterOutline,
     ConceptInput,
     ConceptView,
     CreatedPlan,
@@ -26,10 +27,14 @@ from bookgraph.mcp.service import (
     NextSection,
     Outline,
     PlanList,
+    PlanProgress,
     ReadingServiceError,
     RelatedSections,
     SearchResult,
+    SectionArtifactList,
+    SectionArtifactView,
     SectionContext,
+    SectionTree,
     SectionView,
 )
 from bookgraph.workspace import WorkspacePaths
@@ -41,16 +46,52 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
     mcp: FastMCP = FastMCP("bookgraph")
 
     @mcp.tool
-    def get_next_section(plan_id: str, include_assets: bool = True) -> NextSection:
+    def get_next_section(
+        plan_id: str,
+        include_assets: bool = True,
+        stop_at_boundary: bool = False,
+        chapter_level: int | None = None,
+    ) -> NextSection:
         """Return the next unread sections for a reading plan, with full content.
 
         With ``include_assets`` (default) each section carries its structured figure/table
         ``assets``; set it false to skip asset resolution when reading for prose only.
         Each section also carries its data-quality ``warnings`` (see ``get_section``).
+
+        ``chapter`` reports progress within the chapter holding the next unread section
+        (as ``get_plan_progress``). Pass ``stop_at_boundary=True`` to clip the batch at
+        the end of that chapter; ``chapter_level`` picks the chapter's heading level
+        (default: the top-level ancestor, skipping a lone book-title root; pass e.g. 2
+        when chapters sit under level-1 parts).
         """
 
         try:
-            return service.get_next_section(workspace, plan_id, include_assets)
+            return service.get_next_section(
+                workspace,
+                plan_id,
+                include_assets,
+                stop_at_boundary=stop_at_boundary,
+                chapter_level=chapter_level,
+            )
+        except ReadingServiceError as exc:
+            raise ToolError(str(exc)) from exc
+
+    @mcp.tool
+    def get_plan_progress(plan_id: str, chapter_level: int | None = None) -> PlanProgress:
+        """Report a plan's progress overall and within its current chapter.
+
+        Answers "how many sections are left in this chapter?" without fetching section
+        text or the full outline: the current chapter (heading of the next unread
+        section's scope), ``completed``/``remaining``/``total`` within it, the
+        ``next_boundary`` section that starts after it, and ``next_sections`` — the next
+        ``daily_sections`` batch clipped at that boundary. Counts are by membership, so
+        reset plans and skipped or out-of-order reads stay correct. ``chapter_level``
+        picks the chapter's heading level (default: the top-level ancestor, skipping a
+        lone book-title root; pass e.g. 2 when chapters sit under level-1 parts).
+        """
+
+        try:
+            return service.get_plan_progress(workspace, plan_id, chapter_level)
         except ReadingServiceError as exc:
             raise ToolError(str(exc)) from exc
 
@@ -168,11 +209,69 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
             raise ToolError(str(exc)) from exc
 
     @mcp.tool
-    def get_outline(doc_id: str) -> Outline:
-        """Return a document's section outline (heading hierarchy) in reading order."""
+    def get_outline(
+        doc_id: str, root_id: str | None = None, max_depth: int | None = None
+    ) -> Outline:
+        """Return a document's section outline (heading hierarchy) in reading order.
+
+        Full-book outlines can be very large; prefer a scoped call. ``root_id`` limits
+        the outline to that section's subtree; ``max_depth`` keeps that many tree levels
+        (1 = top-level sections only, or ``root_id`` alone; on a flat, all-top-level
+        document that is still every section, so check ``total_nodes``). ``truncated``
+        says whether deeper sections were cut off — drill in with ``root_id`` from a
+        node's ``child_ids``. For "where am I" questions, see ``get_section_tree`` and
+        ``get_chapter_outline``.
+        """
 
         try:
-            return service.get_outline(workspace, doc_id)
+            return service.get_outline(workspace, doc_id, root_id, max_depth)
+        except ReadingServiceError as exc:
+            raise ToolError(str(exc)) from exc
+
+    @mcp.tool
+    def get_section_tree(
+        doc_id: str,
+        section_id: str,
+        include_siblings: bool = True,
+        include_children: bool = True,
+        sibling_window: int | None = 10,
+    ) -> SectionTree:
+        """Return a small outline around one section: breadcrumb, siblings, children.
+
+        ``ancestors`` run root-first; ``siblings`` (the section itself included) are in
+        reading order, at most ``sibling_window`` on each side (null = all;
+        ``siblings_truncated`` says whether any were dropped). A cheap alternative to the
+        full ``get_outline``.
+        """
+
+        try:
+            return service.get_section_tree(
+                workspace, doc_id, section_id, include_siblings, include_children,
+                sibling_window,
+            )
+        except ReadingServiceError as exc:
+            raise ToolError(str(exc)) from exc
+
+    @mcp.tool
+    def get_chapter_outline(
+        plan_id: str, max_depth: int | None = 2, chapter_level: int | None = None
+    ) -> ChapterOutline:
+        """Return the outline of the chapter a reading plan is currently in.
+
+        The chapter is the outermost ancestor of the plan's next unread section (a lone
+        book-title root is skipped), or with ``chapter_level`` the nearest one at that
+        heading level or above (use 2 when chapters sit under parts). It always matches
+        ``get_plan_progress``. While such a wrapper heading (book root or part) is itself
+        the next unread section, it comes back alone (``total == 1``) — that is
+        expected, not a failed lookup. Each node carries a ``read``
+        flag; ``completed``/``remaining``/``total`` count the chapter, and
+        ``plan_completed``/``plan_total`` the whole plan. ``max_depth`` (default 2: the
+        chapter and its direct subsections; null = full subtree) limits the nodes as in
+        ``get_outline``.
+        """
+
+        try:
+            return service.get_chapter_outline(workspace, plan_id, max_depth, chapter_level)
         except ReadingServiceError as exc:
             raise ToolError(str(exc)) from exc
 
@@ -239,6 +338,76 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
             return service.annotate_section(
                 workspace, doc_id, section_id, concepts, summary, model
             )
+        except ReadingServiceError as exc:
+            raise ToolError(str(exc)) from exc
+
+    @mcp.tool
+    def get_section_translation(
+        doc_id: str, section_id: str, lang: str, include_content: bool = True
+    ) -> SectionArtifactView:
+        """Return a section's cached translation (e.g. lang='vi') and its freshness.
+
+        Check this before translating a section. ``status`` is 'fresh' (reuse
+        ``content`` as-is), 'stale' (the section changed since — retranslate),
+        'untracked' (a cached file with no registry record — freshness unknown), or
+        'missing' (translate it). Reuse only when status is 'fresh' AND
+        (includes_assets or not section_has_assets): a fresh prose-only translation of
+        a section with figures/tables is incomplete. Pass
+        ``current_section_hash`` back to write_section_translation to pin your write.
+        """
+
+        try:
+            return service.get_section_translation(
+                workspace, doc_id, section_id, lang, include_content
+            )
+        except ReadingServiceError as exc:
+            raise ToolError(str(exc)) from exc
+
+    @mcp.tool
+    def write_section_translation(
+        doc_id: str,
+        section_id: str,
+        lang: str,
+        content: str,
+        includes_assets: bool = False,
+        model: str | None = None,
+        source_section_hash: str | None = None,
+    ) -> SectionArtifactView:
+        """Cache a section translation (Markdown) and register it as fresh.
+
+        Writes translations/<lang>/<doc_id>/<section_id>.md plus a registry record of
+        the section content it was made from, replacing any earlier translation. Set
+        includes_assets=True when the translation carries the section's figures/
+        tables. Pass source_section_hash (the current_section_hash you saw) to refuse
+        the write if the section changed while you were translating.
+        """
+
+        try:
+            return service.write_section_translation(
+                workspace,
+                doc_id,
+                section_id,
+                lang,
+                content,
+                includes_assets,
+                model,
+                source_section_hash,
+            )
+        except ReadingServiceError as exc:
+            raise ToolError(str(exc)) from exc
+
+    @mcp.tool
+    def list_section_artifacts(
+        doc_id: str | None = None, lang: str | None = None, type: str = "translation"
+    ) -> SectionArtifactList:
+        """List cached section translations with their freshness (no bodies).
+
+        Filter by doc_id and/or lang. Use it to find 'stale' translations to redo, or
+        'orphaned' ones whose section no longer exists after re-segmenting.
+        """
+
+        try:
+            return service.list_section_artifacts(workspace, doc_id, lang, type)
         except ReadingServiceError as exc:
             raise ToolError(str(exc)) from exc
 

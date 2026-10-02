@@ -51,17 +51,23 @@ def test_build_server_registers_the_reading_and_query_tools(tmp_path: Path) -> N
         "annotate_section",
         "complete_reading_batch",
         "create_plan",
+        "get_chapter_outline",
         "get_concept",
         "get_context",
         "get_next_section",
         "get_outline",
+        "get_plan_progress",
         "get_related",
         "get_section",
+        "get_section_translation",
+        "get_section_tree",
         "list_documents",
         "list_plans",
+        "list_section_artifacts",
         "mark_read",
         "search",
         "validate_reading_batch",
+        "write_section_translation",
     ]
 
 
@@ -105,6 +111,17 @@ def test_complete_reading_batch_tool_blocks_then_commits(tmp_path: Path) -> None
     assert done.structured_content["committed"] is True
     assert done.structured_content["done"] is True
     assert done.structured_content["index_rebuild_needed"] is True
+def test_get_plan_progress_tool_reports_chapter_progress(tmp_path: Path) -> None:
+    server = build_server(_workspace(tmp_path))
+
+    result = asyncio.run(server.call_tool("get_plan_progress", {"plan_id": "daily"}))
+
+    payload = result.structured_content
+    assert payload["remaining"] == 1
+    assert payload["chapter"]["section"]["id"] == "deep-work.a"
+    assert payload["chapter"]["remaining"] == 1
+    assert payload["chapter"]["next_boundary"] is None
+    assert [ref["id"] for ref in payload["next_sections"]] == ["deep-work.a"]
 
 
 def test_search_tool_ranks_sections(tmp_path: Path) -> None:
@@ -127,3 +144,58 @@ def test_get_context_tool_returns_section_with_neighbourhood(tmp_path: Path) -> 
     assert payload["section"]["text"] == "hello world"
     assert payload["related"]["section_id"] == "deep-work.a"
     assert payload["related"]["parent"] is None
+
+
+def test_get_outline_tool_accepts_scope_options(tmp_path: Path) -> None:
+    server = build_server(_workspace(tmp_path))
+
+    result = asyncio.run(
+        server.call_tool(
+            "get_outline", {"doc_id": "deep-work", "root_id": "deep-work.a", "max_depth": 1}
+        )
+    )
+
+    payload = result.structured_content
+    assert [node["id"] for node in payload["nodes"]] == ["deep-work.a"]
+    assert payload["root_id"] == "deep-work.a"
+
+
+def test_scoped_outline_tools_return_section_tree_and_chapter(tmp_path: Path) -> None:
+    server = build_server(_workspace(tmp_path))
+
+    tree = asyncio.run(
+        server.call_tool("get_section_tree", {"doc_id": "deep-work", "section_id": "deep-work.a"})
+    ).structured_content
+    assert tree["section"]["id"] == "deep-work.a"
+    assert [ref["id"] for ref in tree["siblings"]] == ["deep-work.a"]
+
+    chapter = asyncio.run(
+        server.call_tool("get_chapter_outline", {"plan_id": "daily"})
+    ).structured_content
+    assert chapter["current_section_id"] == "deep-work.a"
+    assert [node["read"] for node in chapter["nodes"]] == [False]
+    assert (chapter["completed"], chapter["total"], chapter["plan_total"]) == (0, 1, 1)
+
+
+def test_translation_tools_round_trip_through_the_cache(tmp_path: Path) -> None:
+    server = build_server(_workspace(tmp_path))
+    key = {"doc_id": "deep-work", "section_id": "deep-work.a", "lang": "vi"}
+
+    missing = asyncio.run(server.call_tool("get_section_translation", key)).structured_content
+    asyncio.run(
+        server.call_tool(
+            "write_section_translation",
+            {
+                **key,
+                "content": "xin chào thế giới",
+                "source_section_hash": missing["current_section_hash"],
+            },
+        )
+    )
+    cached = asyncio.run(server.call_tool("get_section_translation", key)).structured_content
+    listing = asyncio.run(server.call_tool("list_section_artifacts", {})).structured_content
+
+    assert missing["status"] == "missing"
+    assert cached["status"] == "fresh"
+    assert cached["content"] == "xin chào thế giới"
+    assert [a["status"] for a in listing["artifacts"]] == ["fresh"]

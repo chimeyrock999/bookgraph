@@ -10,6 +10,7 @@ from bookgraph.cli._config import load_config
 from bookgraph.cli._shared import _validate_id
 from bookgraph.models import ReadingPlan
 from bookgraph.reading_plans import (
+    chapter_progress,
     create_reading_plan,
     list_plan_progress,
     mark_section_read,
@@ -135,6 +136,51 @@ def reading_plan_next(
     typer.echo(f"doc_id: {pack.doc_id}")
     typer.echo(f"next: {', '.join(pack.sections) if pack.sections else '(complete)'}")
     typer.echo(f"remaining: {pack.remaining}")
+
+
+@reading_plan_app.command("progress")
+def reading_plan_progress(
+    workspace_path: Annotated[Path, typer.Argument(help="BookGraph workspace/output root path.")],
+    plan_id: Annotated[str, typer.Argument(help="Reading plan id.")],
+    chapter_level: Annotated[
+        int | None,
+        typer.Option(
+            "--chapter-level",
+            help=(
+                "Heading level of the chapter scope; defaults to the top-level ancestor, "
+                "skipping a lone book-title root."
+            ),
+        ),
+    ] = None,
+) -> None:
+    """Print progress within the chapter holding the next unread section."""
+
+    workspace = WorkspacePaths(workspace_path.expanduser().resolve())
+    resolved_plan_id = _validate_id(plan_id, "plan_id")
+    _, plan = _load_plan(workspace, resolved_plan_id)
+    manifest = workspace.sources_sections / plan.doc_id / "sections.jsonl"
+    try:
+        progress = chapter_progress(plan, read_sections(manifest), chapter_level=chapter_level)
+    except (OSError, ValueError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+    typer.echo(f"plan_id: {progress.plan_id}")
+    typer.echo(f"doc_id: {progress.doc_id}")
+    total = len(plan.section_ids)
+    typer.echo(f"completed: {total - progress.remaining}/{total}")
+    if progress.chapter_id is None:
+        typer.echo("chapter: (complete)")
+        return
+    typer.echo(f"chapter: {progress.chapter_title} ({progress.chapter_id})")
+    typer.echo(f"chapter_progress: {progress.completed_in_chapter}/{progress.total_in_chapter}")
+    typer.echo(f"remaining_in_chapter: {progress.remaining_in_chapter}")
+    typer.echo(f"next: {', '.join(progress.next_section_ids)}")
+    boundary = (
+        f"{progress.next_boundary_title} ({progress.next_boundary_id})"
+        if progress.next_boundary_id is not None
+        else "(end of document)"
+    )
+    typer.echo(f"next_boundary: {boundary}")
 
 
 @reading_plan_app.command("mark-read")

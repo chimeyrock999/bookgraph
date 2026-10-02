@@ -268,8 +268,10 @@ stage's output.
   `sections_fts`, ranked by `bm25`. When `doc_id` is given, results are filtered
   to that document; when omitted, `search` ranks across **every** indexed document
   (cross-document search) and each hit carries its `doc_id`.
-- **`get_outline` / `get_related` / `get_context`**: read `section_graph` for the
-  requested `doc_id`, reconstructing children via the `parent_id` inverse.
+- **`get_outline` / `get_related` / `get_context`** (and the scoped `get_section_tree` /
+  `get_chapter_outline`): read `section_graph` for the
+  requested `doc_id`, reconstructing children via the `parent_id` inverse. Scoping
+  (`root_id` / `max_depth`) is applied to the loaded graph in the service, not in SQL.
   `get_context` additionally returns the section's own concepts (from
   `concept_mentions`, each with its cross-book `doc_count` / `mention_count` plus the
   per-mention `gloss` / `source`) so a reader can pivot from the current section into

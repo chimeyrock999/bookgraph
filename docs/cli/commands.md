@@ -388,6 +388,57 @@ remaining: <unread_count>
 
 `next` returns up to `daily_sections` unread section ids, in reading order.
 
+### `bookgraph reading-plan progress`
+
+Print progress within the chapter that holds the next unread section, without
+mutating the plan.
+
+```bash
+bookgraph reading-plan progress /path/to/workspace <plan_id>
+bookgraph reading-plan progress /path/to/workspace <plan_id> --chapter-level 2
+```
+
+#### Inputs
+
+- `workspace_path`: workspace/output root.
+- `plan_id`: existing reading plan id (fails if the plan file is missing).
+- `--chapter-level`: heading level of the chapter scope. The chapter is the nearest
+  ancestor-or-self of the next unread section whose `level` is at most this value
+  (e.g. `2` for chapters nested under level-1 parts). Must be at least `1`.
+  Defaults to the top-level ancestor; when the document has a single top-level
+  heading (a `# Book Title` above every chapter, common for Markdown/EPUB), that
+  lone root is skipped one level down so the scope is the chapter, not the whole
+  book. Pass `--chapter-level` explicitly for part/chapter books or deeper wrappers.
+  While a wrapper heading is itself the next unread section, the scope is that
+  heading's own section only and the boundary is its first child, so a tick never
+  spans a whole book or part. A wrapper is the lone root by default (day 1 of a
+  fresh plan), or, with `--chapter-level`, any heading shallower than that level
+  (e.g. a part heading with `--chapter-level 2`). A deeper section under a level jump
+  (`part(1) > sec(3)` with `--chapter-level 2`) still belongs to the part's span.
+
+#### Writes
+
+- None. `progress` is read-only.
+
+#### Prints
+
+```text
+plan_id: <plan_id>
+doc_id: <doc_id>
+completed: <completed_count>/<section_count>
+chapter: <chapter_title> (<chapter_section_id>)     # or "(complete)" and stop
+chapter_progress: <completed_in_chapter>/<total_in_chapter>
+remaining_in_chapter: <unread_in_chapter>
+next: <section_id>[, <section_id> ...]     # next daily batch, clipped at the boundary
+next_boundary: <title> (<section_id>)      # or "(end of document)"
+```
+
+The hierarchy is derived from `sections.jsonl` exactly as `get_outline` derives it.
+Counts are by **membership** in the chapter's subtree and in the plan, not by
+position, so they stay correct after a plan reset, skipped front matter (sections
+marked read up front), or out-of-order `mark-read` calls. Front-matter sections
+that are their own top-level headings are their own "chapter" until read.
+
 ### `bookgraph reading-plan mark-read`
 
 Mark a section read and persist the updated plan.
@@ -566,8 +617,9 @@ bookgraph index concepts /path/to/workspace
 
 Serve a workspace over MCP (stdio transport) so a reading client/agent can query
 sections and drive a reading plan. All tools are read-mostly; only `mark_read`,
-`complete_reading_batch`, and `create_plan` write reading-plan state, and
-`annotate_section` writes a Tier-2 annotation artifact.
+`complete_reading_batch`, and `create_plan` write reading-plan state,
+`annotate_section` writes a Tier-2 annotation artifact, and
+`write_section_translation` writes a cached translation.
 
 ```bash
 uv sync --extra mcp
@@ -584,10 +636,24 @@ telling the user to `uv sync --extra mcp`.
 
 ### Tools
 
-- `get_next_section(plan_id, include_assets=True)` → the next
-  up-to-`daily_sections` unread sections for a plan, each shaped exactly as
-  `get_section` returns it (full text, provenance, `<section_id>.md` path,
-  `assets`, `warnings`), plus `remaining` and `done`.
+- `get_next_section(plan_id, include_assets=True, stop_at_boundary=False,
+  chapter_level=None)` → the next up-to-`daily_sections` unread sections for a
+  plan, each shaped exactly as `get_section` returns it (full text, provenance,
+  `<section_id>.md` path, `assets`, `warnings`), plus `remaining`, `done`, and
+  `chapter` (as in `get_plan_progress`; `null` when done). `stop_at_boundary=True`
+  clips the batch at the end of the current chapter so a tick never spills into the
+  next one; `chapter_level` picks the chapter scope as below.
+- `get_plan_progress(plan_id, chapter_level=None)` → a plan's progress without any
+  section bodies: `completed`, `total`, `remaining`, `done`, `current_section_id`
+  (the next unread section), `chapter` (`{section, completed, remaining, total,
+  next_boundary}`, where `section` and `next_boundary` are id/title/level refs and
+  `next_boundary` is `null` at the end of the document; `chapter` is `null` when the
+  plan is done), and `next_sections` — the next `daily_sections` batch as refs,
+  clipped at the boundary. The chapter is the top-level ancestor of the next unread
+  section by default (a lone book-title root is skipped one level down), or the
+  nearest ancestor-or-self with `level <= chapter_level`.
+  Counts are by membership, so plan resets, skipped front matter, and out-of-order
+  `mark_read` calls stay correct (same semantics as `bookgraph reading-plan progress`).
 - `get_section(doc_id, section_id, include_assets=True)` → one section's full
   reading content, its `<section_id>.md` path, its figure/table `assets` (each
   `{block_id, type, path, caption, order, page_idx, type_confidence,
@@ -616,9 +682,54 @@ telling the user to `uv sync --extra mcp`.
   title and text, with a short snippet. `doc_id` scopes to one document; omit it
   to search across every indexed document (cross-document search), each hit
   carrying its `doc_id`.
-- `get_outline(doc_id)` → the document's section outline (heading hierarchy) in
-  reading order: one node per section with `title`, `level`, `parent_id`, and
-  `child_ids`.
+- `get_outline(doc_id, root_id=None, max_depth=None)` → the document's section
+  outline (heading hierarchy) in reading order: one node per section with `title`,
+  `level`, `parent_id`, and `child_ids`. With no options it covers the whole
+  document, which can be very large for a real book. `root_id` scopes it to that
+  section's subtree (the section included). `max_depth` keeps that many **tree**
+  levels from the scope's top (`1` = top-level sections only, or `root_id` alone).
+  Depth follows the parent chain, not the heading `level`, so skipped levels don't
+  matter. The result also carries `root_id`, `total_nodes` (the document's full
+  section count), and `truncated` (whether `max_depth` cut deeper sections off).
+  Boundary nodes keep their full `child_ids`, so a client can drill in with
+  `root_id`. An unknown `root_id` or a `max_depth < 1` is an error. Note that on
+  a flat document (page/token fallback, every section top-level) `max_depth=1`
+  is still every section; `total_nodes` tells a client how large a level is.
+- `get_section_tree(doc_id, section_id, include_siblings=True,
+  include_children=True, sibling_window=10)` → a small outline around one
+  section: `section`, `ancestors` (root-first breadcrumb), `siblings` (the
+  parent's children in reading order, the section itself included; the
+  top-level sections for a top-level section), and direct `children`. Each
+  entry is an id/title/level reference. `siblings` keeps at most
+  `sibling_window` entries on each side of the section (`null` = all), and
+  `siblings_truncated` says whether any were dropped, so a flat document can't
+  turn this into the whole book.
+- `get_chapter_outline(plan_id, max_depth=2, chapter_level=None)` → the outline
+  of the chapter a reading plan is currently in (`current_section_id` = the
+  next unread section).
+  - The chapter and its span come from the shared `graph.chapter_span`, so they
+    always match `get_plan_progress`. By default the chapter is that section's
+    outermost ancestor-or-self, except that a lone top-level root (one
+    `# Book Title` heading above every chapter) is skipped one level down. With
+    `chapter_level`, it is the nearest ancestor-or-self whose heading `level` is
+    at most `chapter_level` (e.g. `2` for chapters under level-1 parts).
+  - The span is normally the chapter's whole subtree. The exception is a
+    wrapper heading that is itself the next unread section: then the span is
+    that heading's own section only, so a tick never spans a whole book or
+    part. A wrapper is the lone root by default, or, with `chapter_level`, any
+    heading shallower than that level. A deeper section under a level jump
+    (`part(1) > sec(3)`) still belongs to the part's span.
+  - Each node in the span carries a `read` flag. `nodes` contains only span
+    members, so a wrapper being read comes back alone; its `child_ids` still
+    point at its children.
+  - `completed` / `remaining` / `total` count the plan's sections in the
+    chapter's span, by membership, whatever `max_depth` is set to (a wrapper
+    being read counts as 1). `plan_completed` / `plan_total` are plan-wide.
+  - `max_depth` works as in `get_outline` and defaults to `2` (the chapter and
+    its direct subsections), so a chapter that turns out to be the whole book
+    stays small. Pass `null` for the full subtree.
+  - When the plan is done, `chapter` is null, `nodes` is empty, and the chapter
+    counts are zero.
 - `get_related(doc_id, section_id)` → a section's structural neighbours in the
   graph: `parent`, `prev`, `next`, and `children` (each a lightweight
   id/title/level reference).
@@ -647,6 +758,24 @@ telling the user to `uv sync --extra mcp`.
   via `get_context` immediately; the concept edges (and their prune of Tier-1 false
   positives) take effect on the next `bookgraph index build <doc_id>`. Returns the
   written `doc_id`, `section_id`, `concept_count`, and `path`.
+- `get_section_translation(doc_id, section_id, lang, include_content=True)` → the
+  section's cached translation and its freshness: `status` (`fresh` / `stale` /
+  `untracked` / `missing`, see `artifacts.md`), `path`, `metadata_path`,
+  `source_section_hash`, `current_section_hash`, `includes_assets`,
+  `section_has_assets` (whether the section owns any figure/table block), `model`,
+  `created_at`, and `content` (the body, unless `include_content=False`). A missing
+  translation is a normal result, not an error.
+- `write_section_translation(doc_id, section_id, lang, content, includes_assets=False,
+  model=None, source_section_hash=None)` → write
+  `translations/<lang>/<doc_id>/<section_id>.md` and its registry sidecar,
+  replacing any previous translation; returns the entry (status `fresh`, no
+  `content`). Empty `content` is rejected. When `source_section_hash` is given and
+  differs from the section's current hash the write is refused, so a translation of
+  outdated content is never registered as fresh.
+- `list_section_artifacts(doc_id=None, lang=None, type="translation")` → every
+  cached translation (filtered by `doc_id` / `lang`) with its status, including
+  `orphaned` ones whose section no longer exists; no bodies. Only
+  `type="translation"` exists.
 - `list_documents()` → the workspace's segmented documents, each with `doc_id`,
   `title` (from the parsed `document.json`, falling back to `doc_id`), and
   `section_count`. Lets an agent discover what there is to read before picking a
@@ -662,8 +791,8 @@ telling the user to `uv sync --extra mcp`.
   `completed`, `total`, and `done`. Lets an agent resume or track progress.
 
 Together `list_documents` → `create_plan` → `get_next_section`/`get_context` →
-`mark_read` (or `complete_reading_batch`) → `list_plans` let a client drive a full
-reading session without any CLI step (see `docs/mcp/reading-agent.md`).
+`mark_read` (or `complete_reading_batch`) → `list_plans`/`get_plan_progress` let a
+client drive a full reading session without any CLI step (see `docs/mcp/reading-agent.md`).
 
 ### Reading batch completion
 
@@ -737,9 +866,10 @@ returning a report.
 - `mark_read`, `complete_reading_batch`, and `create_plan` write
   `reading_plans/<plan_id>.json` (same contracts as `bookgraph reading-plan
   mark-read` / `create`; the file is replaced atomically, so a crash never leaves a
-  truncated plan); `annotate_section`
-  writes `annotations/<doc_id>/<section_id>.json` (see `annotations.md`). No other
-  tool writes.
+  truncated plan); `annotate_section` writes
+  `annotations/<doc_id>/<section_id>.json` (see `annotations.md`);
+  `write_section_translation` writes `translations/<lang>/<doc_id>/<section_id>.md`
+  + `.json` (see `artifacts.md`). No other tool writes.
 
 MCP tool inputs are client-controlled, so `plan_id` and `doc_id` are validated as
 filesystem-safe slugs before they are used as path components; a traversal value

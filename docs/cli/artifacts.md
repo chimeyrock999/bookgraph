@@ -502,6 +502,71 @@ The concept edges here are the authoritative set for that section and, on the ne
 prunes that section's mentions). See **`annotations.md`** for the field rules, the
 presence-based merge rule, and the `markdown-graph` non-goal.
 
+## `translations/<lang>/<doc_id>/<section_id>.md` + `.json`
+
+Owner: the MCP `write_section_translation` tool (`bookgraph.mcp.service` /
+`bookgraph.translations`). Read by `get_section_translation` and
+`list_section_artifacts`.
+
+A **cache of generated per-section translations** plus its registry. The `.md` body
+is the translation itself and keeps the path convention reading jobs already used;
+the `.json` sidecar beside it is the registry record, mirroring
+`bookgraph.models.SectionArtifact`:
+
+```json
+{
+  "type": "translation",
+  "lang": "vi",
+  "doc_id": "iceberg",
+  "section_id": "iceberg.table-format",
+  "path": "translations/vi/iceberg/iceberg.table-format.md",
+  "source_section_hash": "sha256:9f2c...",
+  "content_hash": "sha256:41ab...",
+  "includes_assets": true,
+  "model": "claude-...",
+  "created_at": "2026-10-02T00:00:00+00:00"
+}
+```
+
+- `lang`: a lowercase hyphenated tag (`vi`, `pt-br`); input is lowercased, so
+  `pt-BR` and `pt-br` name the same cache. Directories are always lowercase: a
+  mixed-case legacy directory (e.g. `translations/pt-BR/`) is not a valid `lang` and
+  is ignored by lookups and listings on case-sensitive filesystems — rename it to
+  lowercase to bring it into the registry.
+- `path`: the body, relative to the workspace root.
+- `source_section_hash`: `sha256:` over the section's `title` + `text` (canonical
+  JSON) at write time. Ids, page spans, and block ids are excluded, so a re-segment
+  that keeps the words keeps the translation fresh.
+- `content_hash`: `sha256:` over the body's UTF-8 bytes at write time. It binds the
+  sidecar to the body it describes: a body overwritten afterwards (a path-convention
+  writer, a manual edit) no longer matches and reads as `untracked`.
+- `includes_assets`: whether the writer carried the section's figures/tables into
+  the translation (declared by the writer, not inferred).
+
+Freshness is **derived, never stored**: each read recomputes the section's current
+hash and compares it with the sidecar.
+
+| `status` | Meaning |
+| --- | --- |
+| `fresh` | Body + matching sidecar; reuse as-is. |
+| `stale` | Body + sidecar, but the section's content changed since. |
+| `untracked` | Body with no valid sidecar for it (cached before the registry, a corrupt/misplaced sidecar, or a body whose hash no longer matches `content_hash`); freshness unknown. |
+| `missing` | No body (a sidecar without a body is ignored). |
+| `orphaned` | Body whose section (or whole document) no longer exists; reported by listing. |
+
+**Reuse rule.** `fresh` means the translation matches the section's current *text*;
+the hash does not cover assets, so a re-parse that newly stages a figure leaves a
+prose-only translation `fresh`. Reuse a translation as-is only when `status` is
+`fresh` **and** (`includes_assets` or not `section_has_assets`).
+
+Write order: remove the previous sidecar, write the body, then write the new sidecar,
+each via a same-directory temp file + fsync + rename (files take the process umask,
+not `mkstemp`'s 0600). A crash or a racing writer between the steps leaves an
+`untracked` body — never a sidecar describing a different body. A sidecar whose
+`lang`/`doc_id`/`section_id` disagrees with its location is ignored. Like
+annotations, the cache is **not** rebuildable from sources (regenerating it costs
+model calls), so `index build`, `segment`, and `wiki` never delete it.
+
 ## Future artifacts
 
 Do not implement these without updating this file.

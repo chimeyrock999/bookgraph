@@ -106,6 +106,14 @@ A self-serve agent drives an entire session with these tools alone:
      your judgment back** (see *The reinforcement loop* below): the real concepts of
      the section (each `{title, gloss}`, `slug` optional) and a prose summary. This is
      optional per section but is how the concept graph gets smarter over time.
+   - Translating for delivery? `get_section_translation(doc_id, section_id, lang)`
+     first: reuse `content` only when `status` is `fresh` **and** (`includes_assets`
+     or not `section_has_assets`) — `fresh` alone does not mean figures/tables were
+     carried over; otherwise translate the section
+     and cache it with `write_section_translation(..., content, includes_assets=...,
+     source_section_hash=<current_section_hash>)`.
+     `list_section_artifacts(doc_id, lang)` lists every cached translation with its
+     status, so a job can redo the `stale` ones after a re-segment.
    - `mark_read(plan_id)` — mark the section read (defaults to the next unread) and
      persist progress.
 4. `list_plans()` — resume or report progress across sessions (`completed`/`total`/`done`).
@@ -169,8 +177,10 @@ projects.
   is optional to read but is what sharpens the graph over time.
 - **Ingestion coverage:** documents without useful headings or PDF bookmarks can
   use the token/page fallback segmenter (`bookgraph segment --segmenter token-page`).
-- **Write surface:** only `create_plan` and `mark_read` write reading plans, and
-  `annotate_section` writes a per-section annotation artifact. Every other tool is
-  read-only. Client-supplied `doc_id`/`plan_id` are validated as filesystem-safe slugs
-  before use; `annotate_section`'s `section_id` (which contains a dot, so it is not a
-  bare slug) is validated by membership against the document's sections.
+- **Write surface:** only `create_plan` and `mark_read` write reading plans,
+  `annotate_section` writes a per-section annotation artifact, and
+  `write_section_translation` writes a cached translation + its registry sidecar.
+  Every other tool is read-only. Client-supplied `doc_id`/`plan_id`/`lang` are
+  validated as filesystem-safe slugs before use (`lang` is lowercased first); the
+  `section_id` of `annotate_section` and the translation tools (it contains a dot, so
+  it is not a bare slug) is validated by membership against the document's sections.

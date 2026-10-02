@@ -23,6 +23,7 @@ def test_init_creates_pluggable_project_layout(tmp_path: Path) -> None:
         "wiki/daily",
         "indexes",
         "annotations",
+        "translations",
         "reading_plans",
         "runs",
     ]
@@ -57,6 +58,7 @@ def test_paths_prints_all_workspace_output_locations(tmp_path: Path) -> None:
         "wiki.books",
         "indexes.root",
         "annotations.root",
+        "translations.root",
         "reading_plans.root",
         "runs.root",
     ]:

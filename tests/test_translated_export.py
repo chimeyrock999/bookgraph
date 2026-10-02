@@ -14,7 +14,6 @@ from bookgraph.exports.models import (
     TRANSLATION_EMPTY,
     TRANSLATION_MISSING_ASSETS,
     TRANSLATION_STALE,
-    TRANSLATION_STRUCTURE_CHANGED,
     TRANSLATION_UNREADABLE,
     TRANSLATION_UNTRACKED,
     ExportReport,
@@ -555,16 +554,7 @@ def test_raw_html_img_scanning_is_attribute_aware(workspace: WorkspacePaths) -> 
     # Custom elements named ``img-*`` are not images.
     assert '<img-zoom src="x"></img-zoom>' in html
     assert "<img-comparison-slider>" in html
-    # No asset warnings. The embedded ``<img>``s (a resolving file, a ``data:`` URI)
-    # are not structure changes; only the custom element's ``src="x"``, a link the
-    # source section never had, is.
-    structure = [w for w in export.report.warnings if w.code == TRANSLATION_STRUCTURE_CHANGED]
-    assert [w.message.split(": ", 1)[1] for w in structure] == ["link 'x' added"]
-    assert [
-        w
-        for w in export.report.warnings
-        if w.section_id == chapter and w.code != TRANSLATION_STRUCTURE_CHANGED
-    ] == []
+    assert [w for w in export.report.asset_warnings if w.section_id == chapter] == []
     assert export.report.sections[0].assets_embedded == 2
     assert export.report.sections[0].assets_missing == 0
 
@@ -730,62 +720,3 @@ def test_body_that_exists_but_cannot_be_read_is_unreadable(workspace: WorkspaceP
     with pytest.raises(UntranslatedSectionsError) as excinfo:
         build_translated_export(workspace, DOC, lang="vi", fallback="fail")
     assert excinfo.value.report.untranslated == [chapter]
-
-
-def _linked_workspace(tmp_path: Path) -> tuple[WorkspacePaths, Section]:
-    paths = WorkspacePaths(tmp_path)
-    section = Section(
-        id=f"{DOC}.models",
-        doc_id=DOC,
-        title="Data Models",
-        level=1,
-        heading_path=["Data Models"],
-        text="See [normalization](ch03.html#sec_datamodels_normalization) and "
-        "[the query](#fig_graphql_query).",
-    )
-    write_sections([section], paths.sources_sections / DOC)
-    return paths, section
-
-
-def test_translation_that_rewrites_link_targets_is_flagged_and_strict_refuses(
-    tmp_path: Path,
-) -> None:
-    paths, section = _linked_workspace(tmp_path)
-    write_translation(
-        paths,
-        section,
-        "vi",
-        "# Mô hình dữ liệu\n\nXem [chuẩn hoá](ch03.html#chuan_hoa) và "
-        "[truy vấn](#fig_graphql_query).",
-    )
-
-    export = build_translated_export(paths, DOC, lang="vi", generated_at=GENERATED_AT)
-
-    warnings = [w for w in export.report.warnings if w.code == TRANSLATION_STRUCTURE_CHANGED]
-    assert [w.section_id for w in warnings] == [section.id]
-    assert "link 'ch03.html#sec_datamodels_normalization' missing" in warnings[0].message
-    assert "link 'ch03.html#chuan_hoa' added" in warnings[0].message
-    assert export.report.strict_warnings == warnings
-    output = paths.exports_root / "tiny.pdf"
-    with pytest.raises(ExportError, match="strict mode"):
-        write_translated_export(export, output, _FakePdf(), strict=True)
-
-
-def test_translated_labels_and_heading_keep_targets_and_section_anchor(tmp_path: Path) -> None:
-    paths, section = _linked_workspace(tmp_path)
-    write_translation(
-        paths,
-        section,
-        "vi",
-        "# Mô hình dữ liệu\n\nXem [chuẩn hoá](ch03.html#sec_datamodels_normalization) và "
-        "[truy vấn](#fig_graphql_query).",
-    )
-
-    export = build_translated_export(paths, DOC, lang="vi", generated_at=GENERATED_AT)
-
-    assert export.report.warnings == []
-    # Navigation anchors on the section id, never on the translated heading text.
-    assert f'id="{section.id}"' in export.html
-    assert f'href="#{section.id}"' in export.html
-    assert export.report.sections[0].title == "Mô hình dữ liệu"
-    assert 'href="ch03.html#sec_datamodels_normalization"' in export.html

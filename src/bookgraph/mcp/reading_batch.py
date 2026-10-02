@@ -33,8 +33,8 @@ from bookgraph.mcp.service import (
     _load_plan,
     _plan_path,
     _section_assets,
-    translation_structure_issues,
 )
+from bookgraph.mcp.translation_structure import translation_structure_issues
 from bookgraph.models import ReadingPlan, Section, SectionAnnotation
 from bookgraph.reading_plans import (
     mark_section_read,
@@ -479,7 +479,9 @@ def _translation_issues(workspace: WorkspacePaths, lang: str, section: Section) 
                 ),
             )
         )
-    structure = translation_structure_issues(workspace, state, section)
+    structure = translation_structure_issues(
+        workspace, state, section, _load_doc_blocks(workspace, section.doc_id)
+    )
     if structure:
         issues.append(
             BatchIssue(

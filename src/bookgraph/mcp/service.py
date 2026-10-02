@@ -36,6 +36,7 @@ from bookgraph.concept_registry import ConceptRegistry, read_registry
 from bookgraph.documents import read_document
 from bookgraph.graph import SectionGraph, SectionNode, build_section_graph, chapter_span
 from bookgraph.index import ConceptMention, default_index_backend, tokenize
+from bookgraph.mcp.translation_structure import translation_structure_issues
 from bookgraph.models import (
     ASSET_BLOCK_TYPES,
     AnnotatedConcept,
@@ -62,13 +63,11 @@ from bookgraph.reading_plans import (
     write_reading_plan,
 )
 from bookgraph.sections import count_sections, read_sections
-from bookgraph.translation_structure import check_section_translation, local_asset_resolver
 from bookgraph.translations import (
     TranslationState,
     TranslationStatus,
     iter_translation_keys,
     section_content_hash,
-    split_frontmatter,
     translation_state,
     validate_lang,
     write_translation,
@@ -1416,10 +1415,7 @@ class SectionArtifactView(BaseModel):
     that left out the section's figures/tables is prose-only even when fresh, because
     the section hash covers only its title and text.
     ``content`` is the translation body when requested and present.
-    ``structure_issues`` lists the link destinations, image paths, reference
-    definitions, HTML anchors, and heading ids the body dropped or added relative to the
-    section's text; a translation should translate prose and labels but keep every
-    structural target byte-for-byte, so a non-empty list means the body needs fixing.
+    ``structure_issues``: see :mod:`bookgraph.mcp.translation_structure`.
     """
 
     type: str = "translation"
@@ -1452,37 +1448,6 @@ def _section_has_assets(workspace: WorkspacePaths, section: Section) -> bool:
     return bool(summaries)
 
 
-def translation_structure_issues(
-    workspace: WorkspacePaths, state: TranslationState, section: Section
-) -> list[TranslationStructureIssue]:
-    """Structural targets the cached body changed relative to the section it translates.
-
-    Judged exactly as the translated export judges it: frontmatter is split off, the
-    source is rebuilt from the parsed blocks (code re-fenced), and image paths resolve
-    next to the body, then under the parsed document. No body (or a non-UTF-8 one) has
-    nothing to check.
-    """
-
-    if state.body is None:
-        return []
-    try:
-        body = state.body.decode("utf-8")
-    except UnicodeDecodeError:
-        return []
-    parsed_dir = workspace.sources_parsed / section.doc_id
-    resolves = local_asset_resolver(
-        workspace.root,
-        [state.paths.body.parent, parsed_dir / "images", parsed_dir, workspace.root],
-    )
-    _, body = split_frontmatter(body)
-    return check_section_translation(
-        section,
-        body,
-        blocks=_load_doc_blocks(workspace, section.doc_id),
-        asset_resolves=resolves,
-    )
-
-
 def _artifact_view(
     workspace: WorkspacePaths,
     state: TranslationState,
@@ -1510,9 +1475,9 @@ def _artifact_view(
         model=artifact.model if artifact else None,
         created_at=artifact.created_at if artifact else None,
         content=content,
-        structure_issues=translation_structure_issues(workspace, state, section)
-        if section
-        else [],
+        structure_issues=translation_structure_issues(
+            workspace, state, section, _load_doc_blocks(workspace, state.doc_id)
+        ),
     )
 
 

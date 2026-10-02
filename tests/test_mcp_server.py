@@ -54,6 +54,7 @@ def test_build_server_registers_the_reading_and_query_tools(tmp_path: Path) -> N
         "get_context",
         "get_next_section",
         "get_outline",
+        "get_plan_progress",
         "get_related",
         "get_section",
         "get_section_translation",
@@ -75,6 +76,19 @@ def test_get_next_section_tool_returns_section_content(tmp_path: Path) -> None:
     assert payload["doc_id"] == "deep-work"
     assert [section["id"] for section in payload["sections"]] == ["deep-work.a"]
     assert payload["sections"][0]["text"] == "hello world"
+
+
+def test_get_plan_progress_tool_reports_chapter_progress(tmp_path: Path) -> None:
+    server = build_server(_workspace(tmp_path))
+
+    result = asyncio.run(server.call_tool("get_plan_progress", {"plan_id": "daily"}))
+
+    payload = result.structured_content
+    assert payload["remaining"] == 1
+    assert payload["chapter"]["section"]["id"] == "deep-work.a"
+    assert payload["chapter"]["remaining"] == 1
+    assert payload["chapter"]["next_boundary"] is None
+    assert [ref["id"] for ref in payload["next_sections"]] == ["deep-work.a"]
 
 
 def test_search_tool_ranks_sections(tmp_path: Path) -> None:

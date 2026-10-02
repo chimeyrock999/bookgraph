@@ -388,6 +388,57 @@ remaining: <unread_count>
 
 `next` returns up to `daily_sections` unread section ids, in reading order.
 
+### `bookgraph reading-plan progress`
+
+Print progress within the chapter that holds the next unread section, without
+mutating the plan.
+
+```bash
+bookgraph reading-plan progress /path/to/workspace <plan_id>
+bookgraph reading-plan progress /path/to/workspace <plan_id> --chapter-level 2
+```
+
+#### Inputs
+
+- `workspace_path`: workspace/output root.
+- `plan_id`: existing reading plan id (fails if the plan file is missing).
+- `--chapter-level`: heading level of the chapter scope. The chapter is the nearest
+  ancestor-or-self of the next unread section whose `level` is at most this value
+  (e.g. `2` for chapters nested under level-1 parts). Must be at least `1`.
+  Defaults to the top-level ancestor; when the document has a single top-level
+  heading (a `# Book Title` above every chapter, common for Markdown/EPUB), that
+  lone root is skipped one level down so the scope is the chapter, not the whole
+  book. Pass `--chapter-level` explicitly for part/chapter books or deeper wrappers.
+  While a wrapper heading is itself the next unread section, the scope is that
+  heading's own section only and the boundary is its first child, so a tick never
+  spans a whole book or part. A wrapper is the lone root by default (day 1 of a
+  fresh plan), or, with `--chapter-level`, any heading shallower than that level
+  (e.g. a part heading with `--chapter-level 2`). A deeper section under a level jump
+  (`part(1) > sec(3)` with `--chapter-level 2`) still belongs to the part's span.
+
+#### Writes
+
+- None. `progress` is read-only.
+
+#### Prints
+
+```text
+plan_id: <plan_id>
+doc_id: <doc_id>
+completed: <completed_count>/<section_count>
+chapter: <chapter_title> (<chapter_section_id>)     # or "(complete)" and stop
+chapter_progress: <completed_in_chapter>/<total_in_chapter>
+remaining_in_chapter: <unread_in_chapter>
+next: <section_id>[, <section_id> ...]     # next daily batch, clipped at the boundary
+next_boundary: <title> (<section_id>)      # or "(end of document)"
+```
+
+The hierarchy is derived from `sections.jsonl` exactly as `get_outline` derives it.
+Counts are by **membership** in the chapter's subtree and in the plan, not by
+position, so they stay correct after a plan reset, skipped front matter (sections
+marked read up front), or out-of-order `mark-read` calls. Front-matter sections
+that are their own top-level headings are their own "chapter" until read.
+
 ### `bookgraph reading-plan mark-read`
 
 Mark a section read and persist the updated plan.
@@ -584,10 +635,24 @@ telling the user to `uv sync --extra mcp`.
 
 ### Tools
 
-- `get_next_section(plan_id, include_assets=True)` → the next
-  up-to-`daily_sections` unread sections for a plan, each shaped exactly as
-  `get_section` returns it (full text, provenance, `<section_id>.md` path,
-  `assets`, `warnings`), plus `remaining` and `done`.
+- `get_next_section(plan_id, include_assets=True, stop_at_boundary=False,
+  chapter_level=None)` → the next up-to-`daily_sections` unread sections for a
+  plan, each shaped exactly as `get_section` returns it (full text, provenance,
+  `<section_id>.md` path, `assets`, `warnings`), plus `remaining`, `done`, and
+  `chapter` (as in `get_plan_progress`; `null` when done). `stop_at_boundary=True`
+  clips the batch at the end of the current chapter so a tick never spills into the
+  next one; `chapter_level` picks the chapter scope as below.
+- `get_plan_progress(plan_id, chapter_level=None)` → a plan's progress without any
+  section bodies: `completed`, `total`, `remaining`, `done`, `current_section_id`
+  (the next unread section), `chapter` (`{section, completed, remaining, total,
+  next_boundary}`, where `section` and `next_boundary` are id/title/level refs and
+  `next_boundary` is `null` at the end of the document; `chapter` is `null` when the
+  plan is done), and `next_sections` — the next `daily_sections` batch as refs,
+  clipped at the boundary. The chapter is the top-level ancestor of the next unread
+  section by default (a lone book-title root is skipped one level down), or the
+  nearest ancestor-or-self with `level <= chapter_level`.
+  Counts are by membership, so plan resets, skipped front matter, and out-of-order
+  `mark_read` calls stay correct (same semantics as `bookgraph reading-plan progress`).
 - `get_section(doc_id, section_id, include_assets=True)` → one section's full
   reading content, its `<section_id>.md` path, its figure/table `assets` (each
   `{block_id, type, path, caption, order, page_idx, type_confidence,
@@ -669,7 +734,7 @@ telling the user to `uv sync --extra mcp`.
   `completed`, `total`, and `done`. Lets an agent resume or track progress.
 
 Together `list_documents` → `create_plan` → `get_next_section`/`get_context` →
-`mark_read` → `list_plans` let a client drive a full reading session without any
+`mark_read` → `list_plans`/`get_plan_progress` let a client drive a full reading session without any
 CLI step (see `docs/mcp/reading-agent.md`).
 
 ### Reads / writes

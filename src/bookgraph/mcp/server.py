@@ -25,6 +25,7 @@ from bookgraph.mcp.service import (
     NextSection,
     Outline,
     PlanList,
+    PlanProgress,
     ReadingServiceError,
     RelatedSections,
     SearchResult,
@@ -42,16 +43,52 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
     mcp: FastMCP = FastMCP("bookgraph")
 
     @mcp.tool
-    def get_next_section(plan_id: str, include_assets: bool = True) -> NextSection:
+    def get_next_section(
+        plan_id: str,
+        include_assets: bool = True,
+        stop_at_boundary: bool = False,
+        chapter_level: int | None = None,
+    ) -> NextSection:
         """Return the next unread sections for a reading plan, with full content.
 
         With ``include_assets`` (default) each section carries its structured figure/table
         ``assets``; set it false to skip asset resolution when reading for prose only.
         Each section also carries its data-quality ``warnings`` (see ``get_section``).
+
+        ``chapter`` reports progress within the chapter holding the next unread section
+        (as ``get_plan_progress``). Pass ``stop_at_boundary=True`` to clip the batch at
+        the end of that chapter; ``chapter_level`` picks the chapter's heading level
+        (default: the top-level ancestor, skipping a lone book-title root; pass e.g. 2
+        when chapters sit under level-1 parts).
         """
 
         try:
-            return service.get_next_section(workspace, plan_id, include_assets)
+            return service.get_next_section(
+                workspace,
+                plan_id,
+                include_assets,
+                stop_at_boundary=stop_at_boundary,
+                chapter_level=chapter_level,
+            )
+        except ReadingServiceError as exc:
+            raise ToolError(str(exc)) from exc
+
+    @mcp.tool
+    def get_plan_progress(plan_id: str, chapter_level: int | None = None) -> PlanProgress:
+        """Report a plan's progress overall and within its current chapter.
+
+        Answers "how many sections are left in this chapter?" without fetching section
+        text or the full outline: the current chapter (heading of the next unread
+        section's scope), ``completed``/``remaining``/``total`` within it, the
+        ``next_boundary`` section that starts after it, and ``next_sections`` — the next
+        ``daily_sections`` batch clipped at that boundary. Counts are by membership, so
+        reset plans and skipped or out-of-order reads stay correct. ``chapter_level``
+        picks the chapter's heading level (default: the top-level ancestor, skipping a
+        lone book-title root; pass e.g. 2 when chapters sit under level-1 parts).
+        """
+
+        try:
+            return service.get_plan_progress(workspace, plan_id, chapter_level)
         except ReadingServiceError as exc:
             raise ToolError(str(exc)) from exc
 

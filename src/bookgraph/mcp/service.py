@@ -24,7 +24,7 @@ from bookgraph.annotations import (
 )
 from bookgraph.assets import asset_reference, resolve_asset_path
 from bookgraph.documents import read_document
-from bookgraph.graph import SectionGraph, build_section_graph
+from bookgraph.graph import SectionGraph, SectionNode, build_section_graph
 from bookgraph.index import default_index_backend, tokenize
 from bookgraph.models import (
     ASSET_BLOCK_TYPES,
@@ -40,6 +40,8 @@ from bookgraph.quality import (
     section_warnings,
 )
 from bookgraph.reading_plans import (
+    ChapterProgress,
+    chapter_progress,
     create_reading_plan,
     list_plan_progress,
     mark_section_read,
@@ -144,6 +146,7 @@ class NextSection(BaseModel):
     sections: list[SectionView]
     remaining: int
     done: bool
+    chapter: ChapterProgressView | None = None
 
 
 class MarkReadResult(BaseModel):
@@ -179,6 +182,35 @@ class SectionRef(BaseModel):
     id: str
     title: str
     level: int
+
+
+class ChapterProgressView(BaseModel):
+    """Progress through the chapter holding a plan's next unread section.
+
+    ``section`` is the chapter (scope) heading; ``completed``/``remaining``/``total``
+    count the plan's sections in that chapter's subtree; ``next_boundary`` is the first
+    section after the chapter (``None`` at the end of the document).
+    """
+
+    section: SectionRef
+    completed: int
+    remaining: int
+    total: int
+    next_boundary: SectionRef | None = None
+
+
+class PlanProgress(BaseModel):
+    """A reading plan's overall and current-chapter progress, without section bodies."""
+
+    plan_id: str
+    doc_id: str
+    completed: int
+    total: int
+    remaining: int
+    done: bool
+    current_section_id: str | None = None
+    chapter: ChapterProgressView | None = None
+    next_sections: list[SectionRef] = Field(default_factory=list)
 
 
 class OutlineNode(BaseModel):
@@ -489,38 +521,114 @@ def _load_plan(workspace: WorkspacePaths, plan_id: str) -> tuple[Path, ReadingPl
         raise PlanNotFoundError(f"Invalid reading plan: {path}: {exc}") from exc
 
 
+def _chapter_progress(
+    plan: ReadingPlan, sections: list[Section], chapter_level: int | None
+) -> ChapterProgress:
+    if chapter_level is not None and chapter_level < 1:
+        raise ReadingServiceError("chapter_level must be at least 1")
+    try:
+        return chapter_progress(plan, sections, chapter_level=chapter_level)
+    except ValueError as exc:  # the plan's next section is missing from the manifest
+        raise SectionNotFoundError(str(exc)) from exc
+
+
+def _chapter_view(
+    progress: ChapterProgress, by_id: dict[str, Section]
+) -> ChapterProgressView | None:
+    if progress.chapter_id is None:
+        return None
+    boundary = (
+        _section_ref(by_id[progress.next_boundary_id])
+        if progress.next_boundary_id is not None
+        else None
+    )
+    return ChapterProgressView(
+        section=_section_ref(by_id[progress.chapter_id]),
+        completed=progress.completed_in_chapter,
+        remaining=progress.remaining_in_chapter,
+        total=progress.total_in_chapter,
+        next_boundary=boundary,
+    )
+
+
+def _section_ref(section: Section | SectionNode) -> SectionRef:
+    return SectionRef(id=section.id, title=section.title, level=section.level)
+
+
 def get_next_section(
-    workspace: WorkspacePaths, plan_id: str, include_assets: bool = True
+    workspace: WorkspacePaths,
+    plan_id: str,
+    include_assets: bool = True,
+    *,
+    stop_at_boundary: bool = False,
+    chapter_level: int | None = None,
 ) -> NextSection:
     """Return the next unread sections for a plan, with full content.
 
     ``include_assets`` (default true) mirrors ``get_section`` — set it false to skip the
     figure/table resolution (and its ``document.json`` read) on plans read for prose only.
+    The result carries ``chapter`` progress (see :func:`get_plan_progress`); with
+    ``stop_at_boundary`` the batch is clipped at the end of that chapter, so a tick never
+    spills into the next one. ``chapter_level`` picks the heading level of the chapter
+    scope (default: the top-level ancestor, skipping a lone book-title root).
     """
 
     _, plan = _load_plan(workspace, plan_id)
     pack = next_sections(plan)
-    by_id = {section.id: section for section in _load_doc_sections(workspace, plan.doc_id)}
-    blocks_by_id = _load_doc_blocks(workspace, plan.doc_id) if include_assets else None
-    views: list[SectionView] = []
+    sections = _load_doc_sections(workspace, plan.doc_id)
+    by_id = {section.id: section for section in sections}
     for section_id in pack.sections:
-        section = by_id.get(section_id)
-        if section is None:
+        if section_id not in by_id:
             raise SectionNotFoundError(
                 f"Reading plan '{plan_id}' references unknown section '{section_id}' "
                 f"in document '{plan.doc_id}'."
             )
-        views.append(
-            _section_view(
-                workspace, section, include_assets=include_assets, blocks_by_id=blocks_by_id
-            )
+    progress = _chapter_progress(plan, sections, chapter_level)
+    batch = progress.next_section_ids if stop_at_boundary else pack.sections
+    blocks_by_id = _load_doc_blocks(workspace, plan.doc_id) if include_assets else None
+    views = [
+        _section_view(
+            workspace, by_id[section_id], include_assets=include_assets, blocks_by_id=blocks_by_id
         )
+        for section_id in batch
+    ]
     return NextSection(
         plan_id=plan.plan_id,
         doc_id=plan.doc_id,
         sections=views,
         remaining=pack.remaining,
         done=pack.done,
+        chapter=_chapter_view(progress, by_id),
+    )
+
+
+def get_plan_progress(
+    workspace: WorkspacePaths, plan_id: str, chapter_level: int | None = None
+) -> PlanProgress:
+    """Report a plan's progress overall and within its current chapter.
+
+    Answers "how many sections until the end of this chapter" without fetching section
+    bodies or the full outline: the chapter is the scope ancestor of the next unread
+    section (resolved by :func:`~bookgraph.graph.resolve_chapter`; ``chapter_level`` picks
+    its heading level), counts are by membership so resets and skipped/out-of-order reads stay
+    correct, and ``next_sections`` is the next ``daily_sections`` batch clipped at the
+    chapter boundary.
+    """
+
+    _, plan = _load_plan(workspace, plan_id)
+    sections = _load_doc_sections(workspace, plan.doc_id)
+    by_id = {section.id: section for section in sections}
+    progress = _chapter_progress(plan, sections, chapter_level)
+    return PlanProgress(
+        plan_id=plan.plan_id,
+        doc_id=plan.doc_id,
+        completed=len(plan.section_ids) - progress.remaining,
+        total=len(plan.section_ids),
+        remaining=progress.remaining,
+        done=progress.done,
+        current_section_id=progress.current_section_id,
+        chapter=_chapter_view(progress, by_id),
+        next_sections=[_section_ref(by_id[section_id]) for section_id in progress.next_section_ids],
     )
 
 

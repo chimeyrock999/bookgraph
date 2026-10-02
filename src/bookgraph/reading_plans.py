@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from bookgraph.graph import build_section_graph
 from bookgraph.models import ReadingPlan, Section
 from bookgraph.utils import validate_slug_id
 
@@ -61,6 +62,122 @@ def next_sections(plan: ReadingPlan) -> ContextPack:
         sections=batch,
         remaining=len(unread),
         done=not unread,
+    )
+
+
+@dataclass(frozen=True)
+class ChapterProgress:
+    """Progress through the chapter that holds a plan's next unread section.
+
+    The "chapter" is the scope ancestor of the first unread section (see
+    :func:`chapter_progress`). Counts cover only sections that are both in the plan
+    and in that chapter's subtree, by membership — so plan resets, skipped front
+    matter, and out-of-order ``mark_read`` calls all count correctly. ``next_section_ids``
+    is the next ``daily_sections`` batch clipped at the chapter boundary, and
+    ``next_boundary_id`` is the first section after the chapter (``None`` at the end
+    of the document). Chapter fields are ``None`` when the plan is done.
+    """
+
+    plan_id: str
+    doc_id: str
+    current_section_id: str | None
+    chapter_id: str | None
+    chapter_title: str | None
+    chapter_level: int | None
+    completed_in_chapter: int
+    remaining_in_chapter: int
+    total_in_chapter: int
+    next_section_ids: list[str]
+    next_boundary_id: str | None
+    next_boundary_title: str | None
+    next_boundary_level: int | None
+    remaining: int
+    done: bool
+
+
+def chapter_progress(
+    plan: ReadingPlan,
+    sections: list[Section],
+    *,
+    chapter_level: int | None = None,
+) -> ChapterProgress:
+    """Report progress within the chapter of ``plan``'s next unread section.
+
+    ``sections`` is the document's manifest in reading order; the heading hierarchy is
+    derived from it with :func:`~bookgraph.graph.build_section_graph`, so this matches
+    ``get_outline``. The scope is the outermost ancestor-or-self of the next unread
+    section by default; with ``chapter_level`` it is the nearest ancestor-or-self whose
+    heading ``level`` is at most ``chapter_level`` (e.g. ``2`` for chapters nested
+    under level-1 parts), falling back to the outermost ancestor.
+    """
+
+    if chapter_level is not None and chapter_level < 1:
+        raise ValueError("chapter_level must be at least 1")
+
+    completed = set(plan.completed)
+    unread = [section_id for section_id in plan.section_ids if section_id not in completed]
+    if not unread:
+        return ChapterProgress(
+            plan_id=plan.plan_id,
+            doc_id=plan.doc_id,
+            current_section_id=None,
+            chapter_id=None,
+            chapter_title=None,
+            chapter_level=None,
+            completed_in_chapter=0,
+            remaining_in_chapter=0,
+            total_in_chapter=0,
+            next_section_ids=[],
+            next_boundary_id=None,
+            next_boundary_title=None,
+            next_boundary_level=None,
+            remaining=0,
+            done=True,
+        )
+
+    nodes = build_section_graph(plan.doc_id, sections).nodes
+    position = {node.id: index for index, node in enumerate(nodes)}
+    current_id = unread[0]
+    if current_id not in position:
+        raise ValueError(
+            f"reading plan '{plan.plan_id}' references unknown section '{current_id}' "
+            f"in document '{plan.doc_id}'"
+        )
+
+    chapter = nodes[position[current_id]]
+    while chapter.parent_id is not None and (
+        chapter_level is None or chapter.level > chapter_level
+    ):
+        chapter = nodes[position[chapter.parent_id]]
+
+    # The chapter's subtree is the contiguous run after it of strictly deeper sections,
+    # mirroring how build_section_graph assigns parents; the first section past it is
+    # the boundary.
+    start = position[chapter.id]
+    end = start + 1
+    while end < len(nodes) and nodes[end].level > chapter.level:
+        end += 1
+    subtree = {node.id for node in nodes[start:end]}
+    boundary = nodes[end] if end < len(nodes) else None
+
+    in_chapter = [section_id for section_id in plan.section_ids if section_id in subtree]
+    unread_in_chapter = [section_id for section_id in in_chapter if section_id not in completed]
+    return ChapterProgress(
+        plan_id=plan.plan_id,
+        doc_id=plan.doc_id,
+        current_section_id=current_id,
+        chapter_id=chapter.id,
+        chapter_title=chapter.title,
+        chapter_level=chapter.level,
+        completed_in_chapter=len(in_chapter) - len(unread_in_chapter),
+        remaining_in_chapter=len(unread_in_chapter),
+        total_in_chapter=len(in_chapter),
+        next_section_ids=unread_in_chapter[: plan.daily_sections],
+        next_boundary_id=boundary.id if boundary else None,
+        next_boundary_title=boundary.title if boundary else None,
+        next_boundary_level=boundary.level if boundary else None,
+        remaining=len(unread),
+        done=False,
     )
 
 

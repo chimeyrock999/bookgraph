@@ -54,6 +54,8 @@ Optional navigation tools:
 - `get_outline(doc_id)` — show document hierarchy.
 - `get_related(doc_id, section_id)` — show parent/prev/next/children neighbours.
 - `get_concept(concept)` — show cross-book mentions for a concept.
+- `get_plan_progress(plan_id, chapter_level=None)` — current chapter, sections
+  left in it, and the next chapter boundary, without section text.
 
 ## Reading loop
 
@@ -85,6 +87,9 @@ Optional navigation tools:
    - Do not mark a section read before presenting it.
    - When the user says to continue, or confirms they are done, call
      `mark_read(plan_id)` and repeat from step 3.
+   - When the user asks how much of the chapter is left, call
+     `get_plan_progress(plan_id)` (or read `chapter` from `get_next_section`)
+     instead of fetching the outline.
    - When pausing, call `list_plans()` and report `completed/total`.
 
 ## Behavior rules

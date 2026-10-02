@@ -226,3 +226,65 @@ def test_get_serves_the_body_it_validated_not_a_second_read(
 
     assert view.status == "fresh"
     assert view.content == "Bản A"
+
+
+LINKED = "See [the models chapter](ch03.html#sec_models) and [the figure](#fig_query)."
+
+
+def test_translation_view_flags_changed_link_targets(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path, _section("deep-work.a", text=LINKED))
+
+    written = service.write_section_translation(
+        workspace,
+        "deep-work",
+        "deep-work.a",
+        "vi",
+        "Xem [chương mô hình](ch03.html#sec_mo_hinh) và [hình](#fig_query).",
+    )
+
+    # The write is kept (the body is the deliverable) but reported, so the job can fix it.
+    assert written.status == "fresh"
+    assert [(i.kind, i.target, i.change) for i in written.structure_issues] == [
+        ("link", "ch03.html#sec_models", "missing"),
+        ("link", "ch03.html#sec_mo_hinh", "added"),
+    ]
+    view = service.get_section_translation(workspace, "deep-work", "deep-work.a", "vi")
+    assert len(view.structure_issues) == 2
+    listed = service.list_section_artifacts(workspace, doc_id="deep-work")
+    assert len(listed.artifacts[0].structure_issues) == 2
+
+
+def test_translated_labels_with_preserved_targets_have_no_structure_issues(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path, _section("deep-work.a", text=LINKED))
+
+    written = service.write_section_translation(
+        workspace,
+        "deep-work",
+        "deep-work.a",
+        "vi",
+        "# Phần A\n\nXem [chương mô hình](ch03.html#sec_models) và [hình](#fig_query).",
+    )
+
+    assert written.structure_issues == []
+
+
+def test_translation_may_carry_the_sections_figures(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path, _section("deep-work.a", text="Body."))
+    images = workspace.sources_parsed / "deep-work" / "images"
+    images.mkdir(parents=True)
+    (images / "fig1.png").write_bytes(b"png")
+
+    written = service.write_section_translation(
+        workspace,
+        "deep-work",
+        "deep-work.a",
+        "vi",
+        "Nội dung.\n\n![Hình 1](fig1.png)\n\n![Hình 2](missing.png)\n",
+        includes_assets=True,
+    )
+
+    assert [(i.kind, i.target, i.change) for i in written.structure_issues] == [
+        ("image", "missing.png", "added")
+    ]

@@ -898,6 +898,10 @@ Issue codes (`blocking` unless noted):
   the section; re-translate with `write_section_translation`.
 - `translation_untracked` — non-blocking; the body has no registry record, so its
   freshness is unknown.
+- `translation_structure_changed` — a fresh or untracked translation dropped, added,
+  or rewrote a link destination, image path, reference definition, HTML anchor, or
+  heading id of the section; the message lists the changes. Translate labels and
+  prose only and rewrite it (see the structure rule in `artifacts.md`).
 
 Request errors — unknown/invalid `plan_id`, an unsegmented document, an empty
 `section_ids`, a plan that is already complete when `section_ids` is omitted, an
@@ -1069,8 +1073,9 @@ bookgraph export translated-pdf /path/to/workspace ddia --check           # cove
   not installed is an error.
 - `--strict`: exit `1` without writing anything if any asset is missing, remote, or
   unsupported, a translation is `stale` (`translation_stale`), or a registered
-  translation left out its section's figures/tables (`translation_missing_assets`).
-  An `untracked` translation only warns.
+  translation left out its section's figures/tables (`translation_missing_assets`),
+  or a translation changed its section's link targets, anchors, or paths
+  (`translation_structure_changed`). An `untracked` translation only warns.
 - `--check`: preflight only. Prints coverage and warnings and writes nothing. With
   `--strict`, it exits `1` whenever the real export would be refused.
 - The `--out` suffix must match the renderer: `.pdf` for `weasyprint`/`playwright`,

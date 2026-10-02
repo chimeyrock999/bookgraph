@@ -295,6 +295,38 @@ def test_translation_registry_freshness(tmp_path: Path) -> None:
     assert "write_section_translation" in report.issues[0].message
 
 
+def test_translation_with_changed_link_targets_blocks(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path, _section(A, text="See [the figure](#fig_query)."), daily=1)
+    reqs = NOTHING.model_copy(update={"translation_lang": "vi"})
+    service.write_section_translation(workspace, DOC, A, "vi", "Xem [hình](#hinh_truy_van).")
+
+    report = complete_reading_batch(workspace, "daily", requirements=reqs)
+
+    assert not report.committed
+    assert [(i.code, i.section_id, i.blocking) for i in report.issues] == [
+        ("translation_structure_changed", A, True)
+    ]
+    assert "link '#fig_query' missing" in report.issues[0].message
+    assert "link '#hinh_truy_van' added" in report.issues[0].message
+
+    # Translating the label but keeping the target byte-for-byte passes.
+    service.write_section_translation(workspace, DOC, A, "vi", "Xem [hình](#fig_query).")
+    assert complete_reading_batch(workspace, "daily", requirements=reqs).committed
+
+
+def test_untracked_translation_is_structure_checked_too(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path, _section(A, text="See [x](a.html)."), daily=1)
+    reqs = NOTHING.model_copy(update={"translation_lang": "vi"})
+    target = workspace.root / "translations" / "vi" / DOC / f"{A}.md"
+    target.parent.mkdir(parents=True)
+    target.write_text("Xem x.")
+
+    report = validate_reading_batch(workspace, "daily", requirements=reqs)
+
+    assert _codes(report) == ["translation_untracked", "translation_structure_changed"]
+    assert not report.ok
+
+
 def test_artifact_templates(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path, _section(A), daily=1)
     reqs = NOTHING.model_copy(update={"artifacts": ["notes/{plan_id}/{section_id}.md"]})

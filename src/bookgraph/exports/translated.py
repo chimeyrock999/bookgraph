@@ -45,6 +45,7 @@ from bookgraph.exports.models import (
     TRANSLATION_EMPTY,
     TRANSLATION_MISSING_ASSETS,
     TRANSLATION_STALE,
+    TRANSLATION_STRUCTURE_CHANGED,
     TRANSLATION_UNREADABLE,
     TRANSLATION_UNTRACKED,
     ExportReport,
@@ -63,6 +64,12 @@ from bookgraph.quality import (
     section_warnings,
 )
 from bookgraph.sections import read_sections
+from bookgraph.translation_structure import (
+    check_translation_structure,
+    describe_structure_issues,
+    local_asset_resolver,
+    section_source_markdown,
+)
 from bookgraph.translations import (
     TranslationState,
     section_content_hash,
@@ -367,6 +374,7 @@ class _Assembler:
                 section.id,
             )
             return None
+        self._structure_warnings(section, body, artifact)
 
         tokens = self._md.parse(body)
         heading_title = _first_heading_text(tokens)
@@ -383,6 +391,27 @@ class _Assembler:
             tokens = tokens[heading_end:]
         html = self._md.renderer.render(tokens, self._md.options, {})
         return title or section.title, heading, html
+
+    def _structure_warnings(self, section: Section, body: str, artifact: Path) -> None:
+        """Flag a translation whose link destinations/anchors/paths differ from the source.
+
+        Export navigation itself anchors on section ids, never on (translated) heading
+        text, but intra-book links and image paths in the body only work as written.
+        """
+
+        resolves = local_asset_resolver(
+            self.workspace.root, [artifact.parent, *self._parsed_bases()]
+        )
+        issues = check_translation_structure(
+            section_source_markdown(section), body, asset_resolves=resolves
+        )
+        if issues:
+            self._warn(
+                TRANSLATION_STRUCTURE_CHANGED,
+                f"translation {_relative(self.workspace, artifact)} changed structural "
+                f"Markdown of its section: {describe_structure_issues(issues)}",
+                section.id,
+            )
 
     def _freshness_warnings(
         self, section: Section, state: TranslationState, freshness: TranslationFreshness

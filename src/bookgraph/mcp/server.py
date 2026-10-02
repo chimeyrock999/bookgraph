@@ -417,6 +417,11 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
         includes_assets=True when the translation carries the section's figures/
         tables. Pass source_section_hash (the current_section_hash you saw) to refuse
         the write if the section changed while you were translating.
+
+        Translate prose and link labels, not structure: keep link destinations and
+        fragment ids, image/file paths, reference-style identifiers, HTML id/name
+        anchors, and {#id} heading ids byte-for-byte. structure_issues in the result
+        lists any that changed; fix and rewrite the translation.
         """
 
         try:

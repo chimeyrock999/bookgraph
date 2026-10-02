@@ -584,6 +584,34 @@ the hash does not cover assets, so a re-parse that newly stages a figure leaves 
 prose-only translation `fresh`. Reuse a translation as-is only when `status` is
 `fresh` **and** (`includes_assets` or not `section_has_assets`).
 
+**Structure rule: translate content, preserve structural Markdown.** A translation
+translates prose, captions, and link labels, but keeps every structural target of the
+section (its title heading + text) byte-for-byte, because intra-book references, TOC
+anchors, and exports depend on them:
+
+| Kind | Preserved |
+| --- | --- |
+| `link` | Markdown link destinations and fragments (`[label](ch03.html#sec_x)`, `(#fig_y)`), autolinks, HTML `href` |
+| `image` | Markdown image paths and HTML `src` |
+| `reference` | Reference-style definitions, identifier and destination (`[spec]: https://…`) |
+| `html_id` | HTML `id` / `name` anchors |
+| `heading_id` | Explicit heading ids (`## Title {#sec_x}`) |
+
+`[label](target)` may become `[nhãn](target)`; `target` must not change. Two image
+changes are allowed: a local image that resolves (next to the body, then under
+`sources/parsed/<doc_id>/images/`, `sources/parsed/<doc_id>/`, or the workspace root)
+may be added, which carries the section's figures, and a source image path that does
+not resolve may be replaced by one that does. Code spans/blocks and HTML comments are
+not structure. Heading *text* may be translated: export navigation anchors on section
+ids, never on heading text.
+
+`bookgraph.translation_structure.check_translation_structure` does the comparison.
+The translation tools return its findings as `structure_issues` (each `{kind, target,
+change: "missing" | "added", count}`; a rewritten target is one `missing` plus one
+`added`). Writes are not refused, because the body is the deliverable, but
+`complete_reading_batch` blocks on `translation_structure_changed` and the export
+flags it.
+
 Write order: remove the previous sidecar, write the body, then write the new sidecar,
 each via a same-directory temp file + fsync + rename (files take the process umask,
 not `mkstemp`'s 0600). A crash or a racing writer between the steps leaves an
@@ -676,6 +704,10 @@ is written beside the export:
     refuses it.
   - `translation_untracked`: no valid registry record, or the body was edited after
     registration. Rendered with a note; never refused.
+  - `translation_structure_changed`: the rendered translation dropped, added, or
+    rewrote a link destination, image path, reference definition, HTML anchor, or
+    heading id of its section (see the structure rule above). Rendered as written;
+    `--strict` refuses it.
   - `translation_empty`, `translation_unreadable`: the section falls back.
   - `asset_captions_only` / `asset_text_sparse`: ingest quality warnings, passed
     through for rendered sections whose source prose is mostly captions.

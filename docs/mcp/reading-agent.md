@@ -122,7 +122,10 @@ A self-serve agent drives an entire session with these tools alone:
      or not `section_has_assets`) — `fresh` alone does not mean figures/tables were
      carried over; otherwise translate the section
      and cache it with `write_section_translation(..., content, includes_assets=...,
-     source_section_hash=<current_section_hash>)`.
+     source_section_hash=<current_section_hash>)`. Translate prose and link labels,
+     not structure: link destinations, fragment ids, image/file paths, reference
+     identifiers, HTML anchors, and `{#id}` heading ids stay byte-for-byte; the write
+     result's `structure_issues` lists any that changed.
      `list_section_artifacts(doc_id, lang)` lists every cached translation with its
      status, so a job can redo the `stale` ones after a re-segment.
    - `mark_read(plan_id)` — mark the section read (defaults to the next unread) and

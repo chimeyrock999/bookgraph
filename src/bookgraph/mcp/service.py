@@ -42,6 +42,7 @@ from bookgraph.models import (
     CanonicalBlock,
     ReadingPlan,
     Section,
+    TranslationStructureIssue,
 )
 from bookgraph.quality import (
     AssetSummary,
@@ -61,6 +62,11 @@ from bookgraph.reading_plans import (
     write_reading_plan,
 )
 from bookgraph.sections import count_sections, read_sections
+from bookgraph.translation_structure import (
+    check_translation_structure,
+    local_asset_resolver,
+    section_source_markdown,
+)
 from bookgraph.translations import (
     TranslationState,
     TranslationStatus,
@@ -1413,6 +1419,10 @@ class SectionArtifactView(BaseModel):
     that left out the section's figures/tables is prose-only even when fresh, because
     the section hash covers only its title and text.
     ``content`` is the translation body when requested and present.
+    ``structure_issues`` lists the link destinations, image paths, reference
+    definitions, HTML anchors, and heading ids the body dropped or added relative to the
+    section's text; a translation should translate prose and labels but keep every
+    structural target byte-for-byte, so a non-empty list means the body needs fixing.
     """
 
     type: str = "translation"
@@ -1429,6 +1439,7 @@ class SectionArtifactView(BaseModel):
     model: str | None = None
     created_at: str | None = None
     content: str | None = None
+    structure_issues: list[TranslationStructureIssue] = Field(default_factory=list)
 
 
 class SectionArtifactList(BaseModel):
@@ -1442,6 +1453,32 @@ def _section_has_assets(workspace: WorkspacePaths, section: Section) -> bool:
 
     _, summaries = _section_assets(workspace, section, _load_doc_blocks(workspace, section.doc_id))
     return bool(summaries)
+
+
+def translation_structure_issues(
+    workspace: WorkspacePaths, state: TranslationState, section: Section
+) -> list[TranslationStructureIssue]:
+    """Structural targets the cached body changed relative to the section it translates.
+
+    Image paths resolve the way the translated export resolves them (next to the body,
+    then the parsed document's images), so a broken source image path normalised to a
+    working one is not reported. No body (or a non-UTF-8 one) has nothing to check.
+    """
+
+    if state.body is None:
+        return []
+    try:
+        body = state.body.decode("utf-8")
+    except UnicodeDecodeError:
+        return []
+    parsed_dir = workspace.sources_parsed / section.doc_id
+    resolves = local_asset_resolver(
+        workspace.root,
+        [state.paths.body.parent, parsed_dir / "images", parsed_dir, workspace.root],
+    )
+    return check_translation_structure(
+        section_source_markdown(section), body, asset_resolves=resolves
+    )
 
 
 def _artifact_view(
@@ -1471,6 +1508,9 @@ def _artifact_view(
         model=artifact.model if artifact else None,
         created_at=artifact.created_at if artifact else None,
         content=content,
+        structure_issues=translation_structure_issues(workspace, state, section)
+        if section
+        else [],
     )
 
 

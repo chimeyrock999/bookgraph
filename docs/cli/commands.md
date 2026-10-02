@@ -85,32 +85,35 @@ runs.root
 
 **Status:** Implemented.
 
-Register a raw PDF book without running parser, segmenter, wiki, or MCP stages.
+Register a raw PDF, EPUB or DOCX book without running parser, segmenter, wiki, or MCP stages.
 
 ```bash
 bookgraph add-book /path/to/workspace /path/to/book.pdf
+bookgraph add-book /path/to/workspace /path/to/book.epub
 bookgraph add-book /path/to/workspace /path/to/book.pdf --dry-run
 ```
 
 ### Inputs
 
 - `workspace_path`: workspace/output root.
-- `pdf_path`: raw PDF source path.
+- `pdf_path`: raw source path: `.pdf`, `.epub` or `.docx`. An EPUB or DOCX is
+  registered for the explicit MinerU path (`parse-book`, see *Explicit MinerU path for
+  EPUB/DOCX*); MarkItDown parses it without registration (`bookgraph parse`).
 - `--dry-run`: compute contract and print paths, but write nothing.
 
 ### Writes
 
-For a book id `<book_id>` derived from the PDF filename:
+For a book id `<book_id>` derived from the source filename:
 
 ```text
 sources/inbox/<book_id>/
-  original.pdf
-  book.json
+  original.<pdf|epub|docx>
+  book.json            # source_type: pdf | epub | docx
 ```
 
 ### Must not do
 
-- Must not parse the PDF.
+- Must not parse the source.
 - Must not call MinerU, MarkItDown, segmenters, wiki backends, MCP tools, embeddings, or LLMs.
 - Must not write under `sources/parsed/`, `sources/sections/`, `wiki/`, `indexes/`, or `reading_plans/`.
 
@@ -217,9 +220,10 @@ no models), but the comparison on issue 87 found it not ready to be the default
 - DOCX: MinerU's own output keeps merged and nested tables and images, but
   `mineru-middle-json` drops native table bodies, and MinerU drops footnotes.
 
-An explicit MinerU path for non-PDF sources is follow-up work (issue 89). Until then,
-`--parser mineru-middle-json` accepts only MinerU `*_middle.json` output and
-`parse-book` runs MinerU on raw PDFs only.
+MinerU is used for EPUB/DOCX only when chosen explicitly, through `parse-book` on a
+registered book (see *Explicit MinerU path for EPUB/DOCX* under `parse-book`). The
+`mineru` extra is never required for non-PDF input, and `--parser mineru-middle-json`
+still accepts only MinerU `*_middle.json` output.
 
 `mineru-middle-json` reads MinerU 4's `docvortex.middle` schema 2.x, and still reads
 MinerU 3.x `pdf_info` middle JSON staged before the MinerU 4 migration. An unknown
@@ -1558,6 +1562,9 @@ Options:
 - `--timeout-seconds`: subprocess timeout. Default: config; pass `0` for no timeout.
 - `--parser/-p`: parser after runner output is staged. Default: `[parsers].default_pdf` (`mineru-middle-json`).
 
+A registered EPUB or DOCX always parses with `--tier flash` and no page range; see
+*Explicit MinerU path for EPUB/DOCX* below.
+
 Precedence is CLI flag > workspace config (`[mineru]`) > profile default. The resolved
 profile and the exact MinerU argv are recorded in the run log (the
 `$ mineru-kit parse <pdf> --output …/_mineru/result.zip --format zip --tier …` line).
@@ -1603,6 +1610,7 @@ Writes (staged from the `mineru-kit --format zip` bundle):
 sources/parsed/<book_id>/
   document.json
   <book_id>_middle.json       # MinerU 4 middle JSON (docvortex.middle 2.x)
+  <book_id>_source_map.json   # EPUB/DOCX only: source spine and image members
   optional <book_id>.md / <book_id>_structured_content.json / <book_id>_model_output.json / images/
 ```
 
@@ -1635,6 +1643,53 @@ document: <workspace>/sources/parsed/<book_id>/document.json
 
 Failures include `Log: <...>` so users/agents can inspect the durable run log.
 For large PDFs and agent/cron operation, see `docs/cli/parse-book-large-pdfs.md`.
+
+#### Explicit MinerU path for EPUB/DOCX
+
+`parse-book` on a book registered from an `.epub` or `.docx` is the explicit way to
+parse it with MinerU. MarkItDown stays the default for these formats (`bookgraph
+parse`); nothing routes them to MinerU on its own.
+
+```bash
+bookgraph add-book /path/to/workspace /path/to/book.epub
+bookgraph parse-book /path/to/workspace <book_id>
+```
+
+- **Entry point.** `parse-book`, which already owns running MinerU, staging its bundle
+  and logging the run. `bookgraph parse` stays an adapter over existing files and never
+  invokes MinerU.
+- **Tier.** MinerU 4 parses these formats natively and accepts only `--tier flash`
+  (no models, no GPU; the `mineru` extra is still needed). The runner always passes
+  `--tier flash` for them: a tier from the profile or `[mineru].tier` gives way, and
+  `--tier` other than `flash` on the command line is rejected.
+- **Page range.** MinerU parses these formats whole and rejects `--pages`, so
+  `--start-page`/`--end-page` (and `[mineru].start_page`/`end_page`) are rejected
+  before MinerU runs.
+- **Provenance.** The runner also stages `<book_id>_source_map.json` (the source's EPUB
+  spine and the original member of each image), and `mineru-middle-json` records it on
+  the blocks: an EPUB block's `metadata.source_locator` is
+  `<source.epub>!<spine member>` (MinerU's `page_idx` is the spine index), and an image
+  block's `metadata.asset_source_member` is the EPUB member with the same bytes. A DOCX
+  has no spine: MinerU puts it all on `page_idx` 0, so the block id `p0.b<index>` is its
+  only locator, and its pictures (re-encoded as JPEG) record no member.
+- **Content.** Native tables keep their HTML (colspan, rowspan, nested tables) as the
+  block text; hyperlinks stay Markdown links; and a block's `anchor` (an EPUB element id,
+  a DOCX bookmark) is kept in `metadata.anchor`. Inline spans join verbatim.
+- **Heading levels.** For DOCX, MinerU reserves level 1 for the `Title` style and maps
+  `Heading N` to level N+1. `mineru-middle-json` shifts DOCX section titles back by one,
+  matching MarkItDown (`Title` and `Heading 1` → 1, `Heading 2` → 2), so switching
+  adapters does not change the sections. EPUB levels are kept (`h1` → 1, `h2` → 2).
+
+Known limitations of MinerU 4.0.10 on this path:
+
+- DOCX footnotes (`word/footnotes.xml`) are dropped: neither the text nor the reference
+  marker reaches any MinerU output. Use MarkItDown for a DOCX whose footnotes matter.
+- A DOCX heading is detected from its style's outline level; a heading style without
+  `w:outlineLvl` comes out as body text.
+- EPUB links to an element MinerU emits no anchor for (a `<figure id>`, say) become
+  plain text.
+- Exports do not resolve links against `metadata.anchor` yet, so a link to a block
+  anchor is reported as `internal_link_unresolved` and left as written.
 
 ### `bookgraph wiki compile`
 

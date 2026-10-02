@@ -72,7 +72,9 @@ bookgraph paths /path/to/workspace
 ```
 
 Register a raw PDF book (copies it to `sources/inbox/<book_id>/` and writes a
-`book.json` registration manifest; add `--dry-run` to preview):
+`book.json` registration manifest; add `--dry-run` to preview). An EPUB or DOCX can be
+registered too, to parse it with MinerU explicitly; `bookgraph parse` reads it with
+MarkItDown without registration:
 
 ```bash
 bookgraph add-book /path/to/workspace /path/to/book.pdf

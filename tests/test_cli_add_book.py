@@ -63,7 +63,7 @@ def test_add_book_declares_contract_without_running_pipeline(tmp_path: Path) -> 
     assert "No parser or segmenter was run" in result.output
 
 
-def test_add_book_requires_pdf_input(tmp_path: Path) -> None:
+def test_add_book_requires_pdf_epub_or_docx_input(tmp_path: Path) -> None:
     runner = CliRunner()
     workspace = tmp_path / "workspace"
     txt = tmp_path / "notes.txt"
@@ -73,7 +73,7 @@ def test_add_book_requires_pdf_input(tmp_path: Path) -> None:
     result = runner.invoke(app, ["add-book", str(workspace), str(txt)])
 
     assert result.exit_code != 0
-    assert "Only PDF input is supported by this CLI contract for now" in result.output
+    assert "Only PDF, EPUB and DOCX input" in result.output
 
 
 def test_add_book_can_dry_run_contract_without_copying(tmp_path: Path) -> None:

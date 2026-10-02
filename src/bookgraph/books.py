@@ -67,16 +67,22 @@ class BookRegistration:
         }
 
 
+# Raw sources ``parse-book`` can run MinerU on: PDFs, and EPUB/DOCX through MinerU's
+# native ``flash`` path (the explicit MinerU path for non-PDF input).
+REGISTERED_SOURCE_TYPES = ("pdf", "epub", "docx")
+
+
 def build_book_registration(workspace: WorkspacePaths, source: Path) -> BookRegistration:
     resolved_source = source.expanduser().resolve()
-    if resolved_source.suffix.lower() != ".pdf":
-        raise ValueError("Only PDF input is supported by this CLI contract for now.")
+    source_type = resolved_source.suffix.lower().lstrip(".")
+    if source_type not in REGISTERED_SOURCE_TYPES:
+        raise ValueError("Only PDF, EPUB and DOCX input is supported by this CLI contract for now.")
     title = _title_from_path(resolved_source)
-    pdf_metadata = _try_inspect_pdf_metadata(resolved_source)
+    pdf_metadata = _try_inspect_pdf_metadata(resolved_source) if source_type == "pdf" else None
     return BookRegistration(
         book_id=slugify(title),
         title=title,
-        source_type="pdf",
+        source_type=source_type,
         source_path=resolved_source,
         workspace=workspace,
         pdf_metadata=pdf_metadata,

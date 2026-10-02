@@ -195,7 +195,7 @@ def test_run_rejects_non_pdf_input(tmp_path: Path) -> None:
     source.write_text("hi")
     runner = MinerURunner(run_process=_fake_mineru())
 
-    with pytest.raises(UnsupportedSourceError, match="only accepts raw .pdf"):
+    with pytest.raises(UnsupportedSourceError, match="accepts a raw .pdf"):
         runner.run(source, tmp_path / "parsed" / "doc")
 
 

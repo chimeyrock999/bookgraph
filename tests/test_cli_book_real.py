@@ -130,6 +130,7 @@ def test_parse_book_runs_mineru_then_parser_and_writes_document(tmp_path: Path) 
         "mineru_schema": "docvortex.middle/2.0",
         "mineru_version": "4.0.10",
         "mineru_tier": "flash",
+        "mineru_file_suffix": "pdf",
         "runner": "mineru",
         "runner_command": str(fake_mineru),
         "runner_profile": "balanced",

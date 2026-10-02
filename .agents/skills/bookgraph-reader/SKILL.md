@@ -53,7 +53,7 @@ Optional navigation tools:
   cross-document search.
 - `get_outline(doc_id, root_id=None, max_depth=None)` — show document hierarchy; scope it (`max_depth=1`, then `root_id`) on large books.
 - `get_section_tree(doc_id, section_id)` — show a section's breadcrumb, siblings, and children.
-- `get_chapter_outline(plan_id)` — show the current chapter's outline with read flags.
+- `get_chapter_outline(plan_id, chapter_level=None)` — show the current chapter's outline with read flags and in-chapter progress; use `chapter_level=2` when chapters sit under parts or a book-title heading.
 - `get_related(doc_id, section_id)` — show parent/prev/next/children neighbours.
 - `get_concept(concept)` — show cross-book mentions for a concept.
 

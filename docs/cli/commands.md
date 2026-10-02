@@ -615,19 +615,34 @@ telling the user to `uv sync --extra mcp`.
   matter. The result also carries `root_id`, `total_nodes` (the document's full
   section count), and `truncated` (whether `max_depth` cut deeper sections off).
   Boundary nodes keep their full `child_ids`, so a client can drill in with
-  `root_id`. An unknown `root_id` or a `max_depth < 1` is an error.
+  `root_id`. An unknown `root_id` or a `max_depth < 1` is an error. Note that on
+  a flat document (page/token fallback, every section top-level) `max_depth=1`
+  is still every section; `total_nodes` tells a client how large a level is.
 - `get_section_tree(doc_id, section_id, include_siblings=True,
-  include_children=True)` → a small outline around one section: `section`,
-  `ancestors` (root-first breadcrumb), `siblings` (the parent's children in
-  reading order, the section itself included; the top-level sections for a
-  top-level section), and direct `children`. Each entry is an id/title/level
-  reference.
-- `get_chapter_outline(plan_id, max_depth=None)` → the outline of the chapter a
-  reading plan is currently in. The chapter is the top-level ancestor of the
-  plan's next unread section (`current_section_id`). Its subtree nodes each carry
-  a `read` flag, alongside plan `completed`/`total`/`done` and `truncated`.
-  `max_depth` works as in `get_outline`. When the plan is done, `chapter` is null
-  and `nodes` is empty.
+  include_children=True, sibling_window=10)` → a small outline around one
+  section: `section`, `ancestors` (root-first breadcrumb), `siblings` (the
+  parent's children in reading order, the section itself included; the
+  top-level sections for a top-level section), and direct `children`. Each
+  entry is an id/title/level reference. `siblings` keeps at most
+  `sibling_window` entries on each side of the section (`null` = all), and
+  `siblings_truncated` says whether any were dropped, so a flat document can't
+  turn this into the whole book.
+- `get_chapter_outline(plan_id, max_depth=2, chapter_level=None)` → the outline
+  of the chapter a reading plan is currently in (`current_section_id` = the
+  next unread section).
+  - The chapter is that section's outermost ancestor-or-self by default. With
+    `chapter_level`, it is the nearest ancestor-or-self whose heading `level` is
+    at most `chapter_level` (e.g. `2` for chapters under level-1 parts or a
+    single book-title heading). This is the same rule as `get_plan_progress`.
+  - Each subtree node carries a `read` flag.
+  - `completed` / `remaining` / `total` count the plan's sections in the
+    chapter's whole subtree, by membership, whatever `max_depth` is set to.
+    `plan_completed` / `plan_total` are plan-wide.
+  - `max_depth` works as in `get_outline` and defaults to `2` (the chapter and
+    its direct subsections), so a chapter that turns out to be the whole book
+    stays small. Pass `null` for the full subtree.
+  - When the plan is done, `chapter` is null, `nodes` is empty, and the chapter
+    counts are zero.
 - `get_related(doc_id, section_id)` → a section's structural neighbours in the
   graph: `parent`, `prev`, `next`, and `children` (each a lightweight
   id/title/level reference).

@@ -13,6 +13,7 @@ from bookgraph.mcp.service import (
     PlanNotFoundError,
     ReadingServiceError,
     SectionNotFoundError,
+    SectionsNotFoundError,
 )
 from bookgraph.models import ReadingPlan, Section
 from bookgraph.reading_plans import write_reading_plan
@@ -203,7 +204,7 @@ def test_get_chapter_outline_scopes_to_the_current_chapter(tmp_path: Path) -> No
     workspace = _workspace(tmp_path)
     _write_plan(workspace, completed=["doc.ch-1", "doc.s-1-1"])
 
-    chapter = service.get_chapter_outline(workspace, "daily")
+    chapter = service.get_chapter_outline(workspace, "daily", max_depth=None)
 
     assert chapter.plan_id == "daily"
     assert chapter.doc_id == "doc"
@@ -221,16 +222,30 @@ def test_get_chapter_outline_scopes_to_the_current_chapter(tmp_path: Path) -> No
         "doc.s-1-1-1": False,
         "doc.s-1-2": False,
     }
-    assert (chapter.completed, chapter.total, chapter.done) == (2, 6, False)
+    # Chapter counts are scoped to the chapter's subtree; plan counts are plan-wide.
+    assert (chapter.completed, chapter.remaining, chapter.total) == (2, 2, 4)
+    assert (chapter.plan_completed, chapter.plan_total, chapter.done) == (2, 6, False)
+
+
+def test_get_chapter_outline_defaults_to_two_levels(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    _write_plan(workspace, completed=[])
+
+    chapter = service.get_chapter_outline(workspace, "daily")
+
+    assert [node.id for node in chapter.nodes] == ["doc.ch-1", "doc.s-1-1", "doc.s-1-2"]
+    assert chapter.truncated is True
+    # Counts still cover the whole chapter subtree, not just the returned nodes.
+    assert chapter.total == 4
 
 
 def test_get_chapter_outline_honours_max_depth(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path)
     _write_plan(workspace, completed=[])
 
-    chapter = service.get_chapter_outline(workspace, "daily", max_depth=2)
+    chapter = service.get_chapter_outline(workspace, "daily", max_depth=1)
 
-    assert [node.id for node in chapter.nodes] == ["doc.ch-1", "doc.s-1-1", "doc.s-1-2"]
+    assert [node.id for node in chapter.nodes] == ["doc.ch-1"]
     assert chapter.truncated is True
 
 
@@ -254,8 +269,120 @@ def test_get_chapter_outline_when_plan_is_done(tmp_path: Path) -> None:
     assert chapter.current_section_id is None
     assert chapter.chapter is None
     assert chapter.nodes == []
+    assert (chapter.completed, chapter.total) == (0, 0)
+    assert (chapter.plan_completed, chapter.plan_total) == (6, 6)
 
 
 def test_get_chapter_outline_raises_for_missing_plan(tmp_path: Path) -> None:
     with pytest.raises(PlanNotFoundError):
         service.get_chapter_outline(_workspace(tmp_path), "nope")
+
+
+def _book_root_workspace(tmp_path: Path) -> WorkspacePaths:
+    """One ``# Book`` root over two chapters, each with two sections (7 sections)."""
+
+    layout = [("bk.book", "Book", 1)]
+    for chapter in (1, 2):
+        layout.append((f"bk.ch-{chapter}", f"Chapter {chapter}", 2))
+        layout += [(f"bk.s-{chapter}-{n}", f"Section {chapter}.{n}", 3) for n in (1, 2)]
+    workspace = WorkspacePaths(tmp_path)
+    write_sections(
+        [
+            Section(id=sid, doc_id="bk", title=title, level=level, heading_path=[title],
+                    text="x")
+            for sid, title, level in layout
+        ],
+        workspace.sources_sections / "bk",
+    )
+    write_reading_plan(
+        ReadingPlan(
+            plan_id="bk", doc_id="bk", section_ids=[sid for sid, _, _ in layout],
+            completed=["bk.book", "bk.ch-1", "bk.s-1-1", "bk.s-1-2"],
+        ),
+        workspace.reading_plans_root / "bk.json",
+    )
+    return workspace
+
+
+def test_get_chapter_outline_stays_small_under_a_single_book_root(tmp_path: Path) -> None:
+    # Without chapter_level the "chapter" is the whole book, but the default depth
+    # keeps the response to the root and its chapters.
+    chapter = service.get_chapter_outline(_book_root_workspace(tmp_path), "bk")
+
+    assert chapter.chapter is not None and chapter.chapter.id == "bk.book"
+    assert [node.id for node in chapter.nodes] == ["bk.book", "bk.ch-1", "bk.ch-2"]
+    assert chapter.truncated is True
+
+
+def test_get_chapter_outline_chapter_level_picks_nested_chapters(tmp_path: Path) -> None:
+    chapter = service.get_chapter_outline(
+        _book_root_workspace(tmp_path), "bk", chapter_level=2
+    )
+
+    assert chapter.current_section_id == "bk.ch-2"
+    assert chapter.chapter is not None and chapter.chapter.id == "bk.ch-2"
+    assert [node.id for node in chapter.nodes] == ["bk.ch-2", "bk.s-2-1", "bk.s-2-2"]
+    assert (chapter.completed, chapter.remaining, chapter.total) == (0, 3, 3)
+
+
+def test_get_chapter_outline_rejects_bad_chapter_level(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    _write_plan(workspace, completed=[])
+
+    with pytest.raises(ReadingServiceError, match="chapter_level"):
+        service.get_chapter_outline(workspace, "daily", chapter_level=0)
+
+
+def test_get_chapter_outline_raises_for_a_stale_plan(tmp_path: Path) -> None:
+    # The plan predates a re-segment: its next unread section no longer exists.
+    workspace = _workspace(tmp_path)
+    write_reading_plan(
+        ReadingPlan(plan_id="daily", doc_id="doc", section_ids=["doc.gone", *_ALL_IDS]),
+        workspace.reading_plans_root / "daily.json",
+    )
+
+    with pytest.raises(SectionNotFoundError, match="doc.gone"):
+        service.get_chapter_outline(workspace, "daily")
+
+
+def test_get_section_tree_raises_for_unknown_document(tmp_path: Path) -> None:
+    with pytest.raises(SectionsNotFoundError):
+        service.get_section_tree(_workspace(tmp_path), "ghost", "ghost.a")
+
+
+def _flat_workspace(tmp_path: Path, count: int) -> WorkspacePaths:
+    """A page/token-fallback style document: every section is top-level."""
+
+    workspace = WorkspacePaths(tmp_path)
+    write_sections(
+        [
+            Section(id=f"flat.p-{n}", doc_id="flat", title=f"Page {n}", level=1,
+                    heading_path=[f"Page {n}"], text="x")
+            for n in range(count)
+        ],
+        workspace.sources_sections / "flat",
+    )
+    return workspace
+
+
+def test_get_section_tree_windows_siblings_in_a_flat_document(tmp_path: Path) -> None:
+    workspace = _flat_workspace(tmp_path, 50)
+
+    tree = service.get_section_tree(workspace, "flat", "flat.p-20", sibling_window=2)
+    assert [ref.id for ref in tree.siblings] == [f"flat.p-{n}" for n in range(18, 23)]
+    assert tree.siblings_truncated is True
+
+    edge = service.get_section_tree(workspace, "flat", "flat.p-0", sibling_window=2)
+    assert [ref.id for ref in edge.siblings] == ["flat.p-0", "flat.p-1", "flat.p-2"]
+
+    default = service.get_section_tree(workspace, "flat", "flat.p-20")
+    assert len(default.siblings) == 21
+
+    everything = service.get_section_tree(workspace, "flat", "flat.p-20", sibling_window=None)
+    assert len(everything.siblings) == 50
+    assert everything.siblings_truncated is False
+
+
+def test_get_section_tree_rejects_negative_sibling_window(tmp_path: Path) -> None:
+    with pytest.raises(ReadingServiceError, match="sibling_window"):
+        service.get_section_tree(_workspace(tmp_path), "doc", "doc.ch-1", sibling_window=-1)

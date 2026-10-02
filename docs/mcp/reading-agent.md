@@ -102,8 +102,10 @@ A self-serve agent drives an entire session with these tools alone:
      - `search(query, doc_id=None)` — find related sections (cross-document when
        `doc_id` is omitted).
      - `get_chapter_outline(plan_id)` / `get_section_tree(doc_id, section_id)` —
-       orient cheaply: the current chapter's subtree with read flags, or a
-       section's breadcrumb, siblings and children.
+       orient cheaply: the current chapter's subtree (two levels by default) with
+       read flags and in-chapter counts, or a section's breadcrumb, windowed
+       siblings and children. Pass `chapter_level=2` when chapters sit under
+       parts or a single book-title heading.
      - `get_outline(doc_id, root_id=None, max_depth=None)` /
        `get_related(doc_id, section_id)` — navigate structure. Scope the outline
        with `root_id` / `max_depth` (e.g. `max_depth=1` for the chapter list); a

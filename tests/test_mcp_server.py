@@ -126,3 +126,4 @@ def test_scoped_outline_tools_return_section_tree_and_chapter(tmp_path: Path) ->
     ).structured_content
     assert chapter["current_section_id"] == "deep-work.a"
     assert [node["read"] for node in chapter["nodes"]] == [False]
+    assert (chapter["completed"], chapter["total"], chapter["plan_total"]) == (0, 1, 1)

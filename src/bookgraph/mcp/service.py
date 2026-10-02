@@ -204,13 +204,16 @@ class SectionTree(BaseModel):
     ``ancestors`` run root-first (top-level section down to the parent). ``siblings``
     are the parent's children in reading order — the section itself included, so its
     position among them is visible; for a top-level section they are the top-level
-    sections.
+    sections. A flat document (e.g. page/token fallback, every section top-level) would
+    make that the whole book, so siblings are windowed around the section and
+    ``siblings_truncated`` says whether any were dropped.
     """
 
     doc_id: str
     section: SectionRef
     ancestors: list[SectionRef] = Field(default_factory=list)
     siblings: list[SectionRef] = Field(default_factory=list)
+    siblings_truncated: bool = False
     children: list[SectionRef] = Field(default_factory=list)
 
 
@@ -223,9 +226,12 @@ class ProgressNode(OutlineNode):
 class ChapterOutline(BaseModel):
     """The outline of the chapter a reading plan is currently in.
 
-    The chapter is the top-level ancestor of ``current_section_id`` (the plan's next
-    unread section). When the plan is ``done`` there is no current section, so
-    ``chapter`` is ``None`` and ``nodes`` is empty.
+    The chapter is the scope ancestor of ``current_section_id`` (the plan's next unread
+    section) — see :func:`_chapter_scope`. ``completed`` / ``remaining`` / ``total``
+    count the plan's sections in the chapter's whole subtree, by membership (unaffected
+    by ``max_depth``); ``plan_completed`` / ``plan_total`` are plan-wide. When the plan
+    is ``done`` there is no current section, so ``chapter`` is ``None``, ``nodes`` is
+    empty, and the chapter counts are zero.
     """
 
     plan_id: str
@@ -234,8 +240,11 @@ class ChapterOutline(BaseModel):
     chapter: SectionRef | None = None
     nodes: list[ProgressNode] = Field(default_factory=list)
     truncated: bool = False
-    completed: int
-    total: int
+    completed: int = 0
+    remaining: int = 0
+    total: int = 0
+    plan_completed: int
+    plan_total: int
     done: bool
 
 
@@ -816,12 +825,18 @@ def get_section_tree(
     section_id: str,
     include_siblings: bool = True,
     include_children: bool = True,
+    sibling_window: int | None = 10,
 ) -> SectionTree:
     """Return a small outline around one section: breadcrumb, siblings, children.
 
     A cheap alternative to the full outline for "where am I in this book?" questions.
     For deeper nesting below the section, use ``get_outline(root_id=section_id)``.
+    ``sibling_window`` keeps at most that many siblings on each side of the section
+    (``None`` = all of them), so a flat document cannot turn this into the whole book.
     """
+
+    if sibling_window is not None and sibling_window < 0:
+        raise ReadingServiceError("sibling_window must be at least 0")
 
     graph = _load_graph(workspace, doc_id)
     by_id = {node.id: node for node in graph.nodes}
@@ -830,13 +845,21 @@ def get_section_tree(
         raise SectionNotFoundError(f"Section '{section_id}' not found in document '{doc_id}'.")
 
     siblings: list[SectionRef] = []
+    siblings_truncated = False
     if include_siblings:
         parent_node = by_id.get(node.parent_id) if node.parent_id is not None else None
         if parent_node is not None:
             sibling_ids = parent_node.child_ids
         else:
             sibling_ids = [n.id for n in graph.nodes if n.parent_id is None]
-        siblings = [_section_ref(by_id[sid]) for sid in sibling_ids if sid in by_id]
+        sibling_ids = [sid for sid in sibling_ids if sid in by_id]
+        if sibling_window is not None and node.id in sibling_ids:
+            here = sibling_ids.index(node.id)
+            start = max(0, here - sibling_window)
+            end = here + sibling_window + 1
+            siblings_truncated = start > 0 or end < len(sibling_ids)
+            sibling_ids = sibling_ids[start:end]
+        siblings = [_section_ref(by_id[sid]) for sid in sibling_ids]
 
     children: list[SectionRef] = []
     if include_children:
@@ -847,28 +870,56 @@ def get_section_tree(
         section=_section_ref(node),
         ancestors=[_section_ref(ancestor) for ancestor in _ancestors(by_id, node)],
         siblings=siblings,
+        siblings_truncated=siblings_truncated,
         children=children,
     )
 
 
+def _chapter_scope(
+    by_id: dict[str, SectionNode], node: SectionNode, chapter_level: int | None
+) -> SectionNode:
+    """The chapter holding ``node``: its scope ancestor-or-self.
+
+    The outermost ancestor-or-self by default; with ``chapter_level``, the nearest
+    ancestor-or-self whose heading ``level`` is at most ``chapter_level`` (e.g. ``2``
+    for chapters nested under level-1 parts), falling back to the outermost ancestor.
+    Same rule as ``chapter_progress`` in #53 — keep them in step until they share it.
+    """
+
+    chain = [*_ancestors(by_id, node), node]  # root-first
+    if chapter_level is not None:
+        for candidate in reversed(chain):
+            if candidate.level <= chapter_level:
+                return candidate
+    return chain[0]
+
+
 def get_chapter_outline(
-    workspace: WorkspacePaths, plan_id: str, max_depth: int | None = None
+    workspace: WorkspacePaths,
+    plan_id: str,
+    max_depth: int | None = 2,
+    chapter_level: int | None = None,
 ) -> ChapterOutline:
     """Return the outline of the chapter a reading plan is currently in.
 
-    The chapter is the top-level ancestor of the plan's next unread section; its
-    subtree comes back with a per-node ``read`` flag, plus plan progress counts.
-    ``max_depth`` limits the subtree as in ``get_outline``.
+    The chapter is the scope ancestor of the plan's next unread section (outermost by
+    default; pass ``chapter_level`` when chapters sit under parts or a single book-title
+    heading). Its subtree comes back with a per-node ``read`` flag plus chapter and plan
+    progress counts. ``max_depth`` limits the subtree as in ``get_outline``; it defaults
+    to ``2`` (the chapter and its direct subsections) so a chapter that turns out to be
+    the whole book stays small — pass ``None`` for the full subtree.
     """
 
+    if chapter_level is not None and chapter_level < 1:
+        raise ReadingServiceError("chapter_level must be at least 1")
     _, plan = _load_plan(workspace, plan_id)
     pack = next_sections(plan)
     completed = set(plan.completed)
     result = ChapterOutline(
         plan_id=plan.plan_id,
         doc_id=plan.doc_id,
-        completed=sum(1 for section_id in plan.section_ids if section_id in completed),
-        total=len(plan.section_ids),
+        plan_completed=sum(1 for section_id in plan.section_ids if section_id in completed),
+        plan_total=len(plan.section_ids),
         done=pack.done,
     )
     if pack.done:
@@ -883,8 +934,13 @@ def get_chapter_outline(
             f"Reading plan '{plan_id}' references unknown section '{current_id}' "
             f"in document '{plan.doc_id}'."
         )
-    chapter = (_ancestors(by_id, current) or [current])[0]
+    chapter = _chapter_scope(by_id, current, chapter_level)
     nodes, truncated = _scoped_nodes(graph, chapter.id, max_depth)
+    subtree = {node.id for node in _scoped_nodes(graph, chapter.id, None)[0]}
+    in_chapter = [section_id for section_id in plan.section_ids if section_id in subtree]
+    result.completed = sum(1 for section_id in in_chapter if section_id in completed)
+    result.total = len(in_chapter)
+    result.remaining = result.total - result.completed
     result.current_section_id = current_id
     result.chapter = _section_ref(chapter)
     result.nodes = [

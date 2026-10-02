@@ -213,3 +213,26 @@ def test_asset_ref_link_is_relative_and_embeds_in_the_export(workspace: Workspac
         workspace, DOC, ONE, "vi", f"# Một\n\n![Hình 1]({asset.link})\n", includes_assets=True
     )
     assert "data:image/png;base64," in _export(workspace)
+
+
+@pytest.mark.parametrize(
+    ("body", "kept"),
+    [
+        (
+            '<p><a id="fig-1"></a><img src="nope.png"> Xem hình.</p>',
+            '<a id="fig-1"></a>',
+        ),
+        ('<a id="fig-2"></a><img src="nope.png"> Xem hình.', '<a id="fig-2"></a>'),
+        ('<div><hr><img src="nope.png"></div>', "<hr>"),
+        ('<p><a name="fig-3"></a><img src="nope.png"></p>', '<a name="fig-3"></a>'),
+    ],
+)
+def test_anchor_targets_and_self_rendering_elements_survive(
+    workspace: WorkspacePaths, body: str, kept: str
+) -> None:
+    _register(workspace, ONE, f"# Một\n\n{body}\n\n[liên kết](#fig-2)\n")
+
+    html = _export(workspace)
+
+    assert kept in html
+    assert "nope.png" not in html

@@ -297,16 +297,29 @@ def _html_src_attr(attributes: str) -> tuple[str, tuple[int, int]] | None:
 # Inline/block HTML elements that render nothing once their content is gone. Table
 # parts are left out on purpose: an empty cell keeps a table's shape.
 _WRAPPER_TAGS = "a|p|figure|picture|span|em|strong|b|i|s|u|div|center|small|sup|sub"
-_EMPTY_ELEMENT_RE = re.compile(rf"<({_WRAPPER_TAGS})\b[^>]*>\s*</\1\s*>", re.IGNORECASE)
-_OPEN_TAG_RE = re.compile(r"^\s*<([a-z][\w-]*)\b[^>]*(?<!/)>\s*$", re.IGNORECASE)
+_EMPTY_ELEMENT_RE = re.compile(rf"<({_WRAPPER_TAGS})\b([^>]*)>\s*</\1\s*>", re.IGNORECASE)
+_OPEN_TAG_RE = re.compile(r"^\s*<([a-z][\w-]*)\b([^>]*)(?<!/)>\s*$", re.IGNORECASE)
 _CLOSE_TAG_RE = re.compile(r"^\s*</([a-z][\w-]*)\s*>\s*$", re.IGNORECASE)
 _ANY_TAG_RE = re.compile(r"<[^>]*>")
+# An element with an ``id``/``name`` is a link target (EPUB ``<a id="fig-1"></a>``):
+# content even when it shows no text, so it is never stripped as an empty wrapper.
+_TARGET_ATTR_RE = re.compile(r"""(?:^|\s)(?:id|name)\s*=""", re.IGNORECASE)
+_TARGET_TAG_RE = re.compile(r"""<[a-z][\w-]*\s[^>]*?(?<=\s)(?:id|name)\s*=""", re.IGNORECASE)
+# Elements that render something without any text inside them.
+_SELF_RENDERING_RE = re.compile(
+    r"<(?:img|hr|svg|video|audio|iframe|object|embed|canvas|math)\b", re.IGNORECASE
+)
 
 
 def _html_visible(html: str) -> bool:
-    """Whether a piece of raw HTML shows anything: an image, or text outside tags."""
+    """Whether a piece of raw HTML is content: it renders something (an image, a rule,
+    an SVG, media, text outside tags) or carries a link target (``id``/``name``)."""
 
-    return "<img" in html.lower() or bool(_ANY_TAG_RE.sub("", html).strip())
+    return bool(
+        _SELF_RENDERING_RE.search(html)
+        or _TARGET_TAG_RE.search(html)
+        or _ANY_TAG_RE.sub("", html).strip()
+    )
 
 
 def _has_content(token: Token) -> bool:
@@ -333,6 +346,8 @@ def _wrapper_key(token: Token) -> tuple[str, int] | None:
         return token.type.rsplit("_", 1)[0], token.nesting
     if token.type == "html_inline":
         if match := _OPEN_TAG_RE.match(token.content):
+            if _TARGET_ATTR_RE.search(match.group(2)):
+                return None  # a link target: content, not a wrapper
             return "html:" + match.group(1).lower(), 1
         if match := _CLOSE_TAG_RE.match(token.content):
             return "html:" + match.group(1).lower(), -1
@@ -369,6 +384,10 @@ def _drop_empty_wrappers(children: list[Token]) -> list[Token]:
     return [child for index, child in enumerate(children) if index not in empty]
 
 
+def _strip_unless_target(match: re.Match[str]) -> str:
+    return match.group(0) if _TARGET_ATTR_RE.search(match.group(2)) else ""
+
+
 def _strip_emptied_html(html: str) -> str:
     """Strip the wrapper elements an HTML block's dropped image left empty.
 
@@ -377,7 +396,7 @@ def _strip_emptied_html(html: str) -> str:
     """
 
     while True:
-        stripped = _EMPTY_ELEMENT_RE.sub("", html)
+        stripped = _EMPTY_ELEMENT_RE.sub(_strip_unless_target, html)
         if stripped == html:
             break
         html = stripped

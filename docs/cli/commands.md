@@ -668,6 +668,19 @@ The server binds to that one workspace; tool arguments never take a workspace
 path. If the `mcp` extra is not installed, the command fails with a message
 telling the user to `uv sync --extra mcp`.
 
+### Server instructions
+
+The server sends `instructions` (`bookgraph.mcp.server.SERVER_INSTRUCTIONS`) to every
+client on connect, so the translation contract binds any agent, with or without the
+`bookgraph-reader` skill:
+
+- `write_section_translation` is the only way to store a translation; agents must not
+  write translation files themselves (nothing reads them).
+- The saved content is the translated section text only; run notes go in the agent's
+  reply or job log.
+- Jobs that translate or annotate advance with `complete_reading_batch` (with
+  `translation_lang`), never `mark_read`.
+
 ### Tools
 
 - `get_next_section(plan_id, include_assets=True, stop_at_boundary=False,

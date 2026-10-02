@@ -125,8 +125,14 @@ A self-serve agent drives an entire session with these tools alone:
      source_section_hash=<current_section_hash>)`.
      `list_section_artifacts(doc_id, lang)` lists every cached translation with its
      status, so a job can redo the `stale` ones after a re-segment.
+     `write_section_translation` is the **only** way to store a translation. Do not
+     write translation files yourself, under `translations/` or in a directory of
+     your own: nothing reads them, so the export and `complete_reading_batch` treat
+     those sections as untranslated. The saved `content` is the translated section
+     text only; notes about your run go in your reply or job log.
    - `mark_read(plan_id)` — mark the section read (defaults to the next unread) and
-     persist progress.
+     persist progress. Plain reading only: a translate/annotate job advances with
+     `complete_reading_batch` (below), never `mark_read`.
 4. `list_plans()` — resume or report progress across sessions (`completed`/`total`/`done`).
    For "how many sections are left in this chapter?", call
    `get_plan_progress(plan_id)` — it answers from the plan + hierarchy without
@@ -143,7 +149,7 @@ and the report lists every reason:
 
 ```text
 get_next_section(plan_id)                       # the batch
-  … translate → translations/vi/<doc_id>/<section_id>.md
+  … translate → write_section_translation(doc_id, section_id, "vi", content, …)
   … open each asset path, annotate_section(...)
   … bookgraph index build <ws> <doc_id>         # or index="deferred", see below
 complete_reading_batch(plan_id,
@@ -165,6 +171,9 @@ boundary-clipped batches (`get_next_section(plan_id, stop_at_boundary=True)`), p
 same `stop_at_boundary` / `chapter_level` here so the default batch is the one you were
 handed. Call `validate_reading_batch` with the same arguments for a dry run. Issue codes and the
 full contract: `docs/cli/commands.md`, *Reading batch completion*.
+
+These rules are also sent to every MCP client as the server's `instructions` on
+connect, so they bind any agent, whether or not it loaded the `bookgraph-reader` skill.
 
 State (reading-plan progress in `reading_plans/<plan_id>.json` and annotations in
 `annotations/<doc_id>/<section_id>.json`) persists on disk, so a new session resumes

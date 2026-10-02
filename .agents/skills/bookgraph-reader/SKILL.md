@@ -71,7 +71,11 @@ Optional translation cache tools (when the user wants sections translated):
   `stale`/`missing`, or a fresh prose-only translation of a section with
   figures/tables, means translate again.
 - `write_section_translation(doc_id, section_id, lang, content, includes_assets=...,
-  source_section_hash=<current_section_hash>)` — cache a new translation.
+  source_section_hash=<current_section_hash>)` — cache a new translation. This is
+  the **only** place a translation goes: do not write translation files yourself
+  (under `translations/` or any directory of your own); nothing reads them, so the
+  section stays untranslated in the export and in batch completion. Save the
+  translated section text only; notes about your run go in your reply or job log.
 - `list_section_artifacts(doc_id=None, lang=None)` — list cached translations and
   their freshness.
 
@@ -111,7 +115,8 @@ Optional translation cache tools (when the user wants sections translated):
    - When pausing, call `list_plans()` and report `completed/total`.
    - **Enrichment jobs** (annotate/translate/index per batch): do not call
      `mark_read`. Call `complete_reading_batch(plan_id, inspected_assets=[...],
-     translation_lang=..., ...)` after the work; if `committed` is false, fix every
+     translation_lang=..., ...)` after the work (always pass `translation_lang` in a
+     translation job, so an unsaved translation blocks); if `committed` is false, fix every
      blocking `issue` it lists (each says what to do) and call it again. Never
      advance progress past a failed step. If you read with
      `get_next_section(stop_at_boundary=True)`, pass the same `stop_at_boundary` /

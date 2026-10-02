@@ -111,6 +111,14 @@ chat), reuse the cache instead of retranslating:
    the next run reuses it.
 3. `list_section_artifacts(doc_id, lang)` shows every cached translation and which
    are `stale` after a re-segment.
+4. `write_section_translation` is the **only** place a translation goes. Do not
+   write translation files yourself (under `translations/` or any directory of your
+   own): nothing reads them, so the section stays untranslated in the PDF export and
+   in batch completion. Save the translated section text only; notes about your run
+   go in your reply or job log.
+5. In a translation job, never `mark_read`: finish each batch with
+   `complete_reading_batch(plan_id, translation_lang=lang, inspected_assets=[...])`
+   and fix every blocking issue until it commits.
 
 ## Behavior
 

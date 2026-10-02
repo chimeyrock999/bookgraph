@@ -40,11 +40,28 @@ from bookgraph.mcp.service import (
 )
 from bookgraph.workspace import WorkspacePaths
 
+# Sent to every MCP client on connect, so the translation contract binds any agent —
+# not only one that loaded the bookgraph-reader skill.
+SERVER_INSTRUCTIONS = """\
+BookGraph reading tools for one workspace. Contract for jobs that translate sections:
+
+- The translation registry is the only translation store. Check
+  get_section_translation first and save a translation ONLY with
+  write_section_translation. Do not write translation files yourself, under
+  translations/ or in any directory of your own: nothing reads them, so the section
+  stays untranslated in the export and in batch completion.
+- The content you save is the translated section text and nothing else. Notes about
+  your own run (progress, checks, delivery) go in your reply or job log.
+- In a job that translates or annotates, do not call mark_read. Finish each batch
+  with complete_reading_batch, passing translation_lang; if committed is false, fix
+  every blocking issue and call it again.
+"""
+
 
 def build_server(workspace: WorkspacePaths) -> FastMCP:
     """Build a FastMCP server whose tools read/query a single workspace."""
 
-    mcp: FastMCP = FastMCP("bookgraph")
+    mcp: FastMCP = FastMCP("bookgraph", instructions=SERVER_INSTRUCTIONS)
 
     @mcp.tool
     def get_next_section(
@@ -120,7 +137,11 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
 
     @mcp.tool
     def mark_read(plan_id: str, section_id: str | None = None) -> MarkReadResult:
-        """Mark a section read for a plan (defaults to the next unread section)."""
+        """Mark a section read for a plan (defaults to the next unread section).
+
+        For plain reading only. It checks nothing: a job that translates or annotates
+        must advance with complete_reading_batch, which verifies the work first.
+        """
 
         try:
             return service.mark_read(workspace, plan_id, section_id)
@@ -416,7 +437,10 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
         the section content it was made from, replacing any earlier translation. Set
         includes_assets=True when the translation carries the section's figures/
         tables. Pass source_section_hash (the current_section_hash you saw) to refuse
-        the write if the section changed while you were translating.
+        the write if the section changed while you were translating. This is the only
+        way to store a translation: do not write translation files yourself (nothing
+        reads them). content is the translated section text only; notes about your
+        run belong in your reply or job log.
         """
 
         try:

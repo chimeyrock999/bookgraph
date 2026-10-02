@@ -220,3 +220,14 @@ def test_translation_tools_round_trip_through_the_cache(tmp_path: Path) -> None:
     assert cached["status"] == "fresh"
     assert cached["content"] == "xin chào thế giới"
     assert [a["status"] for a in listing["artifacts"]] == ["fresh"]
+
+
+def test_server_instructions_bind_agents_to_the_translation_registry(tmp_path: Path) -> None:
+    # Every MCP client receives these on connect, skill or no skill.
+    server = build_server(_workspace(tmp_path))
+
+    instructions = server.instructions or ""
+    assert "ONLY with\n  write_section_translation" in instructions
+    assert "Do not write translation files yourself" in instructions
+    assert "do not call mark_read" in instructions
+    assert "complete_reading_batch, passing translation_lang" in instructions

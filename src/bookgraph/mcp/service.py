@@ -37,12 +37,14 @@ from bookgraph.documents import read_document
 from bookgraph.graph import SectionGraph, SectionNode, build_section_graph, chapter_span
 from bookgraph.index import ConceptMention, default_index_backend, tokenize
 from bookgraph.mcp.asset_views import AssetRef
+from bookgraph.mcp.translation_structure import translation_structure_issues
 from bookgraph.models import (
     ASSET_BLOCK_TYPES,
     AnnotatedConcept,
     CanonicalBlock,
     ReadingPlan,
     Section,
+    TranslationStructureIssue,
 )
 from bookgraph.quality import (
     AssetSummary,
@@ -1391,6 +1393,7 @@ class SectionArtifactView(BaseModel):
     that left out the section's figures/tables is prose-only even when fresh, because
     the section hash covers only its title and text.
     ``content`` is the translation body when requested and present.
+    ``structure_issues``: see :mod:`bookgraph.mcp.translation_structure`.
     """
 
     type: str = "translation"
@@ -1408,6 +1411,7 @@ class SectionArtifactView(BaseModel):
     created_at: str | None = None
     notes: str | None = None
     content: str | None = None
+    structure_issues: list[TranslationStructureIssue] = Field(default_factory=list)
 
 
 class SectionArtifactList(BaseModel):
@@ -1451,6 +1455,9 @@ def _artifact_view(
         created_at=artifact.created_at if artifact else None,
         notes=artifact.notes if artifact else None,
         content=content,
+        structure_issues=translation_structure_issues(
+            workspace, state, section, _load_doc_blocks(workspace, state.doc_id)
+        ),
     )
 
 

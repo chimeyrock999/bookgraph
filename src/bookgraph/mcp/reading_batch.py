@@ -34,12 +34,14 @@ from bookgraph.mcp.service import (
     _plan_path,
     _section_assets,
 )
+from bookgraph.mcp.translation_structure import translation_structure_issues
 from bookgraph.models import ReadingPlan, Section, SectionAnnotation
 from bookgraph.reading_plans import (
     mark_section_read,
     plan_lock,
     write_reading_plan,
 )
+from bookgraph.translation_structure import describe_structure_issues
 from bookgraph.translations import section_content_hash, translation_state, validate_lang
 from bookgraph.workspace import WorkspacePaths
 
@@ -60,7 +62,9 @@ class BatchRequirements(BaseModel):
       listed in ``inspected_assets`` (block ids the caller has opened/embedded).
     - ``translation_lang``: when set, the section's cached translation
       (``translations/<lang>/<doc_id>/<section_id>.md``) exists, is non-empty, and is
-      not ``stale`` in the translation registry (an ``untracked`` body only warns).
+      not ``stale`` in the translation registry (an ``untracked`` body only warns), and
+      keeps the section's link destinations, image paths, reference definitions, HTML
+      anchors, and heading ids unchanged.
     - ``artifacts``: extra workspace-relative path templates that must exist and be
       non-empty per section; ``{doc_id}``, ``{section_id}`` and ``{plan_id}`` expand.
     """
@@ -319,9 +323,7 @@ def _evaluate(
                         )
 
         if lang is not None:
-            issue = _translation_issue(workspace, lang, section)
-            if issue is not None:
-                issues.append(issue)
+            issues.extend(_translation_issues(workspace, lang, section))
 
         for template in templates:
             relative_path = _render_template(template, plan.plan_id, section)
@@ -429,13 +431,16 @@ def _index_reflects(
     return {node.slug for node in indexed} == {concept.slug for concept in annotation.concepts}
 
 
-def _translation_issue(workspace: WorkspacePaths, lang: str, section: Section) -> BatchIssue | None:
+def _translation_issues(workspace: WorkspacePaths, lang: str, section: Section) -> list[BatchIssue]:
     """Check the section's cached translation against the translation registry.
 
     ``missing`` (or an empty body) and ``stale`` (the section changed since it was
     translated) block; ``untracked`` — a body with no valid registry sidecar, e.g.
     written by hand or before the registry existed — only warns, since its freshness is
-    unknown rather than known-bad.
+    unknown rather than known-bad. A usable (fresh or untracked) body that dropped,
+    added, or rewrote a structural target (a link destination, image path, reference
+    definition, HTML anchor, heading id) blocks: the intra-book links it breaks are
+    known-bad.
     """
 
     state = translation_state(
@@ -443,31 +448,56 @@ def _translation_issue(workspace: WorkspacePaths, lang: str, section: Section) -
     )
     relative = state.paths.body.relative_to(workspace.root)
     if state.status == "missing" or not state.body:
-        return BatchIssue(
-            code="translation_missing",
-            section_id=section.id,
-            message=f"Translation '{relative}' is missing or empty; write it first.",
-        )
+        return [
+            BatchIssue(
+                code="translation_missing",
+                section_id=section.id,
+                message=f"Translation '{relative}' is missing or empty; write it first.",
+            )
+        ]
     if state.status == "stale":
-        return BatchIssue(
-            code="translation_stale",
-            section_id=section.id,
-            message=(
-                f"Translation '{relative}' was made from an older version of the section; "
-                "re-translate it with write_section_translation."
-            ),
-        )
+        return [
+            BatchIssue(
+                code="translation_stale",
+                section_id=section.id,
+                message=(
+                    f"Translation '{relative}' was made from an older version of the "
+                    "section; re-translate it with write_section_translation."
+                ),
+            )
+        ]
+    issues: list[BatchIssue] = []
     if state.status == "untracked":
-        return BatchIssue(
-            code="translation_untracked",
-            section_id=section.id,
-            blocking=False,
-            message=(
-                f"Translation '{relative}' has no registry record, so its freshness is "
-                "unknown; write it with write_section_translation to track it."
-            ),
+        issues.append(
+            BatchIssue(
+                code="translation_untracked",
+                section_id=section.id,
+                blocking=False,
+                message=(
+                    f"Translation '{relative}' has no registry record, so its freshness is "
+                    "unknown; write it with write_section_translation to track it."
+                ),
+            )
         )
-    return None
+    structure = translation_structure_issues(
+        workspace, state, section, _load_doc_blocks(workspace, section.doc_id)
+    )
+    if structure:
+        issues.append(
+            BatchIssue(
+                code="translation_structure_changed",
+                section_id=section.id,
+                message=(
+                    f"Translation '{relative}' changed structural Markdown "
+                    f"({describe_structure_issues(structure)}); translate prose and link "
+                    "labels only, keep every link destination, path, anchor, and heading "
+                    "id byte-for-byte, link carried figures/tables by their AssetRef.link "
+                    "(relative, never the absolute path), and rewrite it with "
+                    "write_section_translation."
+                ),
+            )
+        )
+    return issues
 
 
 def _validate_lang(lang: str | None) -> str | None:

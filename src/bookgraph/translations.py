@@ -78,6 +78,34 @@ def _check_section_id(section_id: str) -> str:
     return section_id
 
 
+def split_frontmatter(text: str) -> tuple[dict[str, object], str]:
+    """Split an optional leading ``---`` YAML frontmatter block from Markdown.
+
+    Only flat ``key: value`` lines are read (values as JSON scalars when they parse,
+    raw strings otherwise) — enough for the ``title``/provenance fields translation
+    artifacts carry, without a YAML dependency. Text without frontmatter is returned
+    unchanged.
+    """
+
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return {}, text
+    end = next((i for i, line in enumerate(lines[1:], start=1) if line.strip() == "---"), None)
+    if end is None:
+        return {}, text
+    fields: dict[str, object] = {}
+    for line in lines[1:end]:
+        key, sep, value = line.partition(":")
+        if not sep or not key.strip():
+            continue
+        value = value.strip()
+        try:
+            fields[key.strip()] = json.loads(value)
+        except ValueError:
+            fields[key.strip()] = value.strip("'\"")
+    return fields, "\n".join(lines[end + 1 :])
+
+
 @dataclass(frozen=True)
 class TranslationPaths:
     """Where one section's translation body and its registry sidecar live."""

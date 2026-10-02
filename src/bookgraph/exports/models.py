@@ -37,6 +37,7 @@ ASSET_UNSUPPORTED = "asset_unsupported"
 TRANSLATION_EMPTY = "translation_empty"
 TRANSLATION_MISSING_ASSETS = "translation_missing_assets"
 TRANSLATION_STALE = "translation_stale"
+TRANSLATION_STRUCTURE_CHANGED = "translation_structure_changed"
 TRANSLATION_UNREADABLE = "translation_unreadable"
 TRANSLATION_UNTRACKED = "translation_untracked"
 
@@ -44,11 +45,13 @@ TRANSLATION_UNTRACKED = "translation_untracked"
 ASSET_WARNING_CODES: frozenset[str] = frozenset({ASSET_MISSING, ASSET_REMOTE, ASSET_UNSUPPORTED})
 
 # ``--strict`` refuses to write an export carrying any of these: a missing asset, or a
-# translation known to be outdated or to have left out the section's figures/tables.
+# translation known to be outdated, to have left out the section's figures/tables, or to
+# have changed a link destination / anchor / path of its source section.
 # ``translation_untracked`` only warns — its freshness is unknown, not known-bad.
 STRICT_WARNING_CODES: frozenset[str] = ASSET_WARNING_CODES | {
     TRANSLATION_MISSING_ASSETS,
     TRANSLATION_STALE,
+    TRANSLATION_STRUCTURE_CHANGED,
 }
 
 

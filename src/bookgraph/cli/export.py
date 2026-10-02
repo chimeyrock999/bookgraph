@@ -93,8 +93,9 @@ def export_translated_pdf(
         typer.Option(
             "--strict",
             help="Fail instead of exporting when an asset is missing, a translation is "
-            "stale, or a translation left out the section's figures/tables. In bilingual "
-            "mode this includes original-column assets of translated sections.",
+            "stale, a translation left out the section's figures/tables, or a translation "
+            "changed its section's link targets, anchors, or paths. In bilingual mode this "
+            "includes original-column assets of translated sections.",
         ),
     ] = False,
     show_status: Annotated[

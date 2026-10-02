@@ -1009,9 +1009,11 @@ bookgraph llmwiki bridge /path/to/workspace <doc_id> --compile --print   # print
 - `--plan <plan_id>`: restrict staging to sections already read in this reading
   plan, so the compiled wiki compounds with reading progress. Omit to stage every
   section of the document.
-- `--compile`: after staging, run `llmwiki compile --root <workspace>/llmwiki`
-  incrementally.
-- `--print`: with `--compile`, print the compile command instead of running it.
+- `--compile`: after staging, run `llmwiki compile` incrementally with
+  `<workspace>/llmwiki` as the working directory. `llmwiki compile` has no
+  `--root` option (only `llmwiki serve` does); it compiles the current directory.
+- `--print`: with `--compile`, print the compile command instead of running it,
+  as a shell-quoted `cd <workspace>/llmwiki && llmwiki compile`.
 
 ### Behavior
 
@@ -1060,7 +1062,9 @@ bookgraph llmwiki serve /path/to/workspace --print
 ### Behavior
 
 - Runs `llmwiki serve --root <workspace>/llmwiki` — the real `llm-wiki-compiler`
-  v1.1 contract (`--root <project>`, no positional root) — forwarding its exit code.
+  contract (`--root <project>`, no positional root) — forwarding its exit code.
+  `serve` is the only llmwiki command that takes `--root`; `compile` and `status`
+  work on the current directory (see `llmwiki bridge --compile`).
 - With `--print`, emits the command with shell-safe quoting instead of running it.
 
 ### Must not do

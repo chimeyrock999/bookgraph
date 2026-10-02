@@ -1,7 +1,7 @@
 """End-to-end bridge → compile → status integration against the real llmwiki CLI.
 
 Skipped unless the optional ``llm-wiki-compiler`` tool is installed and on PATH,
-so it exercises the real v1.1 contract wherever the tool is available (CI images
+so it exercises the real CLI contract wherever the tool is available (CI images
 with the optional extra, local dev machines) without becoming a hard dependency
 of the BookGraph test suite.
 """
@@ -58,20 +58,14 @@ def _write_sections_manifest(workspace: Path, doc_id: str) -> None:
 
 
 def _llmwiki_status(project_root: Path) -> dict:
+    # `llmwiki status` has no --root option; it reports on the current directory.
     proc = subprocess.run(
-        ["llmwiki", "status", "--root", str(project_root), "--json"],
+        ["llmwiki", "status", "--json"],
+        cwd=project_root,
         capture_output=True,
         text=True,
-        check=False,
+        check=True,
     )
-    if proc.returncode != 0:
-        # Fall back to a plain status invocation if this build lacks --json.
-        proc = subprocess.run(
-            ["llmwiki", "status", "--root", str(project_root)],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
     return json.loads(proc.stdout)
 
 
@@ -80,9 +74,7 @@ def test_bridge_then_compile_produces_a_non_empty_llmwiki_project(tmp_path: Path
     assert runner.invoke(app, ["init", str(workspace)]).exit_code == 0
     _write_sections_manifest(workspace, "deep-work")
 
-    result = runner.invoke(
-        app, ["llmwiki", "bridge", str(workspace), "deep-work", "--compile"]
-    )
+    result = runner.invoke(app, ["llmwiki", "bridge", str(workspace), "deep-work", "--compile"])
 
     assert result.exit_code == 0, result.output
     # llmwiki compiled its isolated project: state + at least one compiled page

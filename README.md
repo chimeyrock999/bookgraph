@@ -188,9 +188,9 @@ flowchart TD
 
     subgraph MCP["MCP server — bookgraph mcp"]
         direction LR
-        MCP1["reading<br/>get_next_section · get_section · mark_read"]
+        MCP1["reading<br/>get_next_section · get_section · mark_read · complete_reading_batch"]
         MCP2["search"]
-        MCP3["graph/context<br/>get_outline · get_related · get_context"]
+        MCP3["graph/context<br/>get_outline · get_section_tree · get_chapter_outline<br/>get_related · get_context"]
         MCP4["concepts<br/>get_concept"]
     end
 

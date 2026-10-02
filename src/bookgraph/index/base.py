@@ -108,6 +108,19 @@ class Concept(BaseModel):
     mentions: list[ConceptMention]
 
 
+class IndexedAnnotation(BaseModel):
+    """The Tier-2 annotation provenance an index build stored for one section.
+
+    Mirrors the annotation file's ``summary`` / ``model`` / ``created_at`` as of the
+    last ``index build``, so a caller can tell whether the file on disk has been
+    folded into the index yet (see ``IndexBackend.indexed_annotation``).
+    """
+
+    summary: str = ""
+    model: str | None = None
+    created_at: str | None = None
+
+
 class IndexBackend(ABC):
     """Persist and query the derived search + graph index for a workspace.
 
@@ -202,6 +215,17 @@ class IndexBackend(ABC):
         last ``index build`` — unlike the MCP ``get_context`` tool, which reads the
         annotation file directly for an immediate, pre-rebuild summary. ``None`` when
         the section is unannotated, unindexed, or the table predates this feature.
+        """
+
+    @abstractmethod
+    def indexed_annotation(
+        self, workspace: WorkspacePaths, doc_id: str, section_id: str
+    ) -> IndexedAnnotation | None:
+        """The annotation provenance stored for a section by the last build.
+
+        ``None`` when the section has no stored annotation (unannotated, unindexed, or
+        the table predates the feature). Comparing it with the annotation file is how
+        ``complete_reading_batch`` detects an annotation the index has not picked up.
         """
 
     @abstractmethod

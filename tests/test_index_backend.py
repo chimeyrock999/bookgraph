@@ -559,3 +559,25 @@ def test_partial_db_missing_section_graph_degrades_to_not_indexed(tmp_path: Path
     # sections_fts present but section_graph missing: graph tools must fall back too.
     assert backend.indexed_doc_ids(workspace) == set()
     assert backend.load_graph(workspace, "deep-work") is None
+
+
+def test_indexed_annotation_mirrors_the_annotation_folded_into_the_build(
+    tmp_path: Path,
+) -> None:
+    workspace = WorkspacePaths(tmp_path)
+    backend = SqliteIndexBackend()
+    section = _section("deep-work.a", "Alpha", "Body.")
+    assert backend.indexed_annotation(workspace, "deep-work", "deep-work.a") is None  # no db
+
+    annotation = build_annotation(
+        "deep-work", "deep-work.a", None, summary="Gist.", model="m", created_at="t1"
+    )
+    write_annotation(
+        annotation, annotation_path(workspace.annotations_root, "deep-work", "deep-work.a")
+    )
+    backend.build_document(workspace, "deep-work", "Deep Work", [section])
+
+    stored = backend.indexed_annotation(workspace, "deep-work", "deep-work.a")
+    assert stored is not None
+    assert (stored.summary, stored.model, stored.created_at) == ("Gist.", "m", "t1")
+    assert backend.indexed_annotation(workspace, "deep-work", "deep-work.zzz") is None

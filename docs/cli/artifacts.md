@@ -454,6 +454,16 @@ mirroring `bookgraph.models.ReadingPlan`:
 These are recomputed from `section_ids` + `completed` on each `next` call rather
 than persisted, so the file stays a minimal source of truth.
 
+### Write rules
+
+- Every writer (`reading-plan create`/`mark-read`, the MCP `create_plan`,
+  `mark_read`, and `complete_reading_batch` tools) replaces the file atomically
+  (temp file in `reading_plans/` + rename), so a crash mid-write leaves the previous
+  plan, never a truncated one.
+- `complete_reading_batch` appends a whole batch to `completed` in one write, and
+  only after its readiness checks pass (see `commands.md`, *Reading batch
+  completion*).
+
 ## `annotations/<doc_id>/<section_id>.json`
 
 Owner: the MCP `annotate_section` tool (`bookgraph.mcp.service` /

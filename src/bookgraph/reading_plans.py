@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -91,10 +93,22 @@ def mark_section_read(plan: ReadingPlan, section_id: str | None = None) -> tuple
 
 
 def write_reading_plan(plan: ReadingPlan, path: Path) -> Path:
-    """Persist a reading plan to ``reading_plans/<plan_id>.json``."""
+    """Atomically persist a reading plan to ``reading_plans/<plan_id>.json``.
+
+    The plan is the reading-progress source of truth, so it is written to a temp file
+    in the same directory and swapped in with ``os.replace``: a crash mid-write leaves
+    the previous plan intact rather than a truncated file that loses all progress.
+    """
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(plan.model_dump_json(indent=2) + "\n")
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as handle:
+            handle.write(plan.model_dump_json(indent=2) + "\n")
+        os.replace(tmp_name, path)
+    except BaseException:
+        Path(tmp_name).unlink(missing_ok=True)
+        raise
     return path
 
 

@@ -49,6 +49,7 @@ def test_build_server_registers_the_reading_and_query_tools(tmp_path: Path) -> N
     assert server.name == "bookgraph"
     assert sorted(tool.name for tool in tools) == [
         "annotate_section",
+        "complete_reading_batch",
         "create_plan",
         "get_concept",
         "get_context",
@@ -60,6 +61,7 @@ def test_build_server_registers_the_reading_and_query_tools(tmp_path: Path) -> N
         "list_plans",
         "mark_read",
         "search",
+        "validate_reading_batch",
     ]
 
 
@@ -72,6 +74,37 @@ def test_get_next_section_tool_returns_section_content(tmp_path: Path) -> None:
     assert payload["doc_id"] == "deep-work"
     assert [section["id"] for section in payload["sections"]] == ["deep-work.a"]
     assert payload["sections"][0]["text"] == "hello world"
+
+
+def test_complete_reading_batch_tool_blocks_then_commits(tmp_path: Path) -> None:
+    server = build_server(_workspace(tmp_path))
+
+    blocked = asyncio.run(server.call_tool("complete_reading_batch", {"plan_id": "daily"}))
+    payload = blocked.structured_content
+    assert payload["committed"] is False
+    assert [issue["code"] for issue in payload["issues"]] == [
+        "index_missing",
+        "annotation_missing",
+    ]
+
+    asyncio.run(
+        server.call_tool(
+            "annotate_section",
+            {"doc_id": "deep-work", "section_id": "deep-work.a", "summary": "Hello."},
+        )
+    )
+    checked = asyncio.run(
+        server.call_tool("validate_reading_batch", {"plan_id": "daily", "index": "deferred"})
+    )
+    assert checked.structured_content["ok"] is True
+    assert checked.structured_content["committed"] is False
+
+    done = asyncio.run(
+        server.call_tool("complete_reading_batch", {"plan_id": "daily", "index": "deferred"})
+    )
+    assert done.structured_content["committed"] is True
+    assert done.structured_content["done"] is True
+    assert done.structured_content["index_rebuild_needed"] is True
 
 
 def test_search_tool_ranks_sections(tmp_path: Path) -> None:

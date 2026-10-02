@@ -163,6 +163,11 @@ database carries the summary alongside the graph — but it is **not** a
 `_REQUIRED_TABLES` member, so a database predating it still reads cleanly (its absence
 just means "no stored summaries").
 
+The stored `summary`/`model`/`created_at` double as the build's record of *which*
+annotation it folded in: `IndexBackend.indexed_annotation` returns them, and the MCP
+`complete_reading_batch` tool compares them with the annotation file to detect an
+annotation the index has not picked up yet (`index_stale`).
+
 ```sql
 CREATE TABLE section_annotations (
     doc_id     TEXT NOT NULL,

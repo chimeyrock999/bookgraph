@@ -46,6 +46,9 @@ workspace paths; they operate on the workspace used when `bookgraph mcp` started
 - `get_context(doc_id, section_id)` — fetch section text, structural neighbours,
   and concepts.
 - `mark_read(plan_id, section_id=None)` — advance reading progress.
+- `complete_reading_batch(plan_id, ...)` — advance a whole batch only once its
+  enrichment (annotation, translation, figures, index) is verified; use instead of
+  `mark_read` for annotate/translate jobs. `validate_reading_batch` is the dry run.
 
 Optional navigation tools:
 
@@ -86,6 +89,11 @@ Optional navigation tools:
    - When the user says to continue, or confirms they are done, call
      `mark_read(plan_id)` and repeat from step 3.
    - When pausing, call `list_plans()` and report `completed/total`.
+   - **Enrichment jobs** (annotate/translate/index per batch): do not call
+     `mark_read`. Call `complete_reading_batch(plan_id, inspected_assets=[...],
+     translation_lang=..., ...)` after the work; if `committed` is false, fix every
+     blocking `issue` it lists (each says what to do) and call it again. Never
+     advance progress past a failed step.
 
 ## Behavior rules
 
@@ -96,7 +104,8 @@ Optional navigation tools:
 - Treat auto-extracted concepts as hints, not authoritative labels.
 - Prefer deterministic BookGraph tools over web/general knowledge for book
   content questions.
-- Only `create_plan` and `mark_read` write state. Treat all other tools as
+- Only `create_plan`, `mark_read`, and `complete_reading_batch` write reading
+  progress, and `annotate_section` writes an annotation. Treat all other tools as
   read-only.
 
 ## Client-specific packaging

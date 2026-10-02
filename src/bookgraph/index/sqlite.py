@@ -30,6 +30,7 @@ from bookgraph.index.base import (
     ConceptMention,
     ConceptNode,
     IndexBackend,
+    IndexedAnnotation,
     IndexSearchHit,
     IndexUnavailableError,
 )
@@ -254,6 +255,11 @@ class SqliteIndexBackend(IndexBackend):
         self, workspace: WorkspacePaths, doc_id: str, section_id: str
     ) -> str | None:
         return _read(workspace, None, lambda conn: _section_annotation(conn, doc_id, section_id))
+
+    def indexed_annotation(
+        self, workspace: WorkspacePaths, doc_id: str, section_id: str
+    ) -> IndexedAnnotation | None:
+        return _read(workspace, None, lambda conn: _indexed_annotation(conn, doc_id, section_id))
 
     def location(self, workspace: WorkspacePaths) -> str:
         return str(db_path(workspace))
@@ -525,6 +531,22 @@ def _section_annotation(conn: sqlite3.Connection, doc_id: str, section_id: str) 
         (doc_id, section_id),
     ).fetchone()
     return row["summary"] if row is not None else None
+
+
+def _indexed_annotation(
+    conn: sqlite3.Connection, doc_id: str, section_id: str
+) -> IndexedAnnotation | None:
+    # Same degrade-to-None contract as _section_annotation for a pre-feature database.
+    row = conn.execute(
+        "SELECT summary, model, created_at FROM section_annotations "
+        "WHERE doc_id = ? AND section_id = ?",
+        (doc_id, section_id),
+    ).fetchone()
+    if row is None:
+        return None
+    return IndexedAnnotation(
+        summary=row["summary"], model=row["model"], created_at=row["created_at"]
+    )
 
 
 def _all_concept_mentions(conn: sqlite3.Connection) -> list[sqlite3.Row]:

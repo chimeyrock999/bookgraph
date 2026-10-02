@@ -535,7 +535,7 @@ def mark_read(
         updated, marked = mark_section_read(plan, section_id)
     except ValueError as exc:
         raise ReadingServiceError(str(exc)) from exc
-    path.write_text(updated.model_dump_json(indent=2) + "\n")
+    write_reading_plan(updated, path)
     return MarkReadResult(
         plan_id=updated.plan_id,
         marked=marked,

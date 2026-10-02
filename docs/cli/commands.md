@@ -565,9 +565,9 @@ bookgraph index concepts /path/to/workspace
 **Status:** Implemented (requires the optional `mcp` extra).
 
 Serve a workspace over MCP (stdio transport) so a reading client/agent can query
-sections and drive a reading plan. All tools are read-mostly; only `mark_read` and
-`create_plan` write reading-plan state, and `annotate_section` writes a Tier-2
-annotation artifact.
+sections and drive a reading plan. All tools are read-mostly; only `mark_read`,
+`complete_reading_batch`, and `create_plan` write reading-plan state, and
+`annotate_section` writes a Tier-2 annotation artifact.
 
 ```bash
 uv sync --extra mcp
@@ -601,6 +601,17 @@ telling the user to `uv sync --extra mcp`.
   (and with it the asset warnings).
 - `mark_read(plan_id, section_id=None)` → mark a section read (defaults to the
   next unread one) and persist the plan; returns `completed`/`total`/`done`.
+- `validate_reading_batch(plan_id, section_ids=None, require_annotation=True,
+  index="fresh", require_assets=True, inspected_assets=None, translation_lang=None,
+  artifacts=None)` → check whether a batch of sections is ready to be marked read,
+  **without writing**. Returns the same report as `complete_reading_batch` (see
+  below) with `committed: false`.
+- `complete_reading_batch(...)` (same arguments) → the formal completion boundary
+  for a reading batch: run every readiness check and, only when none blocks, mark
+  the **whole** batch read in one atomic plan write. On any blocking issue the plan
+  is untouched — progress advances by the entire batch or not at all. Use it instead
+  of `mark_read` when a batch involves enrichment (annotation, translation, figure
+  inspection, index rebuild). See *Reading batch completion* below.
 - `search(query, doc_id=None, limit=10)` → sections ranked by FTS5 `bm25` over
   title and text, with a short snippet. `doc_id` scopes to one document; omit it
   to search across every indexed document (cross-document search), each hit
@@ -651,8 +662,69 @@ telling the user to `uv sync --extra mcp`.
   `completed`, `total`, and `done`. Lets an agent resume or track progress.
 
 Together `list_documents` → `create_plan` → `get_next_section`/`get_context` →
-`mark_read` → `list_plans` let a client drive a full reading session without any
-CLI step (see `docs/mcp/reading-agent.md`).
+`mark_read` (or `complete_reading_batch`) → `list_plans` let a client drive a full
+reading session without any CLI step (see `docs/mcp/reading-agent.md`).
+
+### Reading batch completion
+
+`validate_reading_batch` / `complete_reading_batch` take a `plan_id`, an optional
+`section_ids` list (default: the plan's current batch, i.e. what `get_next_section`
+returns; duplicates are dropped, an empty list is rejected), and the requirements
+the batch must meet. Each requirement applies to every section of the batch:
+
+| Argument | Default | Check |
+|---|---|---|
+| `require_annotation` | `true` | `annotations/<doc_id>/<section_id>.json` exists and is valid (readable, and its payload names this document/section — the same files `index build` accepts). |
+| `index` | `"fresh"` | The document is in the index **and** the index reflects each section's current annotation: the stored `summary`/`model`/`created_at` match the file, and — when the annotation asserts `concepts` — the section's indexed concept edges are exactly those, agent-sourced. An unannotated section is fresh when the index stores no annotation for it. `"fresh"` makes a missing/stale index blocking; `"deferred"` reports it without blocking (the next `index build`, e.g. the nightly maintenance pass, folds it in); `"ignore"` skips the check. |
+| `require_assets` | `true` | Every figure/table of the section whose file resolves (the `assets` of `get_section`) is listed by `block_id` in `inspected_assets` — the caller's declaration that it opened/embedded it. |
+| `inspected_assets` | `[]` | Block ids the caller inspected. |
+| `translation_lang` | `null` | When set (a slug such as `vi`, `pt-br`; lowercased), `translations/<lang>/<doc_id>/<section_id>.md` exists and is non-empty. |
+| `artifacts` | `[]` | Extra workspace-relative path templates that must exist and be non-empty per section. `{doc_id}`, `{section_id}`, `{plan_id}` expand; an absolute path, a `..` segment, an unknown field, or a path resolving outside the workspace is rejected as a request error. |
+
+Both return a report:
+
+```json
+{
+  "plan_id": "daily", "doc_id": "ddia", "section_ids": ["ddia.a", "ddia.b"],
+  "ok": false, "committed": false, "index_rebuild_needed": true,
+  "issues": [
+    {"code": "annotation_missing", "section_id": "ddia.b", "blocking": true,
+     "message": "No annotation for 'ddia.b'; call annotate_section first."}
+  ],
+  "completed": 4, "total": 120, "done": false
+}
+```
+
+- `ok` — no blocking issue. `committed` — `complete_reading_batch` actually marked
+  the batch read (always `false` from `validate_reading_batch`).
+- `index_rebuild_needed` — the index is missing or stale, whatever the policy, so a
+  `"deferred"` caller knows to schedule `bookgraph index build <workspace> <doc_id>`.
+- `completed` / `total` / `done` — plan progress after the call.
+- Every problem is reported in one pass (not just the first), so a caller can fix
+  them all before retrying.
+
+Issue codes (`blocking` unless noted):
+
+- `section_not_in_plan` — a requested id is not in the plan.
+- `section_missing` — the plan references a section the document's
+  `sections.jsonl` no longer has (re-segmented); recreate the plan.
+- `already_read` — non-blocking; marking it again is idempotent.
+- `annotation_missing` — only when `require_annotation`.
+- `annotation_invalid` — corrupt or misplaced annotation file; blocking only when
+  `require_annotation`.
+- `index_missing` (batch-wide, `section_id: null`) / `index_stale` — blocking only
+  when `index="fresh"`.
+- `asset_not_inspected` — a resolvable figure/table was not in `inspected_assets`.
+- `asset_file_missing` — non-blocking; the parser never staged the file, so it
+  cannot be inspected (same condition as the section warning of that name).
+- `asset_unknown` — non-blocking; `inspected_assets` names a block that is not an
+  asset of the batch (likely a typo).
+- `translation_missing`, `artifact_missing` — the required file is absent or empty.
+
+Request errors — unknown/invalid `plan_id`, an unsegmented document, an empty
+`section_ids`, a plan that is already complete when `section_ids` is omitted, an
+invalid `translation_lang` or artifact template — raise a tool error instead of
+returning a report.
 
 ### Reads / writes
 
@@ -662,8 +734,10 @@ CLI step (see `docs/mcp/reading-agent.md`).
   and `sources/parsed/<doc_id>/document.json` (asset resolution for `assets`; the
   section `warnings` are recomputed from the section and its assets, never read
   back from `quality.json`).
-- `mark_read` and `create_plan` write `reading_plans/<plan_id>.json` (same
-  contracts as `bookgraph reading-plan mark-read` / `create`); `annotate_section`
+- `mark_read`, `complete_reading_batch`, and `create_plan` write
+  `reading_plans/<plan_id>.json` (same contracts as `bookgraph reading-plan
+  mark-read` / `create`; the file is replaced atomically, so a crash never leaves a
+  truncated plan); `annotate_section`
   writes `annotations/<doc_id>/<section_id>.json` (see `annotations.md`). No other
   tool writes.
 

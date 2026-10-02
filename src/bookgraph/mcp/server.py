@@ -14,7 +14,8 @@ from pathlib import Path
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 
-from bookgraph.mcp import service
+from bookgraph.mcp import reading_batch, service
+from bookgraph.mcp.reading_batch import BatchRequirements, IndexPolicy, ReadingBatchReport
 from bookgraph.mcp.service import (
     AnnotationResult,
     ConceptInput,
@@ -81,6 +82,79 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
 
         try:
             return service.mark_read(workspace, plan_id, section_id)
+        except ReadingServiceError as exc:
+            raise ToolError(str(exc)) from exc
+
+    @mcp.tool
+    def validate_reading_batch(
+        plan_id: str,
+        section_ids: list[str] | None = None,
+        require_annotation: bool = True,
+        index: IndexPolicy = "fresh",
+        require_assets: bool = True,
+        inspected_assets: list[str] | None = None,
+        translation_lang: str | None = None,
+        artifacts: list[str] | None = None,
+    ) -> ReadingBatchReport:
+        """Check whether a reading batch is ready to be marked read, without writing.
+
+        Same checks and arguments as complete_reading_batch; returns every problem as
+        an issue {code, message, section_id, blocking}. section_ids defaults to the
+        plan's current batch.
+        """
+
+        requirements = BatchRequirements(
+            require_annotation=require_annotation,
+            index=index,
+            require_assets=require_assets,
+            inspected_assets=inspected_assets or [],
+            translation_lang=translation_lang,
+            artifacts=artifacts or [],
+        )
+        try:
+            return reading_batch.validate_reading_batch(
+                workspace, plan_id, section_ids, requirements
+            )
+        except ReadingServiceError as exc:
+            raise ToolError(str(exc)) from exc
+
+    @mcp.tool
+    def complete_reading_batch(
+        plan_id: str,
+        section_ids: list[str] | None = None,
+        require_annotation: bool = True,
+        index: IndexPolicy = "fresh",
+        require_assets: bool = True,
+        inspected_assets: list[str] | None = None,
+        translation_lang: str | None = None,
+        artifacts: list[str] | None = None,
+    ) -> ReadingBatchReport:
+        """Mark a whole reading batch read — only if its enrichment is complete.
+
+        Use instead of mark_read when a batch involves annotation/translation/index
+        work: progress advances for every section at once or not at all. Checks, per
+        section: an annotation exists (require_annotation); the index reflects it
+        (index="fresh" blocks, "deferred" only reports, "ignore" skips); every
+        figure/table file was inspected — list their block ids in inspected_assets
+        (require_assets); translations/<lang>/<doc_id>/<section_id>.md exists
+        (translation_lang); and each artifacts path template exists ({doc_id},
+        {section_id}, {plan_id} expand). If any blocking issue is found, nothing is
+        written: committed=false and issues lists every reason to fix before retrying.
+        section_ids defaults to the plan's current batch.
+        """
+
+        requirements = BatchRequirements(
+            require_annotation=require_annotation,
+            index=index,
+            require_assets=require_assets,
+            inspected_assets=inspected_assets or [],
+            translation_lang=translation_lang,
+            artifacts=artifacts or [],
+        )
+        try:
+            return reading_batch.complete_reading_batch(
+                workspace, plan_id, section_ids, requirements
+            )
         except ReadingServiceError as exc:
             raise ToolError(str(exc)) from exc
 

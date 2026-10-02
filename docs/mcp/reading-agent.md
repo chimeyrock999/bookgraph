@@ -110,6 +110,38 @@ A self-serve agent drives an entire session with these tools alone:
      persist progress.
 4. `list_plans()` — resume or report progress across sessions (`completed`/`total`/`done`).
 
+## Completing a batch: the transaction boundary
+
+`mark_read` trusts the caller: an agent whose annotation write or index rebuild failed
+half-way can still advance the plan. A job that does real work per batch — translate,
+inspect figures, annotate, rebuild the index — should advance with
+`complete_reading_batch` instead. It checks the batch and marks **every** section
+read in one atomic write only when nothing blocks; otherwise the plan is untouched
+and the report lists every reason:
+
+```text
+get_next_section(plan_id)                       # the batch
+  … translate → translations/vi/<doc_id>/<section_id>.md
+  … open each asset path, annotate_section(...)
+  … bookgraph index build <ws> <doc_id>         # or index="deferred", see below
+complete_reading_batch(plan_id,
+    inspected_assets=["img1", "tbl1"],          # block ids of the figures you opened
+    translation_lang="vi")
+→ {"committed": false, "issues": [{"code": "index_stale", "section_id": "…",
+     "message": "… Run 'bookgraph index build <workspace> <doc_id>'.", "blocking": true}]}
+  … fix, then call again → {"committed": true, "completed": 12, …}
+```
+
+By default it requires, per section, a valid annotation, an index that reflects it
+(`index="fresh"`), and every resolvable figure/table listed in `inspected_assets`.
+Relax what does not apply: `require_annotation=False`, `require_assets=False`,
+`index="deferred"` (report a stale index as `index_rebuild_needed` without blocking —
+for agents that cannot run the CLI and rely on the nightly rebuild) or
+`index="ignore"`. Add `translation_lang` and `artifacts` (path templates with
+`{doc_id}`/`{section_id}`/`{plan_id}`) for outputs your job produces. Call
+`validate_reading_batch` with the same arguments for a dry run. Issue codes and the
+full contract: `docs/cli/commands.md`, *Reading batch completion*.
+
 State (reading-plan progress in `reading_plans/<plan_id>.json` and annotations in
 `annotations/<doc_id>/<section_id>.json`) persists on disk, so a new session resumes
 exactly where the last left off and keeps every annotation ever written.
@@ -169,7 +201,8 @@ projects.
   is optional to read but is what sharpens the graph over time.
 - **Ingestion coverage:** documents without useful headings or PDF bookmarks can
   use the token/page fallback segmenter (`bookgraph segment --segmenter token-page`).
-- **Write surface:** only `create_plan` and `mark_read` write reading plans, and
+- **Write surface:** only `create_plan`, `mark_read`, and `complete_reading_batch`
+  write reading plans, and
   `annotate_section` writes a per-section annotation artifact. Every other tool is
   read-only. Client-supplied `doc_id`/`plan_id` are validated as filesystem-safe slugs
   before use; `annotate_section`'s `section_id` (which contains a dot, so it is not a

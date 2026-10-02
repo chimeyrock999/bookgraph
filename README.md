@@ -266,7 +266,13 @@ src/bookgraph/
     llmwiki.py              # Stage section markdown for llm-wiki-compiler
     markdown_graph.py       # Linked markdown wiki: book pages + wikilinks (uses concepts.py)
   mcp/
-    service.py              # Reading/query logic (FastMCP-free, unit-tested)
+    service.py              # Reading/query API facade (FastMCP-free, unit-tested)
+    reading_tools.py        # next section, progress, get_section, mark_read, plans
+    query_tools.py          # search, outlines, related sections, section context
+    concept_tools.py        # get_concept, concept_hygiene, annotate_section
+    translation_tools.py    # section translation registry tools
+    loading.py              # shared workspace loading (sections, cached blocks, plans)
+    views.py / errors.py    # tool result models / service errors
     server.py               # FastMCP server wrapper (optional `mcp` extra)
 ```
 

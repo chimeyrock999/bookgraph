@@ -17,10 +17,11 @@ the book's structure, in this order:
    *Chapter 10*; ``app01.html`` → *Appendix A*; ``part02.html`` → *Part II*;
    ``preface.html`` → *Preface*);
 3. its fragment's words name one section of that file's subtree (``sec_x_y`` → the one
-   section whose title has the words *x* and *y*; words of the chapter's own title may
-   be left out, as in ``ch10.html#sec_consistency_linearizability`` →
-   *Linearizability*). A fragment-only link (``#sec_x``) points into its own source
-   file, so it is looked up in the linking section's chapter first, then the book;
+   section titled exactly *x y*, else the one whose title has the words *x* and *y*;
+   words of the chapter's own title may be left out, as in
+   ``ch10.html#sec_consistency_linearizability`` → *Linearizability*). A
+   fragment-only link (``#sec_x``) points into its own source file, so it is looked up
+   in the linking section's chapter first, then the book;
 4. a file that names a section but a fragment that does not (a figure, an example)
    → the file's section, the deterministic container of the target.
 
@@ -33,12 +34,12 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable
-from dataclasses import dataclass
 from html import escape, unescape
 from pathlib import PurePosixPath
 from urllib.parse import unquote
 
 from bookgraph.exports.html_attrs import HTML_ATTR_RE, HTML_START_TAG_RE
+from bookgraph.exports.models import INTERNAL_LINK_UNRESOLVED, ExportWarning
 from bookgraph.exports.outline import OutlineNode, flatten
 
 # File types of a source book's own documents (EPUB/HTML book chapters).
@@ -60,32 +61,41 @@ _ELEMENT_PREFIXES = frozenset(
 _ROMAN = ((10, "x"), (9, "ix"), (5, "v"), (4, "iv"), (1, "i"))
 
 
-@dataclass(frozen=True)
-class UnresolvedLink:
-    """An internal-book link left as written: no export anchor matches it."""
+class InternalLinks:
+    """Resolves the internal-book links of one export against its page's anchors.
 
-    section_id: str
-    href: str
-
-
-def resolve_internal_links(
-    bodies: dict[str, str], outline: list[OutlineNode]
-) -> tuple[dict[str, str], list[UnresolvedLink]]:
-    """Rewrite each body's internal-book ``<a href>`` to an anchor of the export.
-
-    ``bodies`` are the sections' rendered HTML by section id, in reading order. Returns
-    the rewritten bodies and the links that could not be resolved, each reported once
-    per section, in reading order.
+    ``bodies`` are the rendered section bodies that keep their anchors (in ``bilingual``
+    mode the mixed column only: the original column's ids are stripped). Every section
+    id of ``outline`` is an anchor too.
     """
 
-    resolver = _Resolver(outline, _page_anchors(bodies.values()) | set(bodies))
-    rewritten: dict[str, str] = {}
-    unresolved: list[UnresolvedLink] = []
-    for section_id, body in bodies.items():
+    def __init__(self, outline: list[OutlineNode], bodies: Iterable[str]) -> None:
+        anchors = _page_anchors(bodies) | {node.section.id for node in flatten(outline)}
+        self._resolver = _Resolver(outline, anchors)
+
+    def rewrite(self, html: str, section_id: str) -> tuple[str, list[str]]:
+        """``html`` with its internal-book ``<a href>`` pointed at export anchors.
+
+        Also returns the destinations left as written (no anchor matches them), once
+        each, in the order they appear.
+        """
+
         missing: list[str] = []
-        rewritten[section_id] = _rewrite_hrefs(body, section_id, resolver, missing)
-        unresolved.extend(UnresolvedLink(section_id, href) for href in dict.fromkeys(missing))
-    return rewritten, unresolved
+        html = _rewrite_hrefs(html, section_id, self._resolver, missing)
+        return html, list(dict.fromkeys(missing))
+
+
+def unresolved_link_warning(section_id: str, href: str, source_path: str | None) -> ExportWarning:
+    """The report entry for a link :meth:`InternalLinks.rewrite` left as written."""
+
+    return ExportWarning(
+        code=INTERNAL_LINK_UNRESOLVED,
+        message=f"internal link '{href}' matches no section or anchor of this export; "
+        "left as written",
+        section_id=section_id,
+        reference=href,
+        source_path=source_path,
+    )
 
 
 def _rewrite_hrefs(html: str, section_id: str, resolver: _Resolver, missing: list[str]) -> str:
@@ -220,6 +230,7 @@ class _Resolver:
         if words and words[0] in _SECTION_PREFIXES:
             words = words[1:]
         nodes = list(scope.walk()) if scope is not None else self._nodes
+        topic: set[str] = set()
         if scope is not None:
             # A fragment may repeat its chapter's topic (``sec_consistency_x`` in
             # *Consistency and Consensus*); those words alone name the chapter.
@@ -229,8 +240,14 @@ class _Resolver:
                 return scope
         if not words:
             return None
+        # A title with exactly the fragment's words (``sec_indexes`` → *Indexes*) wins
+        # over titles that only contain them (*Transactions and Indexes*), at any depth.
         wanted = set(words)
-        return self._shallowest(node for node in nodes if wanted <= set(_words(node.section.title)))
+        titles = [(node, set(_words(node.section.title)) - topic) for node in nodes]
+        exact = [node for node, title in titles if title == wanted]
+        if exact:
+            return self._shallowest(exact)
+        return self._shallowest(node for node, title in titles if wanted <= title)
 
     def _shallowest(self, nodes: Iterable[OutlineNode]) -> OutlineNode | None:
         """The one match at the shallowest depth; ``None`` when none, or several, match."""

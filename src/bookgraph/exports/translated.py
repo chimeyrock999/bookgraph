@@ -48,10 +48,9 @@ from bookgraph.books import read_book_bookmarks
 from bookgraph.documents import read_document
 from bookgraph.exports.bilingual import bilingual_section
 from bookgraph.exports.images import AssetCounter, AssetOrigin, ImageEmbedder
-from bookgraph.exports.links import resolve_internal_links
+from bookgraph.exports.links import InternalLinks, unresolved_link_warning
 from bookgraph.exports.models import (
     ASSET_MISSING,
-    INTERNAL_LINK_UNRESOLVED,
     TRANSLATION_EMPTY,
     TRANSLATION_MISSING_ASSETS,
     TRANSLATION_STALE,
@@ -215,21 +214,26 @@ def build_translated_export(
         )
         for node in flatten(outline)
     }
-    if mode == "bilingual":
-        rendered = {
-            node.section.id: bilingual_section(
-                *rendered[node.section.id], assembler.original_column(node), lang
-            )
-            for node in flatten(outline)
-        }
-    bodies, unresolved = resolve_internal_links(
-        {section_id: body for section_id, (_, body) in rendered.items()}, outline
+    originals = (
+        {node.section.id: assembler.original_column(node) for node in flatten(outline)}
+        if mode == "bilingual"
+        else {}
     )
-    nodes = {node.section.id: node for node in flatten(outline)}
-    for link in unresolved:
-        assembler.link_warning(
-            rendered[link.section_id][0], nodes[link.section_id].section, link.href
-        )
+    # Links resolve against the anchors the page keeps: the mixed rendering's (the
+    # bilingual left column has its ids stripped). Each column is resolved on its own,
+    # so an unresolved link names the file it was read from, once per section.
+    links = InternalLinks(outline, [body for _, body in rendered.values()])
+    for node in flatten(outline):
+        section, (entry, body) = node.section, rendered[node.section.id]
+        body, missing = links.rewrite(body, section.id)
+        assembler.link_warnings(section, missing, entry.artifact)
+        if section.id in originals:
+            html, embedded, assets_missing = originals[section.id]
+            html, original_missing = links.rewrite(html, section.id)
+            only_left = [href for href in original_missing if href not in missing]
+            assembler.link_warnings(section, only_left, None)
+            entry, body = bilingual_section(entry, body, (html, embedded, assets_missing), lang)
+        rendered[section.id] = (entry, body)
     report = ExportReport.from_sections(
         [entry for entry, _ in rendered.values()],
         mode=mode,
@@ -247,6 +251,7 @@ def build_translated_export(
     # flagged by warnings instead (and ``--strict`` refuses stale ones).
     if fallback == "fail" and report.untranslated:
         raise UntranslatedSectionsError(report)
+    bodies = {section_id: body for section_id, (_, body) in rendered.items()}
     html = document_html(report, outline, bodies, show_status=show_status)
     return TranslatedExport(html=html, report=report)
 
@@ -484,26 +489,23 @@ class _Assembler(ImageEmbedder):
                 section.id,
             )
 
-    def link_warning(self, entry: ExportSection, section: Section, href: str) -> None:
-        """Report an internal-book link of a section that no export anchor matches.
+    def link_warnings(self, section: Section, hrefs: list[str], artifact: str | None) -> None:
+        """Report internal-book links of a section that no export anchor matches.
 
-        It names the file the link was read from: the translation artifact, else where
-        the original was rebuilt from (as for an asset warning).
+        ``artifact`` is the translation the links were read from; ``None`` means the
+        original section, named by the file it was rebuilt from.
         """
 
-        if entry.artifact is not None:
-            source: str | None = entry.artifact
-        elif any(b in self.blocks for b in section.block_ids):
-            source = _relative(self.workspace, self.parsed_dir / "document.json")
-        else:
-            source = _relative(self.workspace, self.manifest)
-        self._warn(
-            INTERNAL_LINK_UNRESOLVED,
-            f"internal link '{href}' matches no section or anchor of this export; left as written",
-            entry.section_id,
-            href,
-            AssetOrigin(source, None),
-        )
+        source = artifact if artifact is not None else self._original_source(section)
+        self.warnings.extend(unresolved_link_warning(section.id, href, source) for href in hrefs)
+
+    def _original_source(self, section: Section) -> str | None:
+        """The file an original section is rebuilt from: ``document.json``, else the
+        sections manifest when none of its blocks were parsed."""
+
+        if any(b in self.blocks for b in section.block_ids):
+            return _relative(self.workspace, self.parsed_dir / "document.json")
+        return _relative(self.workspace, self.manifest)
 
     def _has_assets(self, section: Section) -> bool:
         """Whether the section owns any figure/table asset block (staged or not)."""
@@ -522,10 +524,9 @@ class _Assembler(ImageEmbedder):
 
     def _render_original(self, section: Section, depth: int, counter: AssetCounter) -> str:
         blocks = [self.blocks[b] for b in section.block_ids if b in self.blocks]
+        source = self._original_source(section)
         if not blocks:
-            source = _relative(self.workspace, self.manifest)
             return self._markdown(section.text, section.id, counter, source)
-        source = _relative(self.workspace, self.parsed_dir / "document.json")
         parts: list[str] = []
         for index, block in enumerate(blocks):
             if block.type == "title":

@@ -1120,7 +1120,9 @@ export rewrites each internal-book `<a href>` (a `#fragment`, or a link to a sou
    words (`preface.html` → *Preface*);
 3. the fragment's words, minus a `sec_`/`ch_`/… prefix and the words of the
    chapter's own title, name one section of that file's subtree
-   (`ch10.html#sec_consistency_linearizability` → *Linearizability*). A
+   (`ch10.html#sec_consistency_linearizability` → *Linearizability*). A title with
+   exactly those words wins over titles that only contain them, at any depth
+   (`#sec_indexes` → *Indexes*, not *Transactions and Indexes*). A
    fragment-only link is looked up in the linking section's chapter, then the book;
 4. otherwise a link whose file named a section goes to that section (figure and
    example fragments such as `ch10.html#fig_x` always do; a fragment-only link has no

@@ -12,7 +12,7 @@ import re
 from pathlib import Path
 
 from bookgraph.documents import write_document
-from bookgraph.exports.links import UnresolvedLink, resolve_internal_links
+from bookgraph.exports.links import InternalLinks
 from bookgraph.exports.models import INTERNAL_LINK_UNRESOLVED, TRANSLATION_STRUCTURE_CHANGED
 from bookgraph.exports.outline import OutlineNode
 from bookgraph.exports.translated import build_translated_export
@@ -217,9 +217,9 @@ def test_resolver_maps_appendix_part_split_files_and_skips_ambiguous_or_commente
         "<a href='OEBPS/ch05.xhtml?x=1#sec_replication'>C</a></p>"
     )
 
-    bodies, unresolved = resolve_internal_links({"x1": body}, outline)
+    html, unresolved = InternalLinks(outline, [body]).rewrite(body, "x1")
 
-    assert re.findall(r"""href=["']([^"']*)""", bodies["x1"]) == [
+    assert re.findall(r"""href=["']([^"']*)""", html) == [
         "#a1",
         "#a1",
         "#p2",
@@ -228,5 +228,59 @@ def test_resolver_maps_appendix_part_split_files_and_skips_ambiguous_or_commente
         "ch05.html",  # inside an HTML comment: not a link
         "#c5",
     ]
-    assert 'class="x" href="#c5"' in bodies["x1"]
-    assert unresolved == [UnresolvedLink("x1", "summary.html")]
+    assert 'class="x" href="#c5"' in html
+    assert unresolved == ["summary.html"]
+
+
+def test_exact_title_beats_a_shallower_title_that_only_contains_the_words() -> None:
+    outline = [
+        _node(
+            "c3",
+            "Chapter 3. Storage and Retrieval",
+            1,
+            _node("ti", "Transactions and Indexes", 2),
+            _node("ds", "Data Structures", 2, _node("ix", "Indexes", 3)),
+        )
+    ]
+    links = InternalLinks(outline, [])
+
+    assert links.rewrite('<a href="ch03.html#sec_indexes">x</a>', "c3") == (
+        '<a href="#ix">x</a>',
+        [],
+    )
+    # No exact title: the one containing the words still matches.
+    assert links.rewrite('<a href="ch03.html#sec_transactions">x</a>', "c3") == (
+        '<a href="#ti">x</a>',
+        [],
+    )
+
+
+def test_bilingual_link_only_in_the_original_column_names_the_parsed_source(
+    tmp_path: Path,
+) -> None:
+    paths = _workspace(tmp_path)
+    artifact = _register(paths, CH10, "# Chương 10\n\nQuay lại [lời nói đầu](preface.html).\n")
+
+    export = build_translated_export(
+        paths, DOC, lang="vi", mode="bilingual", generated_at=GENERATED_AT
+    )
+
+    row = export.html.split(f'id="{CH10}"', 1)[1].split("</tr></table>", 1)[0]
+    original, mixed = row.split('data-column="mixed"', 1)
+    assert f'href="#{PREFACE}"' in original and f'href="#{PREFACE}"' in mixed
+    assert 'href="ch99.html#ch_missing"' in original
+    unresolved = [w for w in export.report.warnings if w.code == INTERNAL_LINK_UNRESOLVED]
+    assert [(w.section_id, w.reference, w.source_path) for w in unresolved] == [
+        (CH10, "ch99.html#ch_missing", f"sources/parsed/{DOC}/document.json"),
+        (LIN, "#sec_does_not_exist", f"sources/parsed/{DOC}/document.json"),
+    ]
+    # A link in the translation is attributed to its artifact.
+    _register(paths, CH10, "# Chương 10\n\n[nowhere](ch99.html#ch_missing).\n")
+    report = build_translated_export(
+        paths, DOC, lang="vi", mode="bilingual", generated_at=GENERATED_AT
+    ).report
+    first = next(w for w in report.warnings if w.code == INTERNAL_LINK_UNRESOLVED)
+    assert (first.section_id, first.source_path) == (
+        CH10,
+        artifact.relative_to(paths.root).as_posix(),
+    )

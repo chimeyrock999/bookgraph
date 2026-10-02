@@ -815,8 +815,10 @@ is written beside the export:
     source `.html`/`.htm`/`.xhtml` file) of a rendered section matches no section or
     anchor of the export, so it is left as written. `reference` is the destination and
     `source_path` the file it was read from (as for an asset warning). Reported once
-    per section and destination, in reading order; in `bilingual` mode once for both
-    columns. A diagnostic only: `--strict` does not refuse it yet.
+    per section and destination, in reading order. In `bilingual` mode each column is
+    resolved on its own: a link in both columns is reported once, from the right
+    column's file, and a link only in the left column names the original's file.
+    A diagnostic only: `--strict` does not refuse it yet.
   - `translation_empty`, `translation_unreadable`: the section falls back.
   - `asset_captions_only` / `asset_text_sparse`: ingest quality warnings, passed
     through for rendered sections whose source prose is mostly captions.

@@ -10,8 +10,8 @@ a placeholder, or not at all.
 
 The rendered book is reader-facing: by default it carries no export or translation
 state (coverage, which sections are original text, stale or untracked translations,
-asset paths). That state is in the report written beside it; ``debug_status=True``
-(``--debug-status``) also prints it into the book — export details on the title page,
+asset paths). That state is in the report written beside it; ``show_status=True``
+(``--show-status``) also prints it into the book — export details on the title page,
 per-section notes, and TOC markers.
 
 Original sections are rebuilt from their parsed ``document.json`` blocks (via
@@ -149,11 +149,11 @@ def build_translated_export(
     lang: str,
     fallback: FallbackPolicy = "original",
     generated_at: str | None = None,
-    debug_status: bool = False,
+    show_status: bool = False,
 ) -> TranslatedExport:
     """Assemble the reading edition for ``doc_id`` in ``lang``.
 
-    The book is content-only unless ``debug_status``, which also renders the report's
+    The book is content-only unless ``show_status``, which also renders the report's
     export/translation status into it (see the module docstring).
 
     Raises :class:`ExportError` when the sections manifest is missing or invalid,
@@ -192,7 +192,7 @@ def build_translated_export(
     parsed_dir = workspace.sources_parsed / doc_id
     title, blocks = _load_document(parsed_dir, doc_id)
     assembler = _Assembler(
-        workspace=workspace, parsed_dir=parsed_dir, blocks=blocks, debug_status=debug_status
+        workspace=workspace, parsed_dir=parsed_dir, blocks=blocks, show_status=show_status
     )
 
     outline = build_outline(sections, read_book_bookmarks(workspace, doc_id))
@@ -218,6 +218,7 @@ def build_translated_export(
         generated_at or default_generated_at(),
         [entry for entry, _ in rendered.values()],
         assembler.warnings,
+        show_status,
     )
     # Checked after rendering, not on artifact existence: an empty or unreadable
     # artifact falls back too, and must count as untranslated under ``fail``. Stale and
@@ -226,7 +227,7 @@ def build_translated_export(
     if fallback == "fail" and report.untranslated:
         raise UntranslatedSectionsError(report)
     bodies = {section_id: body for section_id, (_, body) in rendered.items()}
-    html = _document_html(report, outline, bodies, debug_status=debug_status)
+    html = _document_html(report, outline, bodies, show_status=show_status)
     return TranslatedExport(html=html, report=report)
 
 
@@ -238,6 +239,7 @@ def _report(
     generated_at: str,
     entries: list[ExportSection],
     warnings: list[ExportWarning],
+    show_status: bool,
 ) -> ExportReport:
     translated = sum(1 for entry in entries if entry.source == "translated")
     total = len(entries)
@@ -252,6 +254,7 @@ def _report(
         coverage=round(translated / total, 4) if total else 0.0,
         sections=entries,
         warnings=warnings,
+        show_status=show_status,
     )
 
 
@@ -283,7 +286,7 @@ class _Assembler:
     workspace: WorkspacePaths
     parsed_dir: Path
     blocks: dict[str, CanonicalBlock]
-    debug_status: bool = False
+    show_status: bool = False
     warnings: list[ExportWarning] = field(default_factory=list)
     _data_uris: dict[Path, str | None] = field(default_factory=dict)
     _md: MarkdownIt = field(
@@ -318,21 +321,21 @@ class _Assembler:
             entry = self._entry(
                 node, parent_id, title, "translated", state.paths.body, counter, freshness
             )
-            note = _FRESHNESS_NOTES.get(freshness, "") if self.debug_status else ""
+            note = _FRESHNESS_NOTES.get(freshness, "") if self.show_status else ""
             return entry, heading + note + body
         if fallback == "skip":
             # The reader sees the heading only (the chapter's structure stays whole);
-            # the report — and ``debug_status`` — say the content was left out.
+            # the report — and ``show_status`` — say the content was left out.
             body = _heading(depth, section.title) + (
                 '<p class="placeholder">Not translated yet — omitted from this export.</p>'
-                if self.debug_status
+                if self.show_status
                 else ""
             )
             return self._entry(node, parent_id, section.title, "skipped", None, counter), body
         note = '<p class="source-note">Untranslated — original text</p>'
         body = (
             _heading(depth, section.title)
-            + (note if self.debug_status else "")
+            + (note if self.show_status else "")
             + self._original_body(section, depth, counter)
         )
         self._quality_warnings(section, source="original")
@@ -497,8 +500,10 @@ class _Assembler:
             )
         if uri is None:
             counter.missing += 1
-            missing = self._missing(reference)
-            return f'<figure class="asset {block.type}">{missing}{caption}</figure>'
+            placeholder = self._missing(reference)
+            if not (placeholder or caption):
+                return ""
+            return f'<figure class="asset {block.type}">{placeholder}{caption}</figure>'
         counter.embedded += 1
         alt = escape(block.text, quote=True)
         return f'<figure class="asset {block.type}"><img src="{uri}" alt="{alt}">{caption}</figure>'
@@ -645,14 +650,14 @@ class _Assembler:
         return uri
 
     def _missing(self, reference: str) -> str:
-        """A visible stand-in for an image that is not embedded.
-
-        The reader sees that a figure is missing; its workspace path (and the reason, in
-        ``report.warnings``) is only printed with ``debug_status``.
+        """Where an asset could not be embedded: a visible placeholder only with
+        ``show_status``. By default the image is left out (an original figure keeps its
+        caption) and the reason is in ``report.warnings``.
         """
 
-        text = f"Missing asset: {reference}" if self.debug_status else "Image not available"
-        return f'<span class="missing-asset">{escape(text)}</span>'
+        if not self.show_status:
+            return ""
+        return f'<span class="missing-asset">Missing asset: {escape(reference)}</span>'
 
     def _warn(self, code: str, message: str, section_id: str, reference: str | None = None) -> None:
         self.warnings.append(
@@ -795,7 +800,7 @@ pre { white-space: pre-wrap; background: #f5f5f5; padding: 6pt; }
 # script or remote reference inside a translation artifact stays inert in any viewer.
 _CSP = "default-src 'none'; img-src data:; style-src 'unsafe-inline'"
 
-# Status markers below are rendered only with ``debug_status``; a reader-facing export
+# Status markers below are rendered only with ``show_status``; a reader-facing export
 # keeps them in the report.
 _STATUS_LABELS = {"original": "original", "skipped": "skipped"}
 
@@ -816,16 +821,16 @@ def _document_html(
     outline: list[OutlineNode],
     bodies: dict[str, str],
     *,
-    debug_status: bool,
+    show_status: bool,
 ) -> str:
     entries = {entry.section_id: entry for entry in report.sections}
     toc = (
         '<nav class="toc"><h2>Contents</h2>'
-        + _toc_list(outline, entries, debug_status=debug_status)
+        + _toc_list(outline, entries, show_status=show_status)
         + "</nav>\n"
     )
     main = "".join(
-        _section_tree(node, entries, bodies, debug_status=debug_status) for node in outline
+        _section_tree(node, entries, bodies, show_status=show_status) for node in outline
     )
     return (
         "<!DOCTYPE html>\n"
@@ -833,7 +838,7 @@ def _document_html(
         f'<meta http-equiv="Content-Security-Policy" content="{_CSP}">\n'
         f'<meta name="generator" content="bookgraph export translated-pdf">\n'
         f"<title>{escape(report.title)}</title>\n<style>{_STYLE}</style>\n</head>\n<body>\n"
-        + (_debug_frontmatter(report) if debug_status else _title_page(report))
+        + (_status_frontmatter(report) if show_status else _title_page(report))
         + toc
         + "<main>\n"
         + main
@@ -845,7 +850,7 @@ def _title_page(report: ExportReport) -> str:
     return f'<header class="title-page"><h1>{escape(report.title)}</h1></header>\n'
 
 
-def _debug_frontmatter(report: ExportReport) -> str:
+def _status_frontmatter(report: ExportReport) -> str:
     percent = f"{report.coverage * 100:.1f}%"
     return (
         '<header class="frontmatter">'
@@ -865,19 +870,19 @@ def _debug_frontmatter(report: ExportReport) -> str:
 
 
 def _toc_list(
-    nodes: list[OutlineNode], entries: dict[str, ExportSection], *, debug_status: bool
+    nodes: list[OutlineNode], entries: dict[str, ExportSection], *, show_status: bool
 ) -> str:
     items = []
     for node in nodes:
         entry = entries[node.section.id]
         marker = ""
-        if debug_status:
+        if show_status:
             status = _STATUS_LABELS.get(entry.source)
             if entry.freshness is not None:
                 status = _FRESHNESS_LABELS.get(entry.freshness, status)
             marker = f' <span class="status">({status})</span>' if status else ""
         children = (
-            _toc_list(node.children, entries, debug_status=debug_status) if node.children else ""
+            _toc_list(node.children, entries, show_status=show_status) if node.children else ""
         )
         items.append(
             f'<li><a href="#{escape(entry.section_id)}">{escape(entry.title)}</a>'
@@ -891,18 +896,18 @@ def _section_tree(
     entries: dict[str, ExportSection],
     bodies: dict[str, str],
     *,
-    debug_status: bool,
+    show_status: bool,
 ) -> str:
     """A section's ``<section>`` with its child sections nested inside it."""
 
     entry = entries[node.section.id]
     classes = f"section depth-{node.depth}" + (" chapter" if node.chapter else "")
     data = ""
-    if debug_status:
+    if show_status:
         classes += f" source-{entry.source}"
         data = f' data-source="{entry.source}"'
     children = "".join(
-        _section_tree(child, entries, bodies, debug_status=debug_status) for child in node.children
+        _section_tree(child, entries, bodies, show_status=show_status) for child in node.children
     )
     return (
         f'<section class="{classes}" id="{escape(entry.section_id)}"{data}>'

@@ -81,10 +81,10 @@ def export_translated_pdf(
         bool,
         typer.Option("--check", help="Preflight only: print coverage and warnings, write nothing."),
     ] = False,
-    debug_status: Annotated[
+    show_status: Annotated[
         bool,
         typer.Option(
-            "--debug-status",
+            "--show-status",
             help="Also print export/translation status into the book (coverage page, "
             "'original text' and 'may be outdated' notes, TOC markers, asset paths). "
             "By default the book is content-only and status stays in the .report.json.",
@@ -127,7 +127,7 @@ def export_translated_pdf(
             resolved_doc_id,
             lang=resolved_lang,
             fallback=policy,
-            debug_status=debug_status,
+            show_status=show_status,
         )
     except UntranslatedSectionsError as exc:
         _print_report(exc.report)

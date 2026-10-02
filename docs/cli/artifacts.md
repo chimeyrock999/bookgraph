@@ -602,8 +602,8 @@ way the registry does it (`VI` → `vi`). Per section:
 | Registry status | Export |
 | --- | --- |
 | `fresh` | Rendered. `freshness: "fresh"`. |
-| `stale` | Rendered; `freshness: "stale"` + `translation_stale`. With `--debug-status`, also a *Translation may be outdated* note and a `(may be outdated)` TOC marker. |
-| `untracked` | Rendered; `freshness: "untracked"` + `translation_untracked`. With `--debug-status`, also a *Translation status unknown — it may be outdated* note and a `(not tracked)` TOC marker. |
+| `stale` | Rendered; `freshness: "stale"` + `translation_stale`. With `--show-status`, also a *Translation may be outdated* note and a `(may be outdated)` TOC marker. |
+| `untracked` | Rendered; `freshness: "untracked"` + `translation_untracked`. With `--show-status`, also a *Translation status unknown — it may be outdated* note and a `(not tracked)` TOC marker. |
 | `missing` | Untranslated: follows `--fallback`. |
 
 Stale and untracked translations count as translated, so `--fallback fail` accepts
@@ -638,7 +638,7 @@ Owner: `bookgraph export translated-pdf`. This is derived, reader-facing output 
 can be regenerated at any time. The export itself carries only the book's content;
 export and translation status lives in the report
 (`bookgraph.exports.models.ExportReport`) written beside it, and is rendered into the
-book only with `--debug-status`:
+book only with `--show-status`:
 
 ```json
 {
@@ -661,7 +661,8 @@ book only with `--debug-status`:
      "reference": "t1.png"}
   ],
   "renderer": "playwright",
-  "output": "/path/to/workspace/exports/ddia.vi-progress.pdf"
+  "output": "/path/to/workspace/exports/ddia.vi-progress.pdf",
+  "show_status": false
 }
 ```
 
@@ -671,6 +672,8 @@ book only with `--debug-status`:
   renders at, and `parent_id` is the section it renders inside (`null` at the top
   level).
 - `source` is `translated`, `original`, or `skipped`.
+- `show_status` records whether the status above was also printed into the book
+  (`--show-status`).
 - `freshness` is the translation's registry status (`fresh`, `stale`, or
   `untracked`) for a `translated` section, `null` otherwise.
 - `generated_at` follows `SOURCE_DATE_EPOCH` when it is set. With unchanged inputs and
@@ -679,12 +682,12 @@ book only with `--debug-status`:
   - `asset_missing`, `asset_remote`, `asset_unsupported`: an asset is not in the
     export. `--strict` refuses these.
   - `translation_stale`: the source section changed after the translation was
-    registered. Rendered (with a note under `--debug-status`); `--strict` refuses it.
+    registered. Rendered (with a note under `--show-status`); `--strict` refuses it.
   - `translation_missing_assets`: a registered prose-only translation
     (`includes_assets: false`) of a section that has figures/tables. `--strict`
     refuses it.
   - `translation_untracked`: no valid registry record, or the body was edited after
-    registration. Rendered (with a note under `--debug-status`); never refused.
+    registration. Rendered (with a note under `--show-status`); never refused.
   - `translation_empty`, `translation_unreadable`: the section falls back.
   - `asset_captions_only` / `asset_text_sparse`: ingest quality warnings, passed
     through for rendered sections whose source prose is mostly captions.

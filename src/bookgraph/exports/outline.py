@@ -5,15 +5,19 @@ title block as level 1, so a heading-segmented PDF comes out flat (every section
 top-level "part"), and manifests written before the bookmark segmenter kept outline
 order on same-page ties list those siblings alphabetically. When the source PDF has an
 outline (``sources/inbox/<doc_id>/book.json``), it is the canonical table of contents:
-sections are matched to bookmarks by title, take their depth from the bookmark level,
-and are put in outline order. Sections no bookmark names (a MinerU sub-heading, say)
-travel with the matched section before them, one level below it. Without an outline,
-or when no title matches, the manifest order and ``Section.level`` are kept.
+sections are matched to bookmarks by title (on a page the section covers, when both
+pages are known), take their depth from the bookmark level, and are put in outline
+order. Sections no bookmark names (a MinerU sub-heading, say) travel with the matched
+section before them, one level below it. Without an outline, or when no title
+matches, the manifest order and ``Section.level`` are kept.
 
 A *chapter* starts a new page: every top-level node, and every child of a top-level
-node that is a *part* (its subtree, in the outline or the manifest, reaches two levels
-below it — "Part I" > "Chapter 1" > "Section"). Everything else flows inside its
-chapter.
+node that is a *part*. A part is recognised by its title ("Part I", "Book 2",
+"Volume III"), or by its shape: at least two children in the outline (or, without
+one, the manifest), each with children of its own, and little body of its own — a
+part-title page, not a chapter whose sections happen to have subsections. A section
+whose bookmark sits directly under a bookmark titled as a part is a chapter too, even
+when the part itself has no section. Everything else flows inside its chapter.
 """
 
 from __future__ import annotations
@@ -26,6 +30,16 @@ from bookgraph.models import Section
 from bookgraph.pdf_metadata import PdfBookmark
 
 _MAX_DEPTH = 6
+
+# A bookmark page may sit one page off the first block the parser put on it.
+_PAGE_TOLERANCE = 1
+
+# A part-title page carries at most a short introduction.
+_PART_MAX_WORDS = 300
+
+_PART_TITLE = re.compile(
+    r"^(part|book|volume)\s+(\d+|[ivxlcdm]+|one|two|three|four|five|six|seven|eight|nine|ten)\b"
+)
 
 
 @dataclass
@@ -55,24 +69,28 @@ def build_outline(sections: list[Section], bookmarks: list[PdfBookmark]) -> list
         placed = _outline_order(sections, bookmarks, anchors)
     else:
         placed = [(section, _clamp(section.level), -1) for section in sections]
-    reach = _bookmark_reach(bookmarks)
+    parents, outline_children = _bookmark_tree(bookmarks)
     roots: list[OutlineNode] = []
     stack: list[OutlineNode] = []
-    root_reach: dict[int, int] = {}
+    root_anchor: dict[int, int] = {}
     for section, depth, anchor in placed:
-        node = OutlineNode(section=section, depth=depth)
+        parent = parents[anchor] if anchor >= 0 else -1
+        node = OutlineNode(
+            section=section,
+            depth=depth,
+            chapter=parent >= 0 and _has_part_title(bookmarks[parent].title),
+        )
         while stack and stack[-1].depth >= depth:
             stack.pop()
         if stack:
             stack[-1].children.append(node)
         else:
             roots.append(node)
-            root_reach[id(node)] = reach[anchor] if anchor >= 0 else 0
+            root_anchor[id(node)] = anchor
         stack.append(node)
     for root in roots:
         root.chapter = True
-        deepest = max(root_reach[id(root)], *(node.depth for node in root.walk()))
-        if deepest >= root.depth + 2:
+        if _is_part(root, root_anchor[id(root)], outline_children):
             for child in root.children:
                 child.chapter = True
     return roots
@@ -87,9 +105,11 @@ def flatten(roots: list[OutlineNode]) -> list[OutlineNode]:
 def _match_bookmarks(sections: list[Section], bookmarks: list[PdfBookmark]) -> dict[int, int]:
     """Section index → bookmark index, for sections whose title a bookmark carries.
 
-    Repeated titles ("Conclusion" closes every chapter) go to the candidate on the
-    nearest page when both pages are known, else to the next one after the previous
-    match in outline order, so each repeat lands in its own chapter.
+    When the section and a bookmark both know their page, the bookmark must point into
+    the section's page span: a heading the outline does not list (a Preface's
+    "Overview") never takes a same-titled bookmark from another chapter. Repeated
+    titles ("Conclusion" closes every chapter) go to the candidate on the nearest page,
+    else to the next one after the previous match in outline order.
     """
 
     by_title: dict[str, list[int]] = {}
@@ -99,7 +119,11 @@ def _match_bookmarks(sections: list[Section], bookmarks: list[PdfBookmark]) -> d
     used: set[int] = set()
     cursor = -1
     for index, section in enumerate(sections):
-        candidates = [b for b in by_title.get(_normalise(section.title), []) if b not in used]
+        candidates = [
+            b
+            for b in by_title.get(_normalise(section.title), [])
+            if b not in used and _on_section_pages(bookmarks[b], section)
+        ]
         if not candidates:
             continue
         chosen = min(
@@ -109,6 +133,14 @@ def _match_bookmarks(sections: list[Section], bookmarks: list[PdfBookmark]) -> d
         used.add(chosen)
         cursor = chosen
     return anchors
+
+
+def _on_section_pages(bookmark: PdfBookmark, section: Section) -> bool:
+    if bookmark.page_index is None or section.page_start is None:
+        return True
+    end = section.page_end if section.page_end is not None else section.page_start
+    first, last = min(section.page_start, end), max(section.page_start, end)
+    return first - _PAGE_TOLERANCE <= bookmark.page_index <= last + _PAGE_TOLERANCE
 
 
 def _rank(
@@ -146,18 +178,37 @@ def _outline_order(
     return [entry for _, run in runs for entry in run]
 
 
-def _bookmark_reach(bookmarks: list[PdfBookmark]) -> list[int]:
-    """For each bookmark, the deepest outline level in its subtree (itself included)."""
+def _bookmark_tree(bookmarks: list[PdfBookmark]) -> tuple[list[int], list[list[int]]]:
+    """Each bookmark's parent index (``-1`` at the top) and direct children."""
 
-    reach = [bookmark.level for bookmark in bookmarks]
+    parents = [-1] * len(bookmarks)
+    children: list[list[int]] = [[] for _ in bookmarks]
     stack: list[int] = []
     for index, bookmark in enumerate(bookmarks):
         while stack and bookmarks[stack[-1]].level >= bookmark.level:
             stack.pop()
-        for ancestor in stack:
-            reach[ancestor] = max(reach[ancestor], bookmark.level)
+        if stack:
+            parents[index] = stack[-1]
+            children[stack[-1]].append(index)
         stack.append(index)
-    return reach
+    return parents, children
+
+
+def _has_part_title(title: str) -> bool:
+    return bool(_PART_TITLE.match(_normalise(title)))
+
+
+def _is_part(root: OutlineNode, anchor: int, outline_children: list[list[int]]) -> bool:
+    """Whether ``root`` is a part whose children are chapters (see the module docstring)."""
+
+    if _has_part_title(root.section.title):
+        return True
+    if len(root.section.text.split()) > _PART_MAX_WORDS:
+        return False
+    if anchor >= 0:
+        kids = outline_children[anchor]
+        return len(kids) >= 2 and all(outline_children[kid] for kid in kids)
+    return len(root.children) >= 2 and all(child.children for child in root.children)
 
 
 def _clamp(level: int) -> int:

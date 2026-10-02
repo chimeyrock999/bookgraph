@@ -58,12 +58,12 @@ def test_export_html_writes_edition_and_report(tmp_path: Path) -> None:
     assert codes == ["asset_missing", "translation_untracked"]
 
 
-def test_export_debug_status_prints_status_into_the_book(tmp_path: Path) -> None:
+def test_export_show_status_prints_status_into_the_book(tmp_path: Path) -> None:
     paths = _workspace(tmp_path)
 
     result = CliRunner().invoke(
         app,
-        ["export", "translated-pdf", str(tmp_path), DOC, "--renderer", "html", "--debug-status"],
+        ["export", "translated-pdf", str(tmp_path), DOC, "--renderer", "html", "--show-status"],
     )
 
     assert result.exit_code == 0, result.output

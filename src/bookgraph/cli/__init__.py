@@ -12,6 +12,7 @@ from __future__ import annotations
 from bookgraph.cli import (  # noqa: E402,F401
     book,
     concepts,
+    export,
     index,
     llmwiki,
     mcp,

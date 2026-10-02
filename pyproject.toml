@@ -25,6 +25,12 @@ mineru = [
 mcp = [
   "fastmcp>=2.0",
 ]
+pdf = [
+  "weasyprint>=62",
+]
+pdf-chromium = [
+  "playwright>=1.40",
+]
 dev = [
   "pytest>=8.0",
   "pytest-cov>=5.0",
@@ -59,7 +65,7 @@ strict = true
 packages = ["bookgraph"]
 
 [[tool.mypy.overrides]]
-module = ["markitdown.*", "fastmcp.*", "pypdf.*"]
+module = ["markitdown.*", "fastmcp.*", "pypdf.*", "weasyprint.*", "playwright.*"]
 ignore_missing_imports = true
 
 # The FastMCP tool decorators are untyped when the optional ``mcp`` extra is not

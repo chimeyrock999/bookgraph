@@ -101,6 +101,16 @@ class WorkspacePaths:
     def runs_root(self) -> Path:
         return self.root / "runs"
 
+    @property
+    def translation_cache_root(self) -> Path:
+        """Translation cache: ``translation_cache/<doc_id>/<section_id>.<lang>.md``."""
+        return self.root / "translation_cache"
+
+    @property
+    def exports_root(self) -> Path:
+        """Reader-facing exports such as ``bookgraph export translated-pdf`` output."""
+        return self.root / "exports"
+
     def directories(self) -> list[Path]:
         return [
             self.sources_inbox,

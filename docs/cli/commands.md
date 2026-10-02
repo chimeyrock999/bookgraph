@@ -1032,6 +1032,112 @@ bookgraph llmwiki serve /path/to/workspace --print
 - `llmwiki` not installed / not on PATH (without `--print`) → an actionable message
   telling the user to install `llm-wiki-compiler` or re-run with `--print`.
 
+## `bookgraph export translated-pdf`
+
+**Status:** Implemented.
+
+Assemble a partially translated book into one reading edition. Sections come out in
+`sections.jsonl` order. A section with a translation artifact for `--lang` renders that
+artifact; any other section follows `--fallback`. This produces a clean reading
+edition. It does not reproduce the publisher's page layout.
+
+```bash
+bookgraph export translated-pdf /path/to/workspace ddia --lang vi
+bookgraph export translated-pdf /path/to/workspace ddia --lang vi --fallback skip \
+  --out exports/ddia.vi-progress.pdf
+bookgraph export translated-pdf /path/to/workspace ddia --renderer html   # no PDF extra needed
+bookgraph export translated-pdf /path/to/workspace ddia --check           # coverage + QA only
+```
+
+### Inputs
+
+- `workspace_path`, `doc_id`: workspace root and a segmented document id (slug-validated).
+- `--lang` (default `vi`): translation language code (slug-validated).
+- `--fallback original|skip|fail` (default `original`). This controls what happens to
+  a section that has no translation:
+  - `original` renders the original section, labelled *Untranslated — original text*;
+  - `skip` renders the title with a *Not translated yet* placeholder;
+  - `fail` exits `1` and lists every untranslated section. Nothing is written.
+- `--out`: output file. A relative path is resolved under the workspace. The default
+  is `exports/<doc_id>.<lang>-progress.pdf`, or `.html` with `--renderer html`.
+- `--renderer auto|weasyprint|playwright|html` (default `auto`). `auto` writes HTML
+  for a `.html`/`.htm` output. For any other output it uses the first installed PDF
+  backend, trying `weasyprint` first and then `playwright`. Naming a backend that is
+  not installed is an error.
+- `--strict`: exit `1` without writing anything if any asset is missing, remote, or
+  unsupported.
+- `--check`: preflight only. Prints coverage and warnings and writes nothing. With
+  `--strict`, it exits `1` whenever the real export would be refused.
+- The `--out` suffix must match the renderer: `.pdf` for `weasyprint`/`playwright`,
+  `.html`/`.htm` for `html`. A mismatch, or a suffix that `auto` cannot map to a
+  format, exits `2`.
+
+### Reads
+
+- `sources/sections/<doc_id>/sections.jsonl`: the skeleton and reading order.
+- `sources/parsed/<doc_id>/document.json`, when present. Original sections are
+  rebuilt from their `block_ids`, so figures, tables and equations stay next to the
+  prose around them in the source. Without it, original sections render
+  `Section.text` as Markdown.
+- Translation bodies. The first file found wins:
+  1. `translations/<lang>/<doc_id>/<section_id>.md`, the registry-owned body written
+     by `write_section_translation`. The `.json` sidecar is ignored.
+  2. `translation_cache/<doc_id>/<section_id>.<lang>.md`, an export-only legacy
+     fallback (see `artifacts.md`).
+
+### Asset handling
+
+All images are embedded as `data:` URIs, so the output is self-contained.
+
+- Markdown image links and raw HTML `<img src>` tags are handled the same way. A link
+  in an artifact is resolved against the artifact's own
+  directory, then `sources/parsed/<doc_id>/images/`, then `sources/parsed/<doc_id>/`,
+  then the workspace root. An absolute path is accepted only if it points inside the
+  workspace.
+- Original asset blocks use the shared `bookgraph.assets.resolve_asset_path` resolver.
+- A link is rejected if it leaves the workspace (including through symlinks), is a
+  remote URL, or is not a png/jpeg/gif/svg/webp file. A rejected link is replaced by a
+  visible *Missing asset* placeholder and reported. It does not crash the export
+  unless `--strict` is set.
+- The page carries a CSP that allows only `data:` images and inline styles, and both
+  PDF backends refuse any URL that is not `data:`. Rendering never reads the network
+  or arbitrary files, and scripts in artifact HTML never run.
+
+### Writes
+
+- The export file at `--out`. It is rendered to a temporary sibling file and then
+  moved into place, so a failed render never leaves a truncated file.
+- `<out stem>.report.json`, the export report (see `artifacts.md`).
+
+### Must not do
+
+- Must not parse, segment, translate, or modify sections, translations, or the index.
+- Must not fetch remote assets.
+
+### Prints
+
+- `doc_id`, `lang`, `fallback`, and `coverage: <translated>/<total> (<pct>%)`.
+- One `warning: <code>: <section_id>: <message>` line per warning.
+- `renderer`, `export`, and `report` paths. With `--check` it prints
+  `export: (check only, not written)` instead.
+
+### Errors
+
+- Missing sections manifest → `Sections manifest not found` (exit 2).
+- Unknown `--fallback` / `--renderer`, an invalid `--lang`, or an `--out` suffix that
+  does not match the renderer → exit 2.
+- `--fallback fail` with untranslated sections (including empty or unreadable
+  artifacts), `--strict` with asset problems (also under `--check`), or a
+  missing or failing renderer → exit 1, with nothing written.
+
+### PDF backends (optional extras)
+
+| Renderer | Install |
+|----------|---------|
+| `weasyprint` | `uv sync --extra pdf` (also needs the Pango system library, e.g. `brew install pango`) |
+| `playwright` | `uv sync --extra pdf-chromium && uv run playwright install chromium` |
+| `html` | built in |
+
 ## Book-level parse / wiki compile contracts
 
 ### `bookgraph parse-book`

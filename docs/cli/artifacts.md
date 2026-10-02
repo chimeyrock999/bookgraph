@@ -590,6 +590,73 @@ not `mkstemp`'s 0600). A crash or a racing writer between the steps leaves an
 annotations, the cache is **not** rebuildable from sources (regenerating it costs
 model calls), so `index build`, `segment`, and `wiki` never delete it.
 
+## Translation bodies as read by `bookgraph export translated-pdf`
+
+The export is a **read-only consumer** of the translation bodies described above. It
+reads the `.md` body and ignores the `.json` registry sidecar. It does not yet report
+`fresh` / `stale` / `untracked` status; that is tracked in issue 56. For each section it
+uses the first location below that exists:
+
+```text
+translations/<lang>/<doc_id>/<section_id>.md          # registry-owned body (see above)
+translation_cache/<doc_id>/<section_id>.<lang>.md     # export-only legacy fallback
+```
+
+`translation_cache/` is not part of the registry. No BookGraph command writes it, and
+it may be dropped or rerouted through `write_section_translation` (issue 56).
+
+- Optional leading `---` frontmatter. Only flat `key: value` lines are read. `title`
+  is the translated section title used in the table of contents.
+- If the body starts with a heading, that heading is the translated title. Artifact
+  headings are shifted so the top one sits at the section's `level`. A body with no
+  heading gets the frontmatter `title`, or the original title.
+- Image links (`![caption](images/fig1.png)`) may point at workspace files, for
+  example the parsed assets under `sources/parsed/<doc_id>/images/`. They may also be
+  absolute paths inside the workspace, such as an MCP `AssetRef.path`. See the
+  asset-handling rules in `commands.md`.
+- An empty or unreadable artifact counts as untranslated and is reported
+  (`translation_empty` / `translation_unreadable`).
+
+## `exports/<doc_id>.<lang>-progress.pdf` + `.report.json`
+
+Owner: `bookgraph export translated-pdf`. This is derived, reader-facing output and
+can be regenerated at any time. The report (`bookgraph.exports.models.ExportReport`)
+is written beside the export:
+
+```json
+{
+  "doc_id": "ddia",
+  "title": "Designing Data-Intensive Applications",
+  "lang": "vi",
+  "fallback": "original",
+  "generated_at": "2026-10-02T00:00:00Z",
+  "total_sections": 3,
+  "translated_sections": 1,
+  "coverage": 0.3333,
+  "sections": [
+    {"section_id": "ddia.chapter-1", "title": "Chương 1", "level": 1,
+     "source": "translated", "artifact": "translations/vi/ddia/ddia.chapter-1.md",
+     "assets_embedded": 1, "assets_missing": 0}
+  ],
+  "warnings": [
+    {"code": "asset_missing", "message": "…", "section_id": "ddia.scalability",
+     "reference": "t1.png"}
+  ],
+  "renderer": "playwright",
+  "output": "/path/to/workspace/exports/ddia.vi-progress.pdf"
+}
+```
+
+- `source` is `translated`, `original`, or `skipped`.
+- `generated_at` follows `SOURCE_DATE_EPOCH` when it is set. With unchanged inputs and
+  a pinned timestamp, the assembled HTML is byte-identical.
+- Stable warning codes:
+  - `asset_missing`, `asset_remote`, `asset_unsupported`: an asset is not in the
+    export. These are the codes `--strict` refuses.
+  - `translation_empty`, `translation_unreadable`.
+  - `asset_captions_only` / `asset_text_sparse`: ingest quality warnings, passed
+    through for rendered sections whose source prose is mostly captions.
+
 ## Future artifacts
 
 Do not implement these without updating this file.

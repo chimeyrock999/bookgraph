@@ -657,7 +657,8 @@ def test_untracked_translation_renders_with_a_warning(
     assert export.report.sections[0].freshness == "untracked"
     assert _codes(export.report, chapter) == [TRANSLATION_UNTRACKED]
     assert "Sửa tay." in export.html
-    assert "Translation not tracked by the registry" in export.html
+    assert "Translation status unknown — it may be outdated" in export.html
+    assert 'Chương Một</a> <span class="status">(not tracked)</span>' in export.html
     # Freshness unknown is not known-bad: ``--strict`` still writes the export.
     report = write_translated_export(export, tmp_path / "out.html", HtmlRenderer(), strict=True)
     assert report.sections[0].freshness == "untracked"
@@ -700,3 +701,22 @@ def test_non_utf8_translation_is_unreadable_and_falls_back(workspace: WorkspaceP
     assert export.report.sections[0].source == "original"
     assert export.report.sections[0].freshness is None
     assert _codes(export.report, chapter) == [TRANSLATION_UNREADABLE]
+
+
+def test_body_that_exists_but_cannot_be_read_is_unreadable(workspace: WorkspacePaths) -> None:
+    chapter, second, third = _section_ids(workspace)
+    _register(workspace, second, "# Phần Hai\n")
+    _register(workspace, third, "# Phần Ba\n")
+    # A directory at the body path: unreadable on every platform (unlike chmod as root).
+    (workspace.translations_root / "vi" / DOC / f"{chapter}.md").mkdir(parents=True)
+
+    export = build_translated_export(workspace, DOC, lang="vi", generated_at=GENERATED_AT)
+
+    assert export.report.sections[0].source == "original"
+    warning = next(w for w in export.report.warnings if w.section_id == chapter)
+    assert warning.code == TRANSLATION_UNREADABLE
+    assert "exists but could not be read" not in warning.message  # the OSError cause is kept
+    assert "unreadable (" in warning.message
+    with pytest.raises(UntranslatedSectionsError) as excinfo:
+        build_translated_export(workspace, DOC, lang="vi", fallback="fail")
+    assert excinfo.value.report.untranslated == [chapter]

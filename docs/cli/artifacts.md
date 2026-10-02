@@ -602,8 +602,8 @@ way the registry does it (`VI` → `vi`). Per section:
 | Registry status | Export |
 | --- | --- |
 | `fresh` | Rendered. `freshness: "fresh"`. |
-| `stale` | Rendered with a *Translation may be outdated* note (and a TOC marker); `freshness: "stale"` + `translation_stale`. |
-| `untracked` | Rendered with a *Translation not tracked by the registry* note; `freshness: "untracked"` + `translation_untracked`. |
+| `stale` | Rendered with a *Translation may be outdated* note (and a `(may be outdated)` TOC marker); `freshness: "stale"` + `translation_stale`. |
+| `untracked` | Rendered with a *Translation status unknown — it may be outdated* note (and a `(not tracked)` TOC marker); `freshness: "untracked"` + `translation_untracked`. |
 | `missing` | Untranslated: follows `--fallback`. |
 
 Stale and untracked translations count as translated, so `--fallback fail` accepts

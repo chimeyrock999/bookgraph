@@ -334,11 +334,17 @@ class _Assembler:
         relative = _relative(self.workspace, artifact)
         if state.body is None:
             # ``translation_state`` reads an unreadable body as missing; a file that is
-            # there but cannot be read is still worth reporting.
+            # there but cannot be read is still worth reporting. Re-read only to recover
+            # the cause for the message — these bytes are never rendered.
             if state.status == "missing" and artifact.exists():
+                try:
+                    artifact.read_bytes()
+                    reason = "exists but could not be read"
+                except OSError as exc:
+                    reason = str(exc)
                 self._warn(
                     TRANSLATION_UNREADABLE,
-                    f"translation artifact {relative} is unreadable; "
+                    f"translation artifact {relative} is unreadable ({reason}); "
                     "using the fallback policy instead",
                     section.id,
                 )
@@ -755,9 +761,11 @@ _STATUS_LABELS = {"original": "original", "skipped": "skipped"}
 _FRESHNESS_NOTES = {
     "stale": '<p class="source-note">Translation may be outdated — the original section '
     "changed after it was translated</p>",
-    "untracked": '<p class="source-note">Translation not tracked by the registry — it may '
-    "be outdated</p>",
+    "untracked": '<p class="source-note">Translation status unknown — it may be outdated</p>',
 }
+
+# TOC markers for the same states, so the overview shows every non-fresh translation.
+_FRESHNESS_LABELS = {"stale": "may be outdated", "untracked": "not tracked"}
 
 
 def _document_html(report: ExportReport, bodies: list[str]) -> str:
@@ -781,8 +789,8 @@ def _document_html(report: ExportReport, bodies: list[str]) -> str:
     for entry in report.sections:
         indent = (max(1, min(entry.level, 6)) - 1) * 12
         status = _STATUS_LABELS.get(entry.source)
-        if entry.freshness == "stale":
-            status = "may be outdated"
+        if entry.freshness is not None:
+            status = _FRESHNESS_LABELS.get(entry.freshness, status)
         marker = f' <span class="status">({status})</span>' if status else ""
         toc_items.append(
             f'<li style="padding-left: {indent}pt"><a href="#{escape(entry.section_id)}">'

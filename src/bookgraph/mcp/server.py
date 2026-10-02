@@ -427,7 +427,9 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
         'untracked' (a cached file with no registry record — freshness unknown), or
         'missing' (translate it). Reuse only when status is 'fresh' AND
         (includes_assets or not section_has_assets): a fresh prose-only translation of
-        a section with figures/tables is incomplete. Pass
+        a section with figures/tables is incomplete. includes_assets is verified
+        against the body; missing_assets lists the figures/tables it does not link,
+        each with the link to add. Pass
         ``current_section_hash`` back to write_section_translation to pin your write.
         """
 
@@ -453,15 +455,17 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
 
         Writes translations/<lang>/<doc_id>/<section_id>.md plus a registry record of
         the section content it was made from, replacing any earlier translation. Set
-        includes_assets=True when the translation carries the section's figures/
-        tables. Pass source_section_hash (the current_section_hash you saw) to refuse
-        the write if the section changed while you were translating. content is the
+        includes_assets=True when the translation carries the section's figures/tables:
+        it is checked against the body (each staged figure/table must be linked by its
+        AssetRef.link), and a claim the body does not back is refused with the missing
+        links. Pass source_section_hash (the current_section_hash you saw) to refuse the
+        write if the section changed while you were translating. content is the
         translated book content only: link each figure/table by its AssetRef.link
         (relative), never its absolute path. Put QA/checker results, terminology
         decisions and any other remarks in notes (stored beside the translation, never
         in it); keep MEDIA: markers and progress lines for your final chat reply. This
-        is the only translation store: never write translation files yourself, not
-        under translations/ and not in any directory of your own (such as a
+        is the only translation store: never write translation files yourself, not under
+        translations/ and not in any directory of your own (such as a
         translation_cache/) — nothing reads them, so the section stays untranslated in
         the export and in batch completion.
 

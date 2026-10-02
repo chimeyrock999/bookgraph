@@ -157,3 +157,18 @@ class TranslationStructureIssue(BaseModel):
     target: str
     change: Literal["missing", "added"]
     count: int = 1
+
+
+class MissingTranslationAsset(BaseModel):
+    """A staged figure/table of a section that its translation body does not link.
+
+    ``link`` is the asset's ``AssetRef.link`` — the relative reference the translation
+    should carry (``![caption](<link>)``); ``block_id`` is the parsed block it belongs
+    to and ``reference`` the parser's raw asset reference.
+    """
+
+    block_id: str
+    type: str
+    link: str
+    reference: str
+    caption: str = ""

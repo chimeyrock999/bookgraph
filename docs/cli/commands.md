@@ -830,8 +830,11 @@ docstrings (`write_section_translation`, `mark_read`) and both skills repeat the
 - `get_section_translation(doc_id, section_id, lang, include_content=True)` → the
   section's cached translation and its freshness: `status` (`fresh` / `stale` /
   `untracked` / `missing`, see `artifacts.md`), `path`, `metadata_path`,
-  `source_section_hash`, `current_section_hash`, `includes_assets`,
-  `section_has_assets` (whether the section owns any figure/table block), `model`,
+  `source_section_hash`, `current_section_hash`, `includes_assets` (verified against
+  the body; `null` for an untracked body), `missing_assets` (the section's staged
+  figures/tables the body does not link, each with `block_id`, `type`, `link`,
+  `reference`, `caption`), `section_has_assets` (whether the section owns any
+  figure/table block), `model`,
   `created_at`, `notes` (the writer's side-channel remarks), `content` (the body,
   unless `include_content=False`), and `structure_issues` (the link destinations,
   image paths, reference definitions, HTML anchors, and heading ids the body dropped
@@ -845,7 +848,10 @@ docstrings (`write_section_translation`, `mark_read`) and both skills repeat the
   either way). Empty `content` is rejected. When `source_section_hash` is given and
   differs from the section's current hash the write is refused, so a translation of
   outdated content is never registered as fresh. `content` is the translated book
-  content only, with figures/tables linked by their `AssetRef.link`. `notes`
+  content only, with figures/tables linked by their `AssetRef.link`; the stored
+  `includes_assets` is derived from those links, and `includes_assets=True` for a
+  body that does not link every staged figure/table is refused with the missing
+  links. `notes`
   (optional) is the side channel for QA/checker results and terminology decisions:
   stored in the registry sidecar, returned as `notes` by the read tools, never in the
   body (see *Artifact channels* in `artifacts.md`).
@@ -1163,7 +1169,8 @@ bookgraph export translated-pdf /path/to/workspace ddia --check           # cove
   not installed is an error.
 - `--strict`: exit `1` without writing anything if any asset is missing, remote, or
   unsupported, a translation is `stale` (`translation_stale`), or a registered
-  translation left out its section's figures/tables (`translation_missing_assets`),
+  translation left out its section's figures/tables (`translation_missing_assets`,
+  checked from the body, not the sidecar's `includes_assets`),
   or a translation changed its section's link targets, anchors, or paths
   (`translation_structure_changed`). An `untracked` translation only warns. In
   `bilingual` mode the left column counts too: a missing original asset of a

@@ -96,7 +96,7 @@ def test_missing_image_export_is_clean_and_report_captures_it(tmp_path: Path) ->
     assert "missing-asset" not in html.split("</style>", 1)[1]
     assert "Hình 3-7. Xác định rằng Idaho nằm ở Bắc Mỹ." in html  # the caption survives
     assert "Các quy tắc có thể được kết hợp đệ quy." in html
-    assert report.debug_assets is False
+    assert report.show_status is False
 
     payload = json.loads(report_path_for(output).read_text())
     missing = [w for w in payload["warnings"] if w["code"] == ASSET_MISSING]
@@ -129,7 +129,7 @@ def test_missing_image_in_original_section_keeps_caption_and_reports_block(
     assert warning.block_id is not None
 
     debug = build_translated_export(
-        paths, DOC, lang="vi", generated_at="2026-10-02T00:00:00Z", debug_assets=True
+        paths, DOC, lang="vi", generated_at="2026-10-02T00:00:00Z", show_status=True
     )
     assert f"Missing asset: {REFERENCE}" in debug.html
 
@@ -257,8 +257,8 @@ def test_cli_repair_from_dir_refreshes_quality(tmp_path: Path) -> None:
     assert ASSET_FILE_MISSING not in codes
 
 
-@pytest.mark.parametrize("flag", [[], ["--debug-assets"]])
-def test_cli_export_debug_assets_flag(tmp_path: Path, flag: list[str]) -> None:
+@pytest.mark.parametrize("flag", [[], ["--show-status"]])
+def test_cli_export_reports_source_and_hides_placeholder(tmp_path: Path, flag: list[str]) -> None:
     paths = _ingest(tmp_path)
 
     result = CliRunner().invoke(

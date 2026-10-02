@@ -360,6 +360,8 @@ def test_get_section_returns_structured_assets(tmp_path: Path) -> None:
     # A bare filename resolves under the staged ``images/`` dir; a relative path is kept.
     assert image.path == str(workspace.sources_parsed / "deep-work" / "images" / "fig1.jpg")
     assert table.path == str(workspace.sources_parsed / "deep-work" / "nested" / "tbl1.jpg")
+    # ``link`` is what a translation writes: relative to the parsed document dir.
+    assert (image.link, table.link) == ("images/fig1.jpg", "nested/tbl1.jpg")
     # Prose is effectively just the captions, so the reader is warned to open the assets.
     assert [warning.code for warning in view.warnings] == ["asset_captions_only"]
 

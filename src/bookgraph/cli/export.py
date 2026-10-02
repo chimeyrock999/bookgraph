@@ -77,21 +77,22 @@ def export_translated_pdf(
         typer.Option(
             "--strict",
             help="Fail instead of exporting when an asset is missing, a translation is "
-            "stale, or a translation left out the section's figures/tables.",
+            "stale or carries job diagnostics, or a translation left out the section's "
+            "figures/tables.",
+        ),
+    ] = False,
+    show_status: Annotated[
+        bool,
+        typer.Option(
+            "--show-status",
+            help="Debug: also print translation status, fallback notes, coverage and "
+            "missing-asset placeholders on the reading pages (by default they are only "
+            "in the report).",
         ),
     ] = False,
     check: Annotated[
         bool,
         typer.Option("--check", help="Preflight only: print coverage and warnings, write nothing."),
-    ] = False,
-    debug_assets: Annotated[
-        bool,
-        typer.Option(
-            "--debug-assets",
-            help="Render a visible 'Missing asset' placeholder for every image that could "
-            "not be embedded. By default such images are left out (captions kept) and only "
-            "reported.",
-        ),
     ] = False,
 ) -> None:
     """Export a partially translated book as one reading PDF with original-text fallback."""
@@ -130,7 +131,7 @@ def export_translated_pdf(
             resolved_doc_id,
             lang=resolved_lang,
             fallback=policy,
-            debug_assets=debug_assets,
+            show_status=show_status,
         )
     except UntranslatedSectionsError as exc:
         _print_report(exc.report)

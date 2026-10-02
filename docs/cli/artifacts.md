@@ -582,6 +582,9 @@ the `.json` sidecar beside it is the registry record, mirroring
   writer, a manual edit) no longer matches and reads as `untracked`.
 - `includes_assets`: whether the writer carried the section's figures/tables into
   the translation (declared by the writer, not inferred).
+- `notes` (optional): the writer's free-text side channel — QA/checker results,
+  terminology decisions, job remarks. Stored only here, never in the body; returned by
+  `get_section_translation` / `list_section_artifacts`; not hygiene-checked.
 
 Freshness is **derived, never stored**: each read recomputes the section's current
 hash and compares it with the sidecar.
@@ -607,6 +610,25 @@ not `mkstemp`'s 0600). A crash or a racing writer between the steps leaves an
 annotations, the cache is **not** rebuildable from sources (regenerating it costs
 model calls), so `index build`, `segment`, and `wiki` never delete it.
 
+### Artifact channels
+
+A translation body (and an annotation's `summary`/`gloss`) is **book content
+only**: it is reused by later jobs and printed in reading PDFs. Everything else a
+reading/translation job produces has its own channel, and the agent contract says so
+— the MCP server `instructions`, the tool docstrings, and the `bookgraph-reader`
+skills (`.claude/` and `.agents/`):
+
+| What | Channel |
+| --- | --- |
+| Translated headings, prose, tables, figures | `write_section_translation(content=...)` |
+| Figure/table references inside a translation | the asset's `AssetRef.link` from `get_section` / `get_context` — relative to `sources/parsed/<doc_id>/` (e.g. `images/fig1-1.png`); `AssetRef.path` is the absolute file to *open*, not to write |
+| QA/checker results, terminology decisions, doubts about the source | `write_section_translation(notes=...)` — the sidecar's `notes` |
+| `MEDIA:/path` delivery markers, cache/mark-read progress, job status | the agent's final chat reply |
+| Export coverage, freshness, missing assets | the export's `.report.json` (the reading pages do not print them unless `--show-status`) |
+
+The tool does not try to detect or strip text that went into the wrong channel:
+that is agent behavior, fixed in the agent contract above.
+
 ## Translation bodies as read by `bookgraph export translated-pdf`
 
 The export is a **read-only consumer** of the registry above: it resolves each
@@ -617,9 +639,14 @@ way the registry does it (`VI` → `vi`). Per section:
 | Registry status | Export |
 | --- | --- |
 | `fresh` | Rendered. `freshness: "fresh"`. |
-| `stale` | Rendered with a *Translation may be outdated* note (and a `(may be outdated)` TOC marker); `freshness: "stale"` + `translation_stale`. |
-| `untracked` | Rendered with a *Translation status unknown — it may be outdated* note (and a `(not tracked)` TOC marker); `freshness: "untracked"` + `translation_untracked`. |
+| `stale` | Rendered; `freshness: "stale"` + `translation_stale`. |
+| `untracked` | Rendered; `freshness: "untracked"` + `translation_untracked`. |
 | `missing` | Untranslated: follows `--fallback`. |
+
+Freshness lives in the report, not on the reading pages. With `--show-status` (a
+debug view) the page also shows it: a *Translation may be outdated* /
+*Translation status unknown — it may be outdated* note under the heading and a
+`(may be outdated)` / `(not tracked)` TOC marker.
 
 Stale and untracked translations count as translated, so `--fallback fail` accepts
 them. `--strict` refuses `translation_stale` (known outdated) but not
@@ -662,7 +689,6 @@ is written beside the export:
   "total_sections": 3,
   "translated_sections": 1,
   "coverage": 0.3333,
-  "debug_assets": false,
   "sections": [
     {"section_id": "ddia.chapter-1", "title": "Chương 1", "level": 1,
      "source": "translated", "artifact": "translations/vi/ddia/ddia.chapter-1.md",
@@ -674,7 +700,8 @@ is written beside the export:
      "block_id": null}
   ],
   "renderer": "playwright",
-  "output": "/path/to/workspace/exports/ddia.vi-progress.pdf"
+  "output": "/path/to/workspace/exports/ddia.vi-progress.pdf",
+  "show_status": false
 }
 ```
 
@@ -684,9 +711,10 @@ is written beside the export:
   translation artifact, `sources/parsed/<doc_id>/document.json` for an original
   section (with the parsed `block_id`), or `sections.jsonl` when the document has no
   parsed blocks.
-- `debug_assets` is `true` when the export was made with `--debug-assets`, i.e. the
-  output carries a visible *Missing asset* placeholder for every asset warning.
-  Otherwise those assets are simply left out of the output and only reported.
+- The report is where status/debug metadata lives: the reading pages carry the title,
+  the table of contents, and book content only. `show_status` records whether the
+  export was made with `--show-status`, which also prints coverage, freshness and
+  fallback notes, TOC status markers, and *Missing asset* placeholders on the pages.
 - `freshness` is the translation's registry status (`fresh`, `stale`, or
   `untracked`) for a `translated` section, `null` otherwise.
 - `generated_at` follows `SOURCE_DATE_EPOCH` when it is set. With unchanged inputs and
@@ -695,12 +723,12 @@ is written beside the export:
   - `asset_missing`, `asset_remote`, `asset_unsupported`: an asset is not in the
     export (its caption and surrounding prose are). `--strict` refuses these.
   - `translation_stale`: the source section changed after the translation was
-    registered. Rendered with a note; `--strict` refuses it.
+    registered. Rendered (with a note under `--show-status`); `--strict` refuses it.
   - `translation_missing_assets`: a registered prose-only translation
     (`includes_assets: false`) of a section that has figures/tables. `--strict`
     refuses it.
   - `translation_untracked`: no valid registry record, or the body was edited after
-    registration. Rendered with a note; never refused.
+    registration. Rendered (with a note under `--show-status`); never refused.
   - `translation_empty`, `translation_unreadable`: the section falls back.
   - `asset_captions_only` / `asset_text_sparse`: ingest quality warnings, passed
     through for rendered sections whose source prose is mostly captions.

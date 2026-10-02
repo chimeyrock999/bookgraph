@@ -111,11 +111,17 @@ class AssetRef(BaseModel):
     label corroborates it) and, when the caption contradicts the parser,
     ``suggested_type`` — the type the caption implies. A client can then trust, correct,
     or open the file instead of taking a silently wrong ``type`` at face value.
+
+    ``path`` is the absolute file to *open*. ``link`` is the same file relative to the
+    document's ``sources/parsed/<doc_id>/`` directory (e.g. ``images/fig1-1.png``) —
+    the reference to *write* into a translation (``![caption](<link>)``): it stays
+    valid when the workspace moves, and the export resolves it.
     """
 
     block_id: str
     type: str
     path: str
+    link: str = ""
     caption: str = ""
     order: int | None = None
     page_idx: int | None = None
@@ -524,6 +530,7 @@ def _section_assets(
                 block_id=block.id,
                 type=block.type,
                 path=path,
+                link=_parsed_link(parsed_dir, path),
                 caption=block.text,
                 order=block.order,
                 page_idx=block.page_idx,
@@ -532,6 +539,17 @@ def _section_assets(
             )
         )
     return assets, summaries
+
+
+def _parsed_link(parsed_dir: Path, path: str) -> str:
+    """``path`` relative to the parsed document dir, for Markdown links in artifacts."""
+
+    try:
+        return Path(path).resolve().relative_to(parsed_dir.resolve()).as_posix()
+    except (OSError, ValueError):
+        # ``resolve_asset_path`` only returns files inside ``parsed_dir``; keep the
+        # basename rather than leak an absolute path if that ever changes.
+        return Path(path).name
 
 
 def _section_view(
@@ -1429,6 +1447,7 @@ class SectionArtifactView(BaseModel):
     section_has_assets: bool = False
     model: str | None = None
     created_at: str | None = None
+    notes: str | None = None
     content: str | None = None
 
 
@@ -1471,6 +1490,7 @@ def _artifact_view(
         section_has_assets=_section_has_assets(workspace, section) if section else False,
         model=artifact.model if artifact else None,
         created_at=artifact.created_at if artifact else None,
+        notes=artifact.notes if artifact else None,
         content=content,
     )
 
@@ -1514,6 +1534,7 @@ def write_section_translation(
     includes_assets: bool = False,
     model: str | None = None,
     source_section_hash: str | None = None,
+    notes: str | None = None,
 ) -> SectionArtifactView:
     """Cache a section translation and register it against the section's content.
 
@@ -1522,6 +1543,14 @@ def write_section_translation(
     write is refused so a translation of old content is never registered as fresh.
     ``includes_assets`` declares whether the section's figures/tables were carried into
     the translation.
+
+    This is the only translation store: a translation file written anywhere else (under
+    ``translations/`` by hand, or an agent's own ``translation_cache/``) is never read.
+    ``content`` is the translated book content only, with figures linked by their
+    ``AssetRef.link``. Everything else the job wants to record about the translation —
+    QA/checker results, terminology decisions — goes in ``notes``: stored in the
+    registry sidecar, returned by ``get_section_translation``, never part of the body
+    or the export.
     """
 
     resolved_doc_id = _validate_id(doc_id, "doc_id")
@@ -1544,6 +1573,7 @@ def write_section_translation(
         includes_assets=includes_assets,
         model=model,
         created_at=datetime.now(UTC).isoformat(),
+        notes=notes,
     )
     state = translation_state(workspace, resolved_lang, resolved_doc_id, section.id, current_hash)
     return _artifact_view(workspace, state, section, include_content=False)

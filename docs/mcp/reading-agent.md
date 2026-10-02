@@ -80,10 +80,11 @@ A self-serve agent drives an entire session with these tools alone:
      neighbourhood (parent/prev/next/children), its `concepts`, and any `summary`
      already written for it.
    - Both `get_section` and `get_context` return the section's figures/tables as a
-     structured `assets` list (each `{block_id, type, path, caption, order, page_idx,
-     type_confidence, suggested_type}`) so you never have to grep
+     structured `assets` list (each `{block_id, type, path, link, caption, order,
+     page_idx, type_confidence, suggested_type}`) so you never have to grep
      `sources/parsed/<doc_id>/document.json` for image paths. `path` resolves under the
-     workspace; open it directly to OCR/inspect labels or table content. `type` is the
+     workspace; open it directly to OCR/inspect labels or table content. `link` is the
+     relative reference (e.g. `images/fig1.png`) to write into a translation. `type` is the
      parser's guess: when `suggested_type` is set the caption contradicts it (a figure
      emitted as a `table`), so trust the file over the label. Pass
      `include_assets=false` to omit.
@@ -125,8 +126,25 @@ A self-serve agent drives an entire session with these tools alone:
      source_section_hash=<current_section_hash>)`.
      `list_section_artifacts(doc_id, lang)` lists every cached translation with its
      status, so a job can redo the `stale` ones after a re-segment.
+   - **Keep artifacts publication-clean — use the right channel.** A translation
+     body, annotation summary or gloss is book content only:
+     - QA/checker results and terminology decisions → `write_section_translation(...,
+       notes="...")` (stored in the registry sidecar, returned by
+       `get_section_translation`, never exported);
+     - `MEDIA:/path` markers, `Đã lưu cache/enrich và mark read: …` and other
+       progress lines → your final chat reply;
+     - export coverage/freshness/missing assets → the export's `.report.json`.
+
+     Write translations only through `write_section_translation`, never by creating
+     files under `translations/`, and link each figure/table by its `AssetRef.link`
+     (relative, e.g. `images/fig1.png`) — `AssetRef.path` is the absolute file to
+     open, not to write. The server sends these rules as its MCP `instructions` at
+     connect time, and the `bookgraph-reader` skill
+     (`.claude/skills/bookgraph-reader/SKILL.md`) spells out the workflow.
    - `mark_read(plan_id)` — mark the section read (defaults to the next unread) and
-     persist progress.
+     persist progress. It checks nothing: when the batch involved translation or
+     annotation, advance with `complete_reading_batch` instead (see below), which runs
+     the readiness and hygiene checks first.
 4. `list_plans()` — resume or report progress across sessions (`completed`/`total`/`done`).
    For "how many sections are left in this chapter?", call
    `get_plan_progress(plan_id)` — it answers from the plan + hierarchy without

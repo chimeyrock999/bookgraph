@@ -40,11 +40,36 @@ from bookgraph.mcp.service import (
 )
 from bookgraph.workspace import WorkspacePaths
 
+# Sent to every client at connect time, before any tool is called: the rules a reading
+# or translation agent must follow so its artifacts stay reusable book content.
+SERVER_INSTRUCTIONS = """\
+BookGraph serves books section by section. Artifacts you write (translations, annotation
+summaries and glosses) are reused by later runs and printed in reading PDFs, so they
+hold book content only. Keep the channels separate:
+- translated headings/prose/tables/figures -> write_section_translation(content=...);
+  link each figure/table by its AssetRef.link (relative), never by its absolute path;
+- QA/checker results, terminology decisions, doubts about the source ->
+  write_section_translation(notes=...), stored beside the translation, never exported;
+- MEDIA:/path delivery markers, "saved cache / marked read" progress lines, job status
+  -> your final chat reply only;
+- export coverage/freshness/missing-asset status -> the export's .report.json; never
+  copy labels such as (original), (untracked) or "Missing asset:" into a translation.
+The translation registry is the only translation store: check get_section_translation
+first, and save a translation ONLY with write_section_translation. Do not write
+translation files yourself, under translations/ or in any directory of your own:
+nothing reads them, so the section stays untranslated in the export and in batch
+completion.
+In a job that translates or annotates, do not call mark_read. Finish each batch with
+complete_reading_batch, and in a translation job always pass translation_lang: without
+it the batch completes without checking that anything was saved. If committed is
+false, fix every blocking issue and call it again.
+"""
+
 
 def build_server(workspace: WorkspacePaths) -> FastMCP:
     """Build a FastMCP server whose tools read/query a single workspace."""
 
-    mcp: FastMCP = FastMCP("bookgraph")
+    mcp: FastMCP = FastMCP("bookgraph", instructions=SERVER_INSTRUCTIONS)
 
     @mcp.tool
     def get_next_section(
@@ -120,7 +145,12 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
 
     @mcp.tool
     def mark_read(plan_id: str, section_id: str | None = None) -> MarkReadResult:
-        """Mark a section read for a plan (defaults to the next unread section)."""
+        """Mark a section read for a plan (defaults to the next unread section).
+
+        It checks nothing. In a job that translates or annotates, finish each batch
+        with complete_reading_batch (passing translation_lang) instead, so progress
+        only advances once the work is saved.
+        """
 
         try:
             return service.mark_read(workspace, plan_id, section_id)
@@ -368,7 +398,9 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
         is {title, slug?, gloss?}. The concepts argument has three intents: omit it
         (null) to leave the section's auto concepts untouched (e.g. a summary-only
         annotation); pass [] to prune the section's concepts; pass a list to replace
-        them with the agent's authoritative set.
+        them with the agent's authoritative set. Summary and glosses are book
+        explanation only — keep progress, QA results and MEDIA: markers in your chat
+        reply.
         """
 
         try:
@@ -409,6 +441,7 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
         includes_assets: bool = False,
         model: str | None = None,
         source_section_hash: str | None = None,
+        notes: str | None = None,
     ) -> SectionArtifactView:
         """Cache a section translation (Markdown) and register it as fresh.
 
@@ -416,7 +449,15 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
         the section content it was made from, replacing any earlier translation. Set
         includes_assets=True when the translation carries the section's figures/
         tables. Pass source_section_hash (the current_section_hash you saw) to refuse
-        the write if the section changed while you were translating.
+        the write if the section changed while you were translating. content is the
+        translated book content only: link each figure/table by its AssetRef.link
+        (relative), never its absolute path. Put QA/checker results, terminology
+        decisions and any other remarks in notes (stored beside the translation, never
+        in it); keep MEDIA: markers and progress lines for your final chat reply. This
+        is the only translation store: never write translation files yourself, not
+        under translations/ and not in any directory of your own (such as a
+        translation_cache/) — nothing reads them, so the section stays untranslated in
+        the export and in batch completion.
         """
 
         try:
@@ -429,6 +470,7 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
                 includes_assets,
                 model,
                 source_section_hash,
+                notes,
             )
         except ReadingServiceError as exc:
             raise ToolError(str(exc)) from exc

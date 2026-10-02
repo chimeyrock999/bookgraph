@@ -129,7 +129,7 @@ bookgraph assets repair /path/to/workspace <doc_id> --dry-run           # recove
 ```
 
 A figure whose file is missing is left out of the PDF (its caption stays) and listed
-in the export report. Pass `--debug-assets` to see a placeholder in its place instead.
+in the export report. Pass `--show-status` to see a placeholder in its place instead.
 
 ## External tools
 

@@ -39,7 +39,12 @@ from pathlib import PurePosixPath
 from urllib.parse import unquote
 
 from bookgraph.exports.html_attrs import HTML_ATTR_RE, HTML_START_TAG_RE
-from bookgraph.exports.models import INTERNAL_LINK_UNRESOLVED, ExportWarning
+from bookgraph.exports.models import (
+    INTERNAL_LINK_UNRESOLVED,
+    ExportWarning,
+    WarningColumn,
+    WarningOrigin,
+)
 from bookgraph.exports.outline import OutlineNode, flatten
 
 # File types of a source book's own documents (EPUB/HTML book chapters).
@@ -85,7 +90,14 @@ class InternalLinks:
         return html, list(dict.fromkeys(missing))
 
 
-def unresolved_link_warning(section_id: str, href: str, source_path: str | None) -> ExportWarning:
+def unresolved_link_warning(
+    section_id: str,
+    href: str,
+    source_path: str | None,
+    *,
+    column: WarningColumn,
+    origin: WarningOrigin,
+) -> ExportWarning:
     """The report entry for a link :meth:`InternalLinks.rewrite` left as written."""
 
     return ExportWarning(
@@ -95,6 +107,8 @@ def unresolved_link_warning(section_id: str, href: str, source_path: str | None)
         section_id=section_id,
         reference=href,
         source_path=source_path,
+        column=column,
+        origin=origin,
     )
 
 

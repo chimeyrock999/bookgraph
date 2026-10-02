@@ -136,6 +136,12 @@ def test_translated_links_resolve_and_artifact_keeps_source_destinations(
     # destinations, and they still match the source section (no structure warning).
     assert artifact.read_text(encoding="utf-8").endswith(body)
     assert TRANSLATION_STRUCTURE_CHANGED not in [w.code for w in export.report.warnings]
+    # The unresolved links left are in fallback-original rows: the source, mixed column.
+    unresolved = [w for w in export.report.warnings if w.code == INTERNAL_LINK_UNRESOLVED]
+    assert [(w.section_id, w.column, w.origin) for w in unresolved] == [
+        (CH10, "mixed", "source"),
+        (LIN, "mixed", "source"),
+    ]
 
 
 def test_translation_that_pre_resolves_a_link_still_fails_structure_check(
@@ -270,17 +276,23 @@ def test_bilingual_link_only_in_the_original_column_names_the_parsed_source(
     assert f'href="#{PREFACE}"' in original and f'href="#{PREFACE}"' in mixed
     assert 'href="ch99.html#ch_missing"' in original
     unresolved = [w for w in export.report.warnings if w.code == INTERNAL_LINK_UNRESOLVED]
-    assert [(w.section_id, w.reference, w.source_path) for w in unresolved] == [
-        (CH10, "ch99.html#ch_missing", f"sources/parsed/{DOC}/document.json"),
-        (LIN, "#sec_does_not_exist", f"sources/parsed/{DOC}/document.json"),
+    parsed = f"sources/parsed/{DOC}/document.json"
+    assert [(w.section_id, w.reference, w.source_path, w.column, w.origin) for w in unresolved] == [
+        # Only in the translated row's original column.
+        (CH10, "ch99.html#ch_missing", parsed, "original", "source"),
+        # A fallback row: both columns show the original; reported once, for the mixed one.
+        (LIN, "#sec_does_not_exist", parsed, "mixed", "source"),
     ]
+    assert unresolved[0].describe().startswith("[original column]")
     # A link in the translation is attributed to its artifact.
     _register(paths, CH10, "# Chương 10\n\n[nowhere](ch99.html#ch_missing).\n")
     report = build_translated_export(
         paths, DOC, lang="vi", mode="bilingual", generated_at=GENERATED_AT
     ).report
     first = next(w for w in report.warnings if w.code == INTERNAL_LINK_UNRESOLVED)
-    assert (first.section_id, first.source_path) == (
+    assert (first.section_id, first.source_path, first.column, first.origin) == (
         CH10,
         artifact.relative_to(paths.root).as_posix(),
+        "mixed",
+        "translation",
     )

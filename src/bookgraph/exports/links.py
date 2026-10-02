@@ -50,6 +50,7 @@ from bookgraph.exports.bilingual import bilingual_section
 from bookgraph.exports.html_attrs import HTML_ATTR_RE, HTML_START_TAG_RE
 from bookgraph.exports.models import (
     INTERNAL_LINK_UNRESOLVED,
+    BilingualLayout,
     ExportSection,
     ExportWarning,
     WarningColumn,
@@ -111,18 +112,22 @@ def resolve_section_links(
     original_source: Callable[[Section], str | None],
     lang: str,
     alignments: Mapping[str, AlignmentCheck] | None = None,
+    *,
+    layout: BilingualLayout = "columns",
+    source_lang: str | None = None,
 ) -> tuple[dict[str, tuple[ExportSection, str]], list[ExportWarning]]:
     """Resolve every section's links, and pair it with its original in ``bilingual`` mode.
 
     ``rendered`` is each section's report entry and mixed rendering; ``originals`` its
     bilingual left column as ``(html, assets_embedded, assets_missing)`` (empty in
     ``translated`` mode), and ``alignments`` the translations' block alignments, which
-    split an aligned section into one row per unit. Links resolve against the anchors
-    the page keeps — the mixed renderings' (the left column's ids are stripped). Each
-    column is resolved on its own, so an unresolved link names the file it was read
-    from (``original_source`` for an original section) and the column it is in, once
-    per section: a link in both columns is reported for the mixed one. Returns the
-    sections' final entries and bodies, and the warnings in reading order.
+    split an aligned section into one row per unit; ``layout`` and ``source_lang`` are
+    passed to :func:`~bookgraph.exports.bilingual.bilingual_section`. Links resolve
+    against the anchors the page keeps — the mixed renderings' (the left column's ids
+    are stripped). Each column is resolved on its own, so an unresolved link names the
+    file it was read from (``original_source`` for an original section) and the column
+    it is in, once per section: a link in both columns is reported for the mixed one.
+    Returns the sections' final entries and bodies, and the warnings in reading order.
     """
 
     links = InternalLinks(outline, [body for _, body in rendered.values()])
@@ -151,6 +156,8 @@ def resolve_section_links(
                 # Only a rendered translation is aligned; a fallback row has none.
                 alignment=alignments.get(section.id) if entry.artifact is not None else None,
                 block_ids=section.block_ids,
+                layout=layout,
+                source_lang=source_lang,
             )
         resolved[section.id] = (entry, body)
     return resolved, warnings

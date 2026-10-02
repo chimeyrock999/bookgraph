@@ -9,6 +9,11 @@ right (units that split one block share a row, and source blocks no unit transla
 figures, headings — get rows of their own). Unaligned translations, and alignments
 that no longer fit the section, keep the section-level row.
 
+That is the ``columns`` layout of a paged PDF (and its HTML page). A reflowable book
+(EPUB) cannot hold two columns, so its ``interleaved`` layout sets each row's original
+before its translation instead (:func:`bilingual_section`), and an untranslated
+section's original only once.
+
 The assembler in :mod:`bookgraph.exports.translated` renders both columns, marking
 where each unit and each source block starts with an HTML comment
 (:func:`mark_units`, :func:`block_marker`); this module splits the columns at those
@@ -24,7 +29,7 @@ from html import escape
 from markdown_it.token import Token
 
 from bookgraph.exports.html_attrs import HTML_ATTR_RE, HTML_START_TAG_RE
-from bookgraph.exports.models import ExportReport, ExportSection
+from bookgraph.exports.models import BilingualLayout, ExportReport, ExportSection
 from bookgraph.models import AlignedUnit
 from bookgraph.translation_alignment import AlignmentCheck, unit_blocks
 
@@ -102,22 +107,28 @@ def bilingual_section(
     *,
     alignment: AlignmentCheck | None = None,
     block_ids: Sequence[str] = (),
+    layout: BilingualLayout = "columns",
+    source_lang: str | None = None,
 ) -> tuple[ExportSection, str]:
     """Pair a section's mixed rendering with its original column.
 
     ``original`` is the left column's ``(html, assets_embedded, assets_missing)``.
     ``alignment`` is the translation's alignment check (``None`` for a fallback row)
-    and ``block_ids`` the section's source blocks in reading order. Returns the entry
-    with its original-column asset counts, alignment status and row count, and the
-    rows' HTML.
+    and ``block_ids`` the section's source blocks in reading order. ``layout`` sets the
+    pairs side by side (``columns``) or one after the other (``interleaved``), and
+    ``source_lang`` tags the original (``und`` when ``None``). Returns the entry with its
+    original-column asset counts, alignment status and row count, and the rows' HTML.
     """
 
     html, embedded, missing = original
+    # An original rebuilt from ``Section.text`` (no parsed blocks) has no block marks to
+    # set beside the units: keep the section row.
+    aligned = bool(
+        alignment is not None and alignment.status == "aligned" and _BLOCK_MARK_RE.search(html)
+    )
     pairs = (
         _aligned_pairs(html, mixed, alignment.units, block_ids)
-        # An original rebuilt from ``Section.text`` (no parsed blocks) has no block marks
-        # to set beside the units: keep the section row.
-        if alignment is not None and alignment.status == "aligned" and _BLOCK_MARK_RE.search(html)
+        if aligned and alignment is not None
         else [(strip_marks(html), strip_marks(mixed))]
     )
     entry = entry.model_copy(
@@ -128,9 +139,33 @@ def bilingual_section(
             "bilingual_rows": len(pairs),
         }
     )
+    original_lang = source_lang or "und"
+    if layout == "interleaved":
+        if entry.source != "translated":
+            # Nothing to compare against: the original once, keeping its anchors (a
+            # fallback's mixed rendering repeats them, and is not shown).
+            return entry, _side("original", strip_marks(html), original_lang)
+        kind = "bilingual-unit" if aligned else "bilingual-section"
+        return entry, "".join(
+            f'<div class="{kind}">'
+            + _side("original", strip_anchor_ids(left), original_lang)
+            + _side("translation", right, lang)
+            + "</div>"
+            for left, right in pairs
+        )
     # The mixed column carries the same anchors (a translation keeps them; a fallback
     # row repeats the original), so only it keeps ids and in-page links land there.
-    return entry, "".join(_row(strip_anchor_ids(left), right, lang) for left, right in pairs)
+    return entry, "".join(
+        _row(strip_anchor_ids(left), right, lang, original_lang) for left, right in pairs
+    )
+
+
+def _side(kind: str, html: str, lang: str) -> str:
+    """One side of an interleaved pair, or nothing when it has no content."""
+
+    if not html.strip():
+        return ""
+    return f'<div class="{kind}" lang="{escape(lang, quote=True)}">{html}</div>'
 
 
 def _split_marks(html: str, pattern: re.Pattern[str]) -> tuple[str, dict[str, str]]:
@@ -230,7 +265,7 @@ def strip_anchor_ids(html: str) -> str:
     return HTML_START_TAG_RE.sub(replace, html)
 
 
-def _row(original: str, mixed: str, lang: str) -> str:
+def _row(original: str, mixed: str, lang: str, original_lang: str) -> str:
     """One section as a two-column row: original left, mixed reading edition right.
 
     A table, not grid/flex: both PDF backends paginate table rows reliably, and the
@@ -239,9 +274,10 @@ def _row(original: str, mixed: str, lang: str) -> str:
 
     return (
         '<table class="bilingual"><tr>'
-        # No source language is stored, so the original is "undetermined" rather than
-        # inheriting the page's target language.
-        f'<td class="column column-original" data-column="original" lang="und">{original}</td>'
+        # Without --source-lang the original is "undetermined" rather than inheriting the
+        # page's target language.
+        '<td class="column column-original" data-column="original" '
+        f'lang="{escape(original_lang, quote=True)}">{original}</td>'
         f'<td class="column column-mixed" data-column="mixed" lang="{escape(lang, quote=True)}">'
         f"{mixed}</td></tr></table>"
     )

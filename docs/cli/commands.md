@@ -1476,13 +1476,21 @@ laid out for reflowable screens:
   at it. Images the export left out stay out, as in the PDF.
 - **Links.** Internal links are resolved as above, then pointed at the file that holds
   their anchor (`chapter-003.xhtml#tiny.section-two`); a link inside its own file
-  stays `#anchor`.
+  stays `#anchor`. External URLs stay. A link to nothing in the book (an unresolved
+  internal link, still reported as `internal_link_unresolved`, or a relative link to a
+  file the book does not carry) keeps its text but loses its `href`: no reading
+  system can follow it, and epubcheck rejects it.
 - **XHTML.** Every section body is re-serialised as well-formed XHTML: void elements
   self-closed, text and attributes escaped, implied end tags (`p`, `li`, `td`, …)
-  added, and tags balanced. What cannot be kept is dropped and reported as
-  `xhtml_repaired` (once per section): a stray end tag, an element left open, a
-  `script`/`style`/`iframe`/`object` element, an element or attribute name XML cannot
-  carry (`o:p`), or an event-handler attribute (`onclick`). Comments are dropped.
+  added, and tags balanced. What changes the content is reported as
+  `xhtml_repaired` (once per section): a stray end tag dropped, an element left open
+  closed, a `script`/`style`/`iframe`/`object`/`embed` element dropped with its
+  content, a document wrapper or obsolete presentational tag (`body`, `center`,
+  `font`, …) dropped with its content kept, an attribute name XML cannot carry or an
+  event handler (`onclick`) dropped, or an element HTML does not define kept as
+  escaped text. The last is raw XML in a parsed book (an RDF or Avro schema example)
+  that the Markdown renderer read as tags: as text, the reader still sees the example.
+  Comments are dropped.
 - **Languages.** The root element of every file carries `lang`/`xml:lang` = `--lang`.
   Original-language content carries `--source-lang` (else `und`): untranslated
   sections in `translated` mode, and the original side in `bilingual` mode.

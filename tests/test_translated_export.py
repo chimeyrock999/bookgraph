@@ -383,7 +383,7 @@ def test_select_renderer() -> None:
 
 
 def test_default_registry_names() -> None:
-    assert default_renderer_registry().names() == ["html", "playwright", "weasyprint"]
+    assert default_renderer_registry().names() == ["epub", "html", "playwright", "weasyprint"]
 
 
 @pytest.mark.parametrize("backend", ["weasyprint", "playwright"])

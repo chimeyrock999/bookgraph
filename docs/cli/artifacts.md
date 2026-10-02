@@ -973,9 +973,10 @@ is written beside the export:
   - `translation_empty`, `translation_unreadable`: the section falls back.
   - `xhtml_repaired`: EPUB output only. The section's HTML had to be changed to be
     well-formed XHTML beyond the routine fixes (self-closing void elements, escaping,
-    implied end tags): a stray end tag or an unclosed element, or a dropped
-    `script`/`style`/`iframe`/`object` element, element or attribute name, or event
-    handler. One per section, listing what was changed; `column` is `mixed` and
+    implied end tags): a stray end tag or an unclosed element, a dropped
+    `script`/`style`/`iframe`/`object`/`embed` element, obsolete tag, attribute name
+    or event handler, or an element HTML does not define kept as text. One per
+    section, listing what was changed; `column` is `mixed` and
     `origin` follows the section's source. Found while writing, so a `--check` run
     does not report it. A diagnostic only: `--strict` does not refuse it.
   - `asset_captions_only` / `asset_text_sparse`: ingest quality warnings, passed

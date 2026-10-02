@@ -132,7 +132,9 @@ A self-serve agent drives an entire session with these tools alone:
      `complete_reading_batch` blocks on them (`*_contaminated`). Link figures
      relatively (`images/fig1.png`); `MEDIA:` is for the final chat reply only.
    - `mark_read(plan_id)` — mark the section read (defaults to the next unread) and
-     persist progress.
+     persist progress. It checks nothing: when the batch involved translation or
+     annotation, advance with `complete_reading_batch` instead (see below), which runs
+     the readiness and hygiene checks first.
 4. `list_plans()` — resume or report progress across sessions (`completed`/`total`/`done`).
    For "how many sections are left in this chapter?", call
    `get_plan_progress(plan_id)` — it answers from the plan + hierarchy without

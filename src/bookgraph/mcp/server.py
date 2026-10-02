@@ -137,6 +137,7 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
         inspected_assets: list[str] | None = None,
         translation_lang: str | None = None,
         artifacts: list[str] | None = None,
+        clean_artifacts: bool = False,
         stop_at_boundary: bool = False,
         chapter_level: int | None = None,
     ) -> ReadingBatchReport:
@@ -155,6 +156,7 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
             inspected_assets=inspected_assets or [],
             translation_lang=translation_lang,
             artifacts=artifacts or [],
+            clean_artifacts=clean_artifacts,
         )
         try:
             return reading_batch.validate_reading_batch(
@@ -178,6 +180,7 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
         inspected_assets: list[str] | None = None,
         translation_lang: str | None = None,
         artifacts: list[str] | None = None,
+        clean_artifacts: bool = False,
         stop_at_boundary: bool = False,
         chapter_level: int | None = None,
     ) -> ReadingBatchReport:
@@ -190,9 +193,11 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
         figure/table file was inspected — list their block ids in inspected_assets
         (require_assets); the cached translation for translation_lang exists and is not
         stale in the translation registry; and each artifacts path template exists ({doc_id},
-        {section_id}, {plan_id} expand). The annotation, the translation, and every
-        Markdown/text artifact must also be clean of job diagnostics (MEDIA: markers,
-        cache/mark-read footers, QA notes, export labels, absolute asset paths). If any
+        {section_id}, {plan_id} expand). The annotation and the translation must also
+        be clean of job diagnostics (MEDIA: markers, cache/mark-read footers, QA notes,
+        export labels, absolute asset paths); set clean_artifacts=True to hold
+        Markdown/text artifacts (e.g. a cache) to the same rule — leave it off for
+        run/QA logs, which legitimately contain such lines. If any
         blocking issue is found, nothing is written: committed=false and issues lists
         every reason to fix before retrying.
         section_ids defaults to the plan's current batch, resolved exactly like
@@ -207,6 +212,7 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
             inspected_assets=inspected_assets or [],
             translation_lang=translation_lang,
             artifacts=artifacts or [],
+            clean_artifacts=clean_artifacts,
         )
         try:
             return reading_batch.complete_reading_batch(
@@ -372,8 +378,8 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
         (null) to leave the section's auto concepts untouched (e.g. a summary-only
         annotation); pass [] to prune the section's concepts; pass a list to replace
         them with the agent's authoritative set. Summary and glosses are book
-        explanation only: progress footers, QA/checker notes and MEDIA: markers are
-        refused.
+        explanation only: progress footers, QA/checker notes, MEDIA: markers, export
+        labels and absolute asset paths are refused.
         """
 
         try:

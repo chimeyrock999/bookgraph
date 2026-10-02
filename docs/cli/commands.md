@@ -856,7 +856,8 @@ empty list is rejected. Each requirement applies to every section of the batch:
 | `require_assets` | `true` | Every figure/table of the section whose file resolves (the `assets` of `get_section`) is listed by `block_id` in `inspected_assets` — the caller's declaration that it opened/embedded it. |
 | `inspected_assets` | `[]` | Block ids the caller inspected. |
 | `translation_lang` | `null` | When set (a slug such as `vi`, `pt-br`; lowercased), the section's cached translation `translations/<lang>/<doc_id>/<section_id>.md` exists, is non-empty, and is not `stale` in the translation registry (see `artifacts.md`). An `untracked` body (no valid registry sidecar) passes with a warning. |
-| `artifacts` | `[]` | Extra workspace-relative path templates that must exist and be non-empty per section; a `.md`/`.markdown`/`.txt` one must also be free of job diagnostics. `{doc_id}`, `{section_id}`, `{plan_id}` expand; an absolute path, a `..` segment, an unknown field, or a path resolving outside the workspace is rejected as a request error. |
+| `artifacts` | `[]` | Extra workspace-relative path templates that must exist and be non-empty per section. `{doc_id}`, `{section_id}`, `{plan_id}` expand; an absolute path, a `..` segment, an unknown field, or a path resolving outside the workspace is rejected as a request error. |
+| `clean_artifacts` | `false` | Opt-in: the `artifacts` that are Markdown/text (`.md`, `.markdown`, `.txt`) must also be free of job diagnostics (see *Artifact hygiene* in `artifacts.md`). Set it for cache/deliverable artifacts; leave it off for run/QA logs. |
 
 Both return a report:
 
@@ -902,8 +903,8 @@ Issue codes (`blocking` unless noted):
 - `translation_untracked` — non-blocking; the body has no registry record, so its
   freshness is unknown.
 - `translation_contaminated`, `annotation_contaminated`, `artifact_contaminated` —
-  the translation body, the annotation's summary/glosses, or a required text
-  artifact carries job diagnostics (`MEDIA:` markers, progress footers, QA notes,
+  the translation body, the annotation's summary/glosses, or (with
+  `clean_artifacts`) a required text artifact carries job diagnostics (`MEDIA:` markers, progress footers, QA notes,
   export labels, absolute asset links; see *Artifact hygiene* in `artifacts.md`).
   The message names the first offending lines; rewrite the artifact clean.
 

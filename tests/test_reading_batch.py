@@ -519,7 +519,11 @@ def test_contaminated_text_artifact_blocks_the_batch(tmp_path: Path) -> None:
     (notes / f"{A}.md").write_text("Ghi chú.\nMEDIA:/tmp/out.pdf\n")
     (notes / f"{A}.json").write_text('{"log": "MEDIA:/tmp/out.pdf"}')  # not read as text
 
-    report = validate_reading_batch(workspace, "daily", requirements=reqs)
+    # Opt-in: a required run/QA log may carry such lines.
+    assert validate_reading_batch(workspace, "daily", requirements=reqs).ok
+
+    strict = reqs.model_copy(update={"clean_artifacts": True})
+    report = validate_reading_batch(workspace, "daily", requirements=strict)
 
     assert [(i.code, i.section_id) for i in report.issues] == [("artifact_contaminated", A)]
     assert f"notes/{A}.md" in report.issues[0].message

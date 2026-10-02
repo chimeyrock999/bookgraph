@@ -42,7 +42,7 @@ from urllib.parse import unquote
 from markdown_it import MarkdownIt
 from markdown_it.token import Token
 
-from bookgraph.artifact_hygiene import strip_operational_lines
+from bookgraph.artifact_hygiene import scan_artifact_text, strip_operational_lines
 from bookgraph.assets import asset_reference, resolve_asset_path
 from bookgraph.documents import read_document
 from bookgraph.exports.models import (
@@ -382,6 +382,17 @@ class _Assembler:
                 TRANSLATION_CONTAMINATED,
                 f"translation artifact {relative} carries job diagnostics ({finding.code}) "
                 "that were left out of the export; remove them and rewrite it with "
+                "write_section_translation",
+                section.id,
+                finding.excerpt,
+            )
+        # What is left is an absolute asset link: rendered (an in-workspace image still
+        # embeds) but reported, so ``--strict`` agrees with the reading batch boundary.
+        for finding in scan_artifact_text(body):
+            self._warn(
+                TRANSLATION_CONTAMINATED,
+                f"translation artifact {relative} links an asset by absolute path "
+                f"({finding.code}); link parsed assets relatively and rewrite it with "
                 "write_section_translation",
                 section.id,
                 finding.excerpt,
@@ -735,8 +746,6 @@ def _html_inline(content: str) -> Token:
     return token
 
 
-
-
 def _heading(level: int, title: str) -> str:
     tag = f"h{max(1, min(level, 6))}"
     return f"<{tag}>{escape(title)}</{tag}>"
@@ -820,9 +829,7 @@ def _document_html(report: ExportReport, bodies: list[str]) -> str:
         if report.show_status
         else ""
     )
-    frontmatter = (
-        f'<header class="frontmatter"><h1>{escape(report.title)}</h1>{details}</header>\n'
-    )
+    frontmatter = f'<header class="frontmatter"><h1>{escape(report.title)}</h1>{details}</header>\n'
     toc_items = []
     for entry in report.sections:
         indent = (max(1, min(entry.level, 6)) - 1) * 12

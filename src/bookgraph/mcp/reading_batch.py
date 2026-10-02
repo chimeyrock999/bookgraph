@@ -65,11 +65,15 @@ class BatchRequirements(BaseModel):
     - ``artifacts``: extra workspace-relative path templates that must exist and be
       non-empty per section; ``{doc_id}``, ``{section_id}`` and ``{plan_id}`` expand.
 
-    Whatever is checked must also be publication-clean (:mod:`bookgraph.artifact_hygiene`):
-    an annotation, translation, or Markdown/text artifact carrying job diagnostics — a
-    ``MEDIA:`` marker, a progress footer, a QA note, an export label, an absolute asset
-    link — blocks with ``annotation_contaminated`` / ``translation_contaminated`` /
-    ``artifact_contaminated``.
+    - ``clean_artifacts``: the ``artifacts`` that are Markdown/text (``.md``,
+      ``.markdown``, ``.txt``) must also be publication-clean. Opt-in: set it for cache
+      or deliverable artifacts, not for run/QA logs, which legitimately carry such lines.
+
+    An annotation or translation that is checked must always be publication-clean
+    (:mod:`bookgraph.artifact_hygiene`): one carrying job diagnostics — a ``MEDIA:``
+    marker, a progress footer, a QA note, an export label, an absolute asset link —
+    blocks with ``annotation_contaminated`` / ``translation_contaminated``
+    (``artifact_contaminated`` for ``clean_artifacts``).
     """
 
     require_annotation: bool = True
@@ -78,6 +82,7 @@ class BatchRequirements(BaseModel):
     inspected_assets: list[str] = Field(default_factory=list)
     translation_lang: str | None = None
     artifacts: list[str] = Field(default_factory=list)
+    clean_artifacts: bool = False
 
 
 class BatchIssue(BaseModel):
@@ -341,7 +346,7 @@ def _evaluate(
                         message=f"Required artifact '{relative_path}' is missing or empty.",
                     )
                 )
-            elif artifact_path.suffix.lower() in _TEXT_ARTIFACT_SUFFIXES:
+            elif reqs.clean_artifacts and artifact_path.suffix.lower() in _TEXT_ARTIFACT_SUFFIXES:
                 findings = _text_findings(artifact_path)
                 if findings:
                     issues.append(

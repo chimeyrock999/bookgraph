@@ -19,16 +19,17 @@ LEAKS = [
     ("_Đã lưu cache và mark read: ddia.ch1_", "progress_footer"),
     ("Saved translation; called mark_read for ddia.ch1.", "progress_footer"),
     ("Marked read: ddia.ch1-intro", "progress_footer"),
-    ("QA: thuật ngữ đã được kiểm tra với glossary.", "qa_note"),
+    ("QA: ✅ thuật ngữ khớp glossary.", "qa_note"),
+    ("✅ QA: passed", "qa_note"),
+    ("QA/checker notes: none", "qa_note"),
     ("**QA note:** the checker found no untranslated sentences.", "qa_note"),
     ("> Checker: 0 issues", "qa_note"),
-    ("Internal validation: headings match the source.", "qa_note"),
+    ("Internal validation notes: headings match the source.", "qa_note"),
     ("- Ghi chú QA: giữ nguyên thuật ngữ 'replication'.", "qa_note"),
     ("[QA] figure 1-1 kept as-is", "qa_note"),
     ("Translation status unknown — it may be outdated", "export_status"),
     ("Untranslated — original text", "export_status"),
     ("Missing asset: images/fig1-1.png", "export_status"),
-    ("## Chương 1. Ứng dụng đáng tin cậy (untracked)", "export_status"),
     ("(original)", "export_status"),
     ("(tracked)", "export_status"),
     ("warning: asset_missing: ddia.ch1: image 'x.png' was not found", "export_warning"),
@@ -36,6 +37,7 @@ LEAKS = [
     ("![Hình 1-1](/Users/me/bookgraph/sources/parsed/ddia/images/fig1.png)", "absolute_asset_link"),
     ("![Hình 1-1](file:///tmp/fig1.png)", "absolute_asset_link"),
     ('<img src="/Users/me/fig1.png" alt="x">', "absolute_asset_link"),
+    ("[fig]: /Users/me/fig.png", "absolute_asset_link"),
 ]
 
 # Book content that resembles the rules but is content, not diagnostics.
@@ -59,6 +61,27 @@ QA: this is a code listing
 ```
 
 Xem [chương 5](../ddia.ch5.md) và [tài liệu](https://example.com/docs).
+
+Media: print, radio, and television shaped the twentieth century.
+Self-check: What is a write-ahead log?
+**Self-check:** Why do replicas diverge?
+Internal validation: the model was checked against a held-out set.
+QA: quality assurance, the team that tests a release.
+Checker: a program that verifies proofs.
+
+## The Iliad (original)
+
+### Bread that is old (stale)
+
+See [the docs](/docs/intro), <a href="/about">about</a>, and
+![logo](//cdn.example.com/logo.png).
+
+[docs]: /docs/intro
+
+Call `mark_read` after the batch; a stale entry reports `translation_stale`.
+
+    QA: an indented code listing
+    mark_read(plan_id)
 """
 
 
@@ -74,7 +97,7 @@ def test_book_content_is_not_flagged() -> None:
 
 
 def test_fence_must_close_with_the_same_marker() -> None:
-    text = "~~~\n```\nQA: inside\n~~~\nQA: outside\n"
+    text = "~~~\n```\nQA: passed\n~~~\nQA: passed\n"
 
     assert [f.line for f in scan_artifact_text(text)] == [5]
 
@@ -94,12 +117,12 @@ def test_strip_drops_operational_lines_and_keeps_links() -> None:
 
 def test_ensure_clean_lists_findings_in_the_error() -> None:
     with pytest.raises(ArtifactHygieneError) as excinfo:
-        ensure_clean_artifact("Nội dung.\nQA: a\nQA: b\nQA: c\nMEDIA:/x\n", "translation")
+        ensure_clean_artifact("Nội dung.\nQA: ok\nQA: passed\nQA: ✅\nMEDIA:/x\n", "translation")
 
     assert len(excinfo.value.findings) == 4
     message = str(excinfo.value)
     assert message.startswith("translation contains operational text")
-    assert "line 2 (qa_note): QA: a" in message
+    assert "line 2 (qa_note): QA: ok" in message
     assert "and 1 more" in message
 
 
@@ -130,4 +153,30 @@ def test_stored_annotation_findings_cover_summary_and_glosses() -> None:
     assert [f.code for f in annotation_hygiene_findings(annotation)] == [
         "progress_footer",
         "export_warning",
+    ]
+
+
+def test_collapsed_mode_finds_line_start_leaks_mid_text() -> None:
+    summary = "Explains the write-ahead log. QA: checked against source MEDIA:/Users/me/out.pdf"
+
+    assert scan_artifact_text(summary) == []  # the line-start rules see one line
+    assert [f.code for f in scan_artifact_text(summary, collapsed=True)] == ["media_marker"]
+    assert [f.code for f in scan_artifact_text("Tóm tắt. QA: ✅ ok", collapsed=True)] == ["qa_note"]
+    assert scan_artifact_text("The original edition (original)", collapsed=True) == []
+
+
+def test_stored_collapsed_summary_is_contaminated() -> None:
+    annotation = SectionAnnotation(
+        doc_id="ddia",
+        section_id="ddia.ch1",
+        summary="Explains the write-ahead log. QA: checked against source",
+    )
+
+    assert [f.code for f in annotation_hygiene_findings(annotation)] == ["qa_note"]
+
+
+def test_indented_line_inside_a_paragraph_is_prose() -> None:
+    # An indented line cannot start a code block mid-paragraph.
+    assert [f.code for f in scan_artifact_text("Đoạn văn\n    MEDIA:/tmp/x.pdf\n")] == [
+        "media_marker"
     ]

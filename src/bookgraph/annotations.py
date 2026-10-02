@@ -127,11 +127,12 @@ def annotation_hygiene_findings(annotation: SectionAnnotation) -> list[HygieneFi
     """Hygiene findings in a stored annotation's summary and glosses.
 
     For annotations written before writes were checked (or by hand): the reading batch
-    boundary refuses to mark such a section read.
+    boundary refuses to mark such a section read. Stored text is one line (``_clean``),
+    so it is scanned in collapsed mode.
     """
 
     texts = [annotation.summary, *(concept.gloss for concept in annotation.concepts or [])]
-    return [finding for text in texts for finding in scan_artifact_text(text)]
+    return [finding for text in texts for finding in scan_artifact_text(text, collapsed=True)]
 
 
 def annotation_path(annotations_root: Path, doc_id: str, section_id: str) -> Path:

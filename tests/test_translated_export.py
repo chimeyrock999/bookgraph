@@ -250,6 +250,7 @@ def test_broken_remote_and_escaping_image_links_are_reported_not_embedded(
     chapter, _, _ = _section_ids(workspace)
     outside = tmp_path.parent / "outside.png"
     outside.write_bytes(PNG)
+    fig = workspace.sources_parsed / DOC / "images" / "fig1.png"
     (workspace.sources_parsed / DOC / "notes.txt").write_text("not an image")
     _translate(
         workspace,
@@ -260,7 +261,7 @@ def test_broken_remote_and_escaping_image_links_are_reported_not_embedded(
         "![escape](../../../../outside.png)\n\n"
         f"![absolute]({outside})\n\n"
         "![text](notes.txt)\n\n"
-        f"![ok]({workspace.sources_parsed / DOC / 'images' / 'fig1.png'})\n",
+        f"![ok]({fig})\n",
     )
 
     export = build_translated_export(workspace, DOC, lang="vi", generated_at=GENERATED_AT)
@@ -272,6 +273,15 @@ def test_broken_remote_and_escaping_image_links_are_reported_not_embedded(
     assert by_ref[str(outside)] == ASSET_MISSING
     assert by_ref["notes.txt"] == ASSET_UNSUPPORTED
     assert export.report.sections[0].assets_embedded == 1  # the absolute in-workspace path
+    # Absolute links still render, but are reported like the batch boundary sees them.
+    contaminated = [
+        w.reference for w in export.report.warnings if w.code == TRANSLATION_CONTAMINATED
+    ]
+    # Excerpts are capped at 120 characters, and temp paths can be longer.
+    assert [ref[:20] for ref in contaminated if ref] == [
+        f"![absolute]({outside})"[:20],
+        f"![ok]({fig})"[:20],
+    ]
     assert export.report.sections[0].assets_missing == 5
     assert 'src="https://' not in export.html
     assert f'src="{outside}"' not in export.html
@@ -768,7 +778,7 @@ def test_leaked_job_diagnostics_are_dropped_from_the_page_and_reported(
         workspace,
         chapter,
         "# Chương Một\n\nPhần mở đầu.\n\n"
-        "QA: thuật ngữ đã kiểm tra.\n"
+        "QA: ✅ thuật ngữ đã kiểm tra.\n"
         "MEDIA:/Users/me/ws/exports/tiny.vi-progress.pdf\n\n"
         "Đoạn hai.\n\n"
         "✅ Đã lưu cache/enrich và mark read: tiny.chapter-one\n",
@@ -782,7 +792,7 @@ def test_leaked_job_diagnostics_are_dropped_from_the_page_and_reported(
         assert leak not in html
     contaminated = [w for w in export.report.warnings if w.code == TRANSLATION_CONTAMINATED]
     assert [w.reference for w in contaminated] == [
-        "QA: thuật ngữ đã kiểm tra.",
+        "QA: ✅ thuật ngữ đã kiểm tra.",
         "MEDIA:/Users/me/ws/exports/tiny.vi-progress.pdf",
         "✅ Đã lưu cache/enrich và mark read: tiny.chapter-one",
     ]

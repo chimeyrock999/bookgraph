@@ -597,30 +597,39 @@ model calls), so `index build`, `segment`, and `wiki` never delete it.
 A translation body (and an annotation's `summary`/`gloss`) is **publication-clean
 book content**: it is reused by later jobs and printed in reading PDFs. Job
 diagnostics belong in the chat reply, the job log, or a report JSON — never in the
-artifact. `bookgraph.artifact_hygiene` recognises them, line by line outside fenced
-code blocks (a code listing quoting `WARNING: …` is content):
+artifact. `bookgraph.artifact_hygiene` recognises them line by line, in prose only:
+fenced and indented code blocks and inline code spans are skipped, so a code listing
+quoting `WARNING: …` or a mention of `` `mark_read` `` is content. The rules are kept
+narrow — a false positive refuses a faithful translation — so look-alike book text
+(`Media: print and radio`, `Self-check: …`, `QA: quality assurance`, a heading
+`The Iliad (original)`, a site link `[docs](/docs/intro)`) is not flagged:
 
 | Code | Example |
 | --- | --- |
-| `media_marker` | `MEDIA:/Users/me/exports/ddia.vi-progress.pdf` — a chat delivery marker, valid only in the final reply. |
+| `media_marker` | `MEDIA:/Users/me/exports/ddia.vi-progress.pdf` — upper-case `MEDIA:` followed by a local path; a chat delivery marker, valid only in the final reply. |
 | `progress_footer` | `Đã lưu cache/enrich và mark read: ddia.ch1`, `called mark_read`, `Marked read: …` |
-| `qa_note` | `QA: …`, `**QA note:** …`, `Checker: …`, `Internal validation: …`, `Ghi chú QA: …`, `[QA] …` |
-| `export_status` | `Translation status unknown`, `Untranslated — original text`, `Missing asset: …`, a heading or line ending in `(original)` / `(tracked)` / `(untracked)` / `(may be outdated)` |
+| `qa_note` | a qualified label (`**QA note:** …`, `QA/checker notes: …`, `Validation notes: …`, `Ghi chú QA: …`), a `[QA]` tag, or a bare `QA:` / `Checker:` followed by a verdict (`QA: passed`, `✅ QA: ok`, `Checker: 0 issues`) |
+| `export_status` | `Translation status unknown`, `Untranslated — original text`, `Missing asset: …`, or `(original)` / `(tracked)` / `(untracked)` / `(may be outdated)` alone on its line |
 | `export_warning` | an export warning code (`asset_missing`, `translation_stale`, …) or `Renderer warning: …` |
-| `absolute_asset_link` | `![…](/Users/…/fig1.png)`, `file:` or `C:\` targets, `<img src="/…">` — link parsed assets relatively (e.g. `images/fig1.png`). |
+| `absolute_asset_link` | an image pointing at an absolute local path: `![…](/Users/…/fig1.png)`, `file:` or `C:\` targets, `<img src="/…">`, or a reference definition of an image file (`[fig]: /Users/…/fig1.png`). Link parsed assets relatively (e.g. `images/fig1.png`). Plain links and protocol-relative `//host/…` URLs are not assets. |
 
 Enforcement:
 
 - `write_translation` / `write_section_translation` refuse such a body before
   touching anything (the previous translation stays registered); `annotate_section`
-  refuses such a summary or gloss.
+  refuses such a summary or gloss (every rule, absolute asset links included).
 - `complete_reading_batch` / `validate_reading_batch` block on a body written by path
-  convention, a stored annotation, or a required `.md`/`.markdown`/`.txt` artifact
-  that carries them (`translation_contaminated`, `annotation_contaminated`,
-  `artifact_contaminated`).
-- `bookgraph export translated-pdf` drops the operational lines (all codes except
-  `absolute_asset_link`, whose image may be real) from the page and reports each as
-  `translation_contaminated`, which `--strict` refuses.
+  convention or a stored annotation that carries them (`translation_contaminated`,
+  `annotation_contaminated`). A stored summary/gloss is one line, so it is scanned in
+  *collapsed* mode: the line-start rules (`MEDIA:`, `QA: passed`) also match
+  mid-text. Required `.md`/`.markdown`/`.txt` `artifacts` are checked only with
+  `clean_artifacts=true` (`artifact_contaminated`), since a run/QA log legitimately
+  carries such lines.
+- `bookgraph export translated-pdf` drops the operational lines (every code except
+  `absolute_asset_link`) from the page and reports each as `translation_contaminated`.
+  An absolute image link is still rendered — an in-workspace image embeds — but is
+  reported with the same code, so `--strict` refuses every artifact the batch
+  boundary would block.
 
 ## Translation bodies as read by `bookgraph export translated-pdf`
 

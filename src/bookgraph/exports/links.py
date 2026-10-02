@@ -4,7 +4,7 @@ Parsed text keeps link destinations as the source book wrote them — an EPUB co
 by MarkItDown links ``ch10.html#ch_consistency`` or ``#sec_introduction_distributed`` —
 and translations must keep them byte-for-byte (:mod:`bookgraph.translation_structure`).
 The export, though, is one document whose sections are anchored on BookGraph section
-ids, so those destinations lead nowhere in it. :func:`resolve_internal_links` rewrites
+ids, so those destinations lead nowhere in it. :func:`resolve_section_links` rewrites
 the ``<a href>`` of each rendered section body at export time; the parsed document and
 the translation artifacts are never touched.
 
@@ -16,12 +16,17 @@ the book's structure, in this order:
 2. its file names a section of the export (``ch10.html`` → the section titled
    *Chapter 10*; ``app01.html`` → *Appendix A*; ``part02.html`` → *Part II*;
    ``preface.html`` → *Preface*);
-3. its fragment's words name one section of that file's subtree (``sec_x_y`` → the one
-   section titled exactly *x y*, else the one whose title has the words *x* and *y*;
-   words of the chapter's own title may be left out, as in
-   ``ch10.html#sec_consistency_linearizability`` → *Linearizability*). A
-   fragment-only link (``#sec_x``) points into its own source file, so it is looked up
-   in the linking section's chapter first, then the book;
+3. its fragment's words name one section of that file (``sec_x_y`` → the one section
+   titled exactly *x y*, else the one whose title has the words *x* and *y*; words of
+   the chapter's own title may be left out, as in
+   ``ch10.html#sec_consistency_linearizability`` → *Linearizability*, and when
+   nothing matches the first word is retried without, as a per-chapter slug:
+   ``ch03.html#sec_datamodels_normalization`` → *Normalization, …*). A file holds the
+   subtree of its section, or — in a flat outline, where MarkItDown puts a chapter's
+   title and its sections at one level — the sections after it up to the next
+   *Chapter N* / *Appendix X* / *Part N*. A fragment-only link (``#sec_x``) points
+   into its own source file, so it is looked up in the linking section's file first,
+   then the book;
 4. a file that names a section but a fragment that does not (a figure, an example)
    → the file's section, the deterministic container of the target.
 
@@ -33,19 +38,22 @@ URLs (``https:``, ``mailto:``, …), absolute paths and links to non-HTML files
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from html import escape, unescape
 from pathlib import PurePosixPath
 from urllib.parse import unquote
 
+from bookgraph.exports.bilingual import bilingual_section
 from bookgraph.exports.html_attrs import HTML_ATTR_RE, HTML_START_TAG_RE
 from bookgraph.exports.models import (
     INTERNAL_LINK_UNRESOLVED,
+    ExportSection,
     ExportWarning,
     WarningColumn,
     WarningOrigin,
 )
 from bookgraph.exports.outline import OutlineNode, flatten
+from bookgraph.models import Section
 
 # File types of a source book's own documents (EPUB/HTML book chapters).
 _BOOK_DOCUMENT_SUFFIXES = frozenset({".html", ".htm", ".xhtml"})
@@ -63,6 +71,8 @@ _SECTION_PREFIXES = frozenset({"ch", "chapter", "sec", "section", "part", "app",
 _ELEMENT_PREFIXES = frozenset(
     {"fig", "figure", "tab", "table", "ex", "example", "eq", "equation", "fn", "footnote"}
 )
+# A title that opens a source file of its own: *Chapter 3*, *Appendix B*, *Part II*.
+_DIVISION_TITLE = re.compile(r"^(?:chapter|appendix|part)\s+[0-9a-z]+\b")
 _ROMAN = ((10, "x"), (9, "ix"), (5, "v"), (4, "iv"), (1, "i"))
 
 
@@ -90,11 +100,51 @@ class InternalLinks:
         return html, list(dict.fromkeys(missing))
 
 
-def unresolved_link_warning(
+def resolve_section_links(
+    outline: list[OutlineNode],
+    rendered: dict[str, tuple[ExportSection, str]],
+    originals: dict[str, tuple[str, int, int]],
+    original_source: Callable[[Section], str | None],
+    lang: str,
+) -> tuple[dict[str, tuple[ExportSection, str]], list[ExportWarning]]:
+    """Resolve every section's links, and pair it with its original in ``bilingual`` mode.
+
+    ``rendered`` is each section's report entry and mixed rendering; ``originals`` its
+    bilingual left column as ``(html, assets_embedded, assets_missing)`` (empty in
+    ``translated`` mode). Links resolve against the anchors the page keeps — the mixed
+    renderings' (the left column's ids are stripped). Each column is resolved on its
+    own, so an unresolved link names the file it was read from (``original_source``
+    for an original section) and the column it is in, once per section: a link in both
+    columns is reported for the mixed one. Returns the sections' final entries and
+    bodies, and the warnings in reading order.
+    """
+
+    links = InternalLinks(outline, [body for _, body in rendered.values()])
+    resolved: dict[str, tuple[ExportSection, str]] = {}
+    warnings: list[ExportWarning] = []
+    for node in flatten(outline):
+        section, (entry, body) = node.section, rendered[node.section.id]
+        body, missing = links.rewrite(body, section.id)
+        source = entry.artifact if entry.artifact is not None else original_source(section)
+        origin: WarningOrigin = "translation" if entry.artifact is not None else "source"
+        warnings.extend(_unresolved(section.id, href, source, "mixed", origin) for href in missing)
+        if section.id in originals:
+            html, embedded, assets_missing = originals[section.id]
+            html, original_missing = links.rewrite(html, section.id)
+            warnings.extend(
+                _unresolved(section.id, href, original_source(section), "original", "source")
+                for href in original_missing
+                if href not in missing
+            )
+            entry, body = bilingual_section(entry, body, (html, embedded, assets_missing), lang)
+        resolved[section.id] = (entry, body)
+    return resolved, warnings
+
+
+def _unresolved(
     section_id: str,
     href: str,
     source_path: str | None,
-    *,
     column: WarningColumn,
     origin: WarningOrigin,
 ) -> ExportWarning:
@@ -207,11 +257,49 @@ class _Resolver:
                 if named is not None:
                     return named.section.id
             return document.section.id
-        chapter = self._chapter.get(section_id)
-        named = self._fragment_node(fragment, chapter) if chapter is not None else None
+        home = self._home(section_id)
+        named = self._fragment_node(fragment, home) if home is not None else None
         if named is None:
             named = self._fragment_node(fragment, None)
         return named.section.id if named is not None else None
+
+    def _home(self, section_id: str) -> OutlineNode | None:
+        """The source file a section was read from, as the node that opens its span.
+
+        Its chapter, when the chapter has sections nested in it. In a flat outline
+        (MarkItDown puts a chapter title and its sections at one level) it is the
+        nearest *Chapter N* / *Appendix X* / *Part N* at or before the section.
+        """
+
+        chapter = self._chapter.get(section_id)
+        if chapter is None or chapter.children:
+            return chapter
+        for node in reversed(self._nodes[: self._order[section_id] + 1]):
+            if _DIVISION_TITLE.match(node.section.title.strip().lower()):
+                return node if section_id in {n.section.id for n in self._span(node)} else chapter
+        return chapter
+
+    def _span(self, head: OutlineNode) -> list[OutlineNode]:
+        """The sections a source file holds, from the node it maps to.
+
+        Its subtree when it has children; in a flat outline, the nodes after it in
+        reading order up to the next *Chapter N* / *Appendix X* / *Part N*, a shallower
+        node, or a same-depth node with sections of its own.
+        """
+
+        if head.children:
+            return list(head.walk())
+        start = self._order[head.section.id]
+        span = [head]
+        for node in self._nodes[start + 1 :]:
+            if (
+                node.depth < head.depth
+                or (node.depth == head.depth and node.children)
+                or _DIVISION_TITLE.match(node.section.title.strip().lower())
+            ):
+                break
+            span.append(node)
+        return span
 
     def _document_node(self, stem: str) -> OutlineNode | None:
         """The section a source file's name stands for (``ch10`` → *Chapter 10*)."""
@@ -235,27 +323,42 @@ class _Resolver:
             node for node in self._nodes if title.match(node.section.title.strip().lower())
         )
 
-    def _fragment_node(self, fragment: str, scope: OutlineNode | None) -> OutlineNode | None:
-        """The one section of ``scope`` (``None``: the book) a fragment's words name."""
+    def _fragment_node(self, fragment: str, head: OutlineNode | None) -> OutlineNode | None:
+        """The one section of ``head``'s span (``None``: the book) a fragment names."""
 
         words = _words(fragment)
         if words and words[0] in _ELEMENT_PREFIXES:
             return None
         if words and words[0] in _SECTION_PREFIXES:
             words = words[1:]
-        nodes = list(scope.walk()) if scope is not None else self._nodes
+        nodes = self._span(head) if head is not None else self._nodes
         topic: set[str] = set()
-        if scope is not None:
+        if head is not None:
             # A fragment may repeat its chapter's topic (``sec_consistency_x`` in
             # *Consistency and Consensus*); those words alone name the chapter.
-            topic = set(_words(self._chapter[scope.section.id].section.title))
+            topic = set(_words(self._chapter[head.section.id].section.title))
+            topic |= set(_words(head.section.title))
             words = [word for word in words if word not in topic]
             if not words:
-                return scope
+                return head
+        named = self._titled(words, nodes, topic)
+        if named is None and len(words) > 1:
+            # Books prefix ids with a per-chapter slug that is no title word
+            # (``sec_datamodels_normalization``): retry once without it.
+            named = self._titled(words[1:], nodes, topic)
+        return named
+
+    def _titled(
+        self, words: list[str], nodes: list[OutlineNode], topic: set[str]
+    ) -> OutlineNode | None:
+        """The one node whose title has exactly ``words``, else the one containing them.
+
+        A title with exactly the words (``sec_indexes`` → *Indexes*) wins over titles
+        that only contain them (*Transactions and Indexes*), at any depth.
+        """
+
         if not words:
             return None
-        # A title with exactly the fragment's words (``sec_indexes`` → *Indexes*) wins
-        # over titles that only contain them (*Transactions and Indexes*), at any depth.
         wanted = set(words)
         titles = [(node, set(_words(node.section.title)) - topic) for node in nodes]
         exact = [node for node, title in titles if title == wanted]

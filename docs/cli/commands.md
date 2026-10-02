@@ -1129,11 +1129,16 @@ export rewrites each internal-book `<a href>` (a `#fragment`, or a link to a sou
    `part02.html` → *Part II*; any other file → the section with the same title
    words (`preface.html` → *Preface*);
 3. the fragment's words, minus a `sec_`/`ch_`/… prefix and the words of the
-   chapter's own title, name one section of that file's subtree
+   chapter's own title, name one section of that file
    (`ch10.html#sec_consistency_linearizability` → *Linearizability*). A title with
    exactly those words wins over titles that only contain them, at any depth
-   (`#sec_indexes` → *Indexes*, not *Transactions and Indexes*). A
-   fragment-only link is looked up in the linking section's chapter, then the book;
+   (`#sec_indexes` → *Indexes*, not *Transactions and Indexes*). When nothing
+   matches, the first word is retried without, as a per-chapter id slug
+   (`ch03.html#sec_datamodels_normalization` → *Normalization, Denormalization, and
+   Joins*). A file holds its section's subtree or, in a flat outline (MarkItDown puts
+   a chapter title and its sections at one level), the sections after it up to the
+   next *Chapter N* / *Appendix X* / *Part N*. A fragment-only link is looked up in
+   the linking section's file, then the book;
 4. otherwise a link whose file named a section goes to that section (figure and
    example fragments such as `ch10.html#fig_x` always do; a fragment-only link has no
    file to fall back to).

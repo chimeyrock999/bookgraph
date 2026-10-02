@@ -296,3 +296,32 @@ def test_bilingual_link_only_in_the_original_column_names_the_parsed_source(
         "mixed",
         "translation",
     )
+
+
+def test_flat_outline_scopes_a_file_to_its_reading_span_and_skips_chapter_slugs() -> None:
+    # MarkItDown puts a chapter title and its sections at one level, so every section
+    # is a root of its own; ids carry a per-chapter slug that is no title word.
+    outline = [
+        _node("c1", "Chapter 1. Trade-Offs in Data Systems Architecture"),
+        _node("dv", "Distributed Versus Single-Node Systems"),
+        _node("c3", "Chapter 3. Data Models and Query Languages"),
+        _node("nd", "Normalization, Denormalization, and Joins"),
+        _node("c10", "Chapter 10. Consistency and Consensus"),
+        _node("li", "Linearizability"),
+    ]
+    links = InternalLinks(outline, [])
+
+    def target(href: str, section_id: str) -> str:
+        html, missing = links.rewrite(f'<a href="{href}">x</a>', section_id)
+        return missing[0] if missing else html.split('"')[1]
+
+    assert target("ch10.html#sec_consistency_linearizability", "c1") == "#li"
+    assert target("ch03.html#sec_datamodels_normalization", "c1") == "#nd"
+    # Fragment-only: the linking section's file is the span of the chapter before it.
+    assert target("#sec_introduction_distributed", "c1") == "#dv"
+    assert target("#sec_introduction_distributed", "dv") == "#dv"
+    # A file's span stops at the next chapter: chapter 3's section is not in ch10.html.
+    assert target("ch10.html#sec_consistency_normalization", "c1") == "#c10"
+    # From chapter 10, a fragment naming a chapter 3 section is found book-wide.
+    assert target("#sec_datamodels_normalization", "li") == "#nd"
+    assert target("#sec_nothing_here", "li") == "#sec_nothing_here"

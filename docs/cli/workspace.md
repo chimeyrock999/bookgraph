@@ -39,6 +39,7 @@ workspace/
     daily/
   indexes/
   annotations/
+  concepts/
   translations/
   reading_plans/
   runs/
@@ -58,6 +59,7 @@ workspace/
 | `wiki/daily/` | daily agent/wiki backend | Daily reading notes and summaries. |
 | `indexes/` | index/search/graph stage | Deterministic indexes, graph DB files, search indexes. |
 | `annotations/<doc_id>/` | reading agent (MCP `annotate_section`) | Tier-2 per-section agent annotations (concepts + summary); a source of truth read by `index build`. See `annotations.md`. |
+| `concepts/registry.json` | `bookgraph concepts` CLI (human review) | Curated concept registry: canonical concepts, aliases, ignored slugs, distinct pairs; a source of truth applied by `index build`. Created on first write. See `concepts.md`. |
 | `translations/<lang>/<doc_id>/` | reading agent (MCP `write_section_translation`) | Cached per-section translations (`<section_id>.md`) plus registry sidecars (`<section_id>.json`) recording the source section hash and whether assets were included. See `artifacts.md`. |
 | `reading_plans/` | reading plan stage | Progress state for daily reading. |
 | `runs/` | orchestration | Run logs and reproducibility metadata. |

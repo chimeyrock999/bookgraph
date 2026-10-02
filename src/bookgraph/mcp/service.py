@@ -23,9 +23,19 @@ from bookgraph.annotations import (
     write_annotation,
 )
 from bookgraph.assets import asset_reference, resolve_asset_path
+from bookgraph.concept_hygiene import (
+    DEFAULT_MERGE_THRESHOLD,
+    LintFinding,
+    MergeSuggestion,
+    ReviewItem,
+    lint_concepts,
+    review_queue,
+    suggest_merges,
+)
+from bookgraph.concept_registry import ConceptRegistry, read_registry
 from bookgraph.documents import read_document
 from bookgraph.graph import SectionGraph, SectionNode, build_section_graph, chapter_span
-from bookgraph.index import default_index_backend, tokenize
+from bookgraph.index import ConceptMention, default_index_backend, tokenize
 from bookgraph.models import (
     ASSET_BLOCK_TYPES,
     AnnotatedConcept,
@@ -349,6 +359,7 @@ class ConceptMentionView(BaseModel):
     gloss: str = ""
     source: str = "auto"
     summary: str = ""
+    raw_slug: str = ""
 
 
 class ConceptInput(BaseModel):
@@ -385,6 +396,12 @@ class ConceptView(BaseModel):
     summary — meaningful in **both** modes (the compact card leaves the summaries empty
     but still counts them), so a cheap card read tells an agent whether a concept has
     deeper context worth an ``include_annotations=True`` call.
+
+    ``slug`` / ``title`` are the **canonical** concept. ``aliases`` lists the slugs that
+    resolve to it — the registry's deprecated aliases plus any alias slug observed on a
+    mention (``ConceptMentionView.raw_slug``). ``canonical`` is true when a reviewer
+    marked the concept canonical in ``concepts/registry.json``; ``resolved_from`` is the
+    requested slug when it was an alias that resolved here (``None`` otherwise).
     """
 
     slug: str
@@ -392,7 +409,25 @@ class ConceptView(BaseModel):
     doc_count: int
     mention_count: int
     annotated_mention_count: int = 0
+    aliases: list[str] = Field(default_factory=list)
+    canonical: bool = False
+    resolved_from: str | None = None
     mentions: list[ConceptMentionView] = Field(default_factory=list)
+
+
+class ConceptHygieneReport(BaseModel):
+    """Concept-maintenance signals over the built graph (see ``concept_hygiene``).
+
+    ``merge_suggestions`` are likely duplicates (best first), ``lint`` flags concepts
+    that probably should not be durable, and ``review_queue`` lists agent-created
+    concepts no reviewer has accepted, aliased, or ignored yet. Act on them with the
+    ``bookgraph concepts`` CLI, then re-run ``bookgraph index build``.
+    """
+
+    concept_count: int
+    merge_suggestions: list[MergeSuggestion] = Field(default_factory=list)
+    lint: list[LintFinding] = Field(default_factory=list)
+    review_queue: list[ReviewItem] = Field(default_factory=list)
 
 
 def _section_markdown_path(workspace: WorkspacePaths, doc_id: str, section_id: str) -> Path:
@@ -1181,13 +1216,43 @@ def get_concept(
     the section it came from, so the long-form context remains provenance-aware.
     """
 
-    slug = _validate_id(concept, "concept")
-    result = default_index_backend().get_concept(workspace, slug)
-    if result is None:
+    requested = _validate_id(concept, "concept")
+    registry = _load_registry(workspace)
+    slug = registry.resolve(requested)
+    record = registry.record(slug)
+    backend = default_index_backend()
+    result = backend.get_concept(workspace, slug)
+
+    # Fold in mentions still indexed under an alias slug. After a full rebuild there
+    # are none (build rewrites them to the canonical); in the window between a registry
+    # edit and the rebuild this keeps the canonical view complete — including when the
+    # canonical itself has no rows yet.
+    raw_mentions: list[ConceptMention] = list(result.mentions) if result is not None else []
+    seen = {(m.doc_id, m.section_id) for m in raw_mentions}
+    fallback_title: str | None = None
+    for alias in record.aliases if record is not None else []:
+        stale = backend.get_concept(workspace, alias)
+        if stale is None:
+            continue
+        fallback_title = fallback_title or stale.node.title
+        for mention in stale.mentions:
+            if (mention.doc_id, mention.section_id) not in seen:
+                seen.add((mention.doc_id, mention.section_id))
+                raw_mentions.append(mention.model_copy(update={"raw_slug": alias}))
+    if result is None and not raw_mentions:
         raise ConceptNotFoundError(
             f"Concept '{slug}' not found. Run 'bookgraph index build' then "
             "'bookgraph index concepts'."
         )
+    # Stable sort: group by document, keeping each source's reading order.
+    raw_mentions.sort(key=lambda m: m.doc_id)
+
+    if record is not None:
+        title = record.title
+    elif result is not None:
+        title = result.node.title
+    else:  # unreachable: aliases imply a record
+        title = fallback_title or slug
     mentions = [
         ConceptMentionView(
             doc_id=mention.doc_id,
@@ -1198,20 +1263,62 @@ def get_concept(
             # The compact card omits the summary to stay lightweight; the detail view
             # surfaces it so the mention reads as long-form, source-grounded context.
             summary=mention.summary if include_annotations else "",
+            raw_slug=mention.raw_slug,
         )
-        for mention in result.mentions
+        for mention in raw_mentions
     ]
+    aliases = list(record.aliases) if record is not None else []
+    for mention in raw_mentions:
+        if mention.raw_slug and mention.raw_slug not in aliases:
+            aliases.append(mention.raw_slug)
     return ConceptView(
-        slug=result.node.slug,
-        title=result.node.title,
-        doc_count=result.node.doc_count,
-        mention_count=result.node.mention_count,
+        slug=slug,
+        title=title,
+        doc_count=len({m.doc_id for m in raw_mentions}),
+        mention_count=len(raw_mentions),
         # Count from the raw backend mentions, not the (possibly redacted) view list:
         # the backend returns summaries regardless of the flag, so the compact card can
         # still signal "this concept carries N annotated sections" — a cheap cue for an
         # agent deciding whether an include_annotations=True call is worth it.
-        annotated_mention_count=sum(1 for m in result.mentions if m.summary),
+        annotated_mention_count=sum(1 for m in raw_mentions if m.summary),
+        aliases=aliases,
+        canonical=record is not None,
+        resolved_from=requested if requested != slug else None,
         mentions=mentions,
+    )
+
+
+def _load_registry(workspace: WorkspacePaths) -> ConceptRegistry:
+    try:
+        return read_registry(workspace.concept_registry)
+    except ValueError as exc:
+        raise ReadingServiceError(str(exc)) from exc
+
+
+def concept_hygiene(
+    workspace: WorkspacePaths,
+    limit: int = 20,
+    threshold: float = DEFAULT_MERGE_THRESHOLD,
+) -> ConceptHygieneReport:
+    """Merge suggestions, lint findings, and the agent-concept review queue.
+
+    Read-only: it reports over the built index and the concept registry. ``limit``
+    caps each list (``merge_suggestions``, ``lint``, ``review_queue``) independently;
+    ``threshold`` is the minimum merge-suggestion score (0–1).
+    """
+
+    if limit < 1:
+        raise ReadingServiceError("limit must be at least 1")
+    if not 0 <= threshold <= 1:
+        raise ReadingServiceError("threshold must be between 0 and 1")
+    registry = _load_registry(workspace)
+    concepts = default_index_backend().concepts(workspace)
+    nodes = [concept.node for concept in concepts]
+    return ConceptHygieneReport(
+        concept_count=len(concepts),
+        merge_suggestions=suggest_merges(nodes, registry, threshold=threshold, limit=limit),
+        lint=lint_concepts(concepts, registry)[:limit],
+        review_queue=review_queue(concepts, registry)[:limit],
     )
 
 

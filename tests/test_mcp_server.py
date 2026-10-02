@@ -50,6 +50,7 @@ def test_build_server_registers_the_reading_and_query_tools(tmp_path: Path) -> N
     assert sorted(tool.name for tool in tools) == [
         "annotate_section",
         "complete_reading_batch",
+        "concept_hygiene",
         "create_plan",
         "get_chapter_outline",
         "get_concept",

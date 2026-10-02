@@ -1052,12 +1052,15 @@ bookgraph export translated-pdf /path/to/workspace ddia --check           # cove
 ### Inputs
 
 - `workspace_path`, `doc_id`: workspace root and a segmented document id (slug-validated).
-- `--lang` (default `vi`): translation language code (slug-validated).
+- `--lang` (default `vi`): translation language code, normalised like the registry
+  (lowercased, so `VI` and `pt-BR` work).
 - `--fallback original|skip|fail` (default `original`). This controls what happens to
   a section that has no translation:
   - `original` renders the original section, labelled *Untranslated — original text*;
   - `skip` renders the title with a *Not translated yet* placeholder;
-  - `fail` exits `1` and lists every untranslated section. Nothing is written.
+  - `fail` exits `1` and lists every untranslated section. Nothing is written. A
+    `stale` or `untracked` translation counts as translated (use `--strict` to refuse
+    stale ones).
 - `--out`: output file. A relative path is resolved under the workspace. The default
   is `exports/<doc_id>.<lang>-progress.pdf`, or `.html` with `--renderer html`.
 - `--renderer auto|weasyprint|playwright|html` (default `auto`). `auto` writes HTML
@@ -1065,7 +1068,9 @@ bookgraph export translated-pdf /path/to/workspace ddia --check           # cove
   backend, trying `weasyprint` first and then `playwright`. Naming a backend that is
   not installed is an error.
 - `--strict`: exit `1` without writing anything if any asset is missing, remote, or
-  unsupported.
+  unsupported, a translation is `stale` (`translation_stale`), or a registered
+  translation left out its section's figures/tables (`translation_missing_assets`).
+  An `untracked` translation only warns.
 - `--check`: preflight only. Prints coverage and warnings and writes nothing. With
   `--strict`, it exits `1` whenever the real export would be refused.
 - The `--out` suffix must match the renderer: `.pdf` for `weasyprint`/`playwright`,
@@ -1079,11 +1084,11 @@ bookgraph export translated-pdf /path/to/workspace ddia --check           # cove
   rebuilt from their `block_ids`, so figures, tables and equations stay next to the
   prose around them in the source. Without it, original sections render
   `Section.text` as Markdown.
-- Translation bodies. The first file found wins:
-  1. `translations/<lang>/<doc_id>/<section_id>.md`, the registry-owned body written
-     by `write_section_translation`. The `.json` sidecar is ignored.
-  2. `translation_cache/<doc_id>/<section_id>.<lang>.md`, an export-only legacy
-     fallback (see `artifacts.md`).
+- Translations, through the translation registry (`bookgraph.translations`) only:
+  `translations/<lang>/<doc_id>/<section_id>.md` plus its `.json` sidecar, which
+  decides the section's `fresh` / `stale` / `untracked` status (the sidecar is never
+  rendered). Stale and untracked translations render with a visible note and a
+  warning; see `artifacts.md`. `translation_cache/` is not read.
 
 ### Asset handling
 
@@ -1127,7 +1132,8 @@ All images are embedded as `data:` URIs, so the output is self-contained.
 - Unknown `--fallback` / `--renderer`, an invalid `--lang`, or an `--out` suffix that
   does not match the renderer → exit 2.
 - `--fallback fail` with untranslated sections (including empty or unreadable
-  artifacts), `--strict` with asset problems (also under `--check`), or a
+  artifacts; stale and untracked translations count as translated), `--strict` with
+  asset problems or stale / prose-only translations (also under `--check`), or a
   missing or failing renderer → exit 1, with nothing written.
 
 ### PDF backends (optional extras)

@@ -12,6 +12,11 @@ from bookgraph.exports.models import (
     ASSET_REMOTE,
     ASSET_UNSUPPORTED,
     TRANSLATION_EMPTY,
+    TRANSLATION_MISSING_ASSETS,
+    TRANSLATION_STALE,
+    TRANSLATION_UNREADABLE,
+    TRANSLATION_UNTRACKED,
+    ExportReport,
 )
 from bookgraph.exports.renderers import (
     ExportRenderer,
@@ -25,15 +30,15 @@ from bookgraph.exports.translated import (
     ExportError,
     UntranslatedSectionsError,
     build_translated_export,
-    find_translation_artifact,
     report_path_for,
     split_frontmatter,
     write_translated_export,
 )
 from bookgraph.models import CanonicalBlock, Document, Section
 from bookgraph.plugins import PluginRegistry
-from bookgraph.sections import write_sections
+from bookgraph.sections import read_sections, write_sections
 from bookgraph.segmenters.heading import HeadingSegmenter
+from bookgraph.translations import write_translation
 from bookgraph.workspace import WorkspacePaths
 
 # 1x1 transparent PNG.
@@ -90,14 +95,40 @@ def _section_ids(paths: WorkspacePaths) -> list[str]:
     return [json.loads(line)["id"] for line in manifest.read_text().splitlines()]
 
 
-def _translate(paths: WorkspacePaths, section_id: str, body: str, *, cache: bool = False) -> Path:
-    if cache:
-        path = paths.translation_cache_root / DOC / f"{section_id}.vi.md"
-    else:
-        path = paths.translations_root / "vi" / DOC / f"{section_id}.md"
+def _translate(paths: WorkspacePaths, section_id: str, body: str) -> Path:
+    """Drop a body at the registry path with no sidecar: an ``untracked`` translation."""
+
+    path = paths.translations_root / "vi" / DOC / f"{section_id}.md"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(body, encoding="utf-8")
     return path
+
+
+def _sections(paths: WorkspacePaths) -> list[Section]:
+    return read_sections(paths.sources_sections / DOC / "sections.jsonl")
+
+
+def _register(
+    paths: WorkspacePaths, section_id: str, body: str, *, includes_assets: bool = True
+) -> None:
+    """Write a translation through the registry: ``fresh`` against the current section."""
+
+    section = next(s for s in _sections(paths) if s.id == section_id)
+    write_translation(paths, section, "vi", body, includes_assets=includes_assets)
+
+
+def _change_section_text(paths: WorkspacePaths, section_id: str) -> None:
+    """Simulate a re-segment that changed the section's words, making it stale."""
+
+    sections = [
+        s.model_copy(update={"text": s.text + " Revised."}) if s.id == section_id else s
+        for s in _sections(paths)
+    ]
+    write_sections(sections, paths.sources_sections / DOC)
+
+
+def _codes(report: ExportReport, section_id: str) -> list[str]:
+    return [w.code for w in report.warnings if w.section_id == section_id]
 
 
 def test_mixed_sections_render_translation_or_original_in_reading_order(
@@ -110,7 +141,7 @@ def test_mixed_sections_render_translation_or_original_in_reading_order(
         '---\ntitle: "Chương Một"\n---\n# Chương Một\n\nPhần mở đầu tiếng Việt.\n\n'
         "![Hình 1](images/fig1.png)\n",
     )
-    _translate(workspace, third, "# Phần Ba\n\nVăn bản tiếng Việt.\n", cache=True)
+    _register(workspace, third, "# Phần Ba\n\nVăn bản tiếng Việt.\n")
 
     export = build_translated_export(workspace, DOC, lang="vi", generated_at=GENERATED_AT)
     report = export.report
@@ -121,7 +152,8 @@ def test_mixed_sections_render_translation_or_original_in_reading_order(
     assert report.coverage == pytest.approx(0.6667)
     assert report.untranslated == [second]
     assert report.sections[0].title == "Chương Một"
-    assert report.sections[2].artifact == f"translation_cache/{DOC}/{third}.vi.md"
+    assert report.sections[2].artifact == f"translations/vi/{DOC}/{third}.md"
+    assert [entry.freshness for entry in report.sections] == ["untracked", None, "fresh"]
 
     html = export.html
     assert "Phần mở đầu tiếng Việt." in html
@@ -172,7 +204,7 @@ def test_translated_headings_are_relevelled_to_the_section_level(
 
 def test_translation_without_heading_gets_the_original_title(workspace: WorkspacePaths) -> None:
     _, second, _ = _section_ids(workspace)
-    _translate(workspace, second, '---\ntitle: "Phần Hai"\n---\nChỉ có nội dung.\n')
+    _register(workspace, second, '---\ntitle: "Phần Hai"\n---\nChỉ có nội dung.\n')
 
     export = build_translated_export(workspace, DOC, lang="vi", generated_at=GENERATED_AT)
 
@@ -180,14 +212,18 @@ def test_translation_without_heading_gets_the_original_title(workspace: Workspac
     assert export.report.sections[1].title == "Phần Hai"
 
 
-def test_curated_translation_wins_over_cache(workspace: WorkspacePaths) -> None:
+def test_legacy_translation_cache_is_not_read(workspace: WorkspacePaths) -> None:
+    # ``translation_cache/`` is not part of the registry: the export reads translations
+    # only through ``bookgraph.translations``.
     chapter, _, _ = _section_ids(workspace)
-    curated = _translate(workspace, chapter, "# Curated\n")
-    _translate(workspace, chapter, "# Cached\n", cache=True)
+    legacy = workspace.root / "translation_cache" / DOC / f"{chapter}.vi.md"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text("# Cached\n\nBản cũ.\n", encoding="utf-8")
 
-    assert find_translation_artifact(workspace, DOC, chapter, "vi") == curated
-    html = build_translated_export(workspace, DOC, lang="vi", generated_at=GENERATED_AT).html
-    assert "Curated" in html and "Cached" not in html
+    export = build_translated_export(workspace, DOC, lang="vi", generated_at=GENERATED_AT)
+
+    assert export.report.sections[0].source == "original"
+    assert "Bản cũ." not in export.html
 
 
 def test_broken_remote_and_escaping_image_links_are_reported_not_embedded(
@@ -491,7 +527,7 @@ def test_output_suffix_must_match_renderer() -> None:
 def test_raw_html_img_scanning_is_attribute_aware(workspace: WorkspacePaths) -> None:
     chapter, _, _ = _section_ids(workspace)
     svg = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg"/>'
-    _translate(
+    _register(
         workspace,
         chapter,
         "# Chương\n\n"
@@ -533,10 +569,20 @@ def test_toc_title_drops_heading_markdown(workspace: WorkspacePaths) -> None:
     assert '<a href="#tiny.chapter-one">Giới thiệu code liên kết</a>' in export.html
 
 
-@pytest.mark.parametrize(("doc_id", "lang"), [(DOC, "VI"), (DOC, "../vi"), ("../x", "vi")])
+@pytest.mark.parametrize(("doc_id", "lang"), [(DOC, "../vi"), ("../x", "vi"), ("X", "vi")])
 def test_api_rejects_non_slug_ids(workspace: WorkspacePaths, doc_id: str, lang: str) -> None:
     with pytest.raises(ExportError, match="must be a lowercase hyphenated slug"):
         build_translated_export(workspace, doc_id, lang=lang)
+
+
+def test_lang_is_normalised_like_the_registry(workspace: WorkspacePaths) -> None:
+    chapter, _, _ = _section_ids(workspace)
+    _register(workspace, chapter, "# Chương Một\n")
+
+    export = build_translated_export(workspace, DOC, lang=" VI ", generated_at=GENERATED_AT)
+
+    assert export.report.lang == "vi"
+    assert export.report.sections[0].source == "translated"
 
 
 def test_reads_translations_written_through_the_registry(workspace: WorkspacePaths) -> None:
@@ -551,3 +597,106 @@ def test_reads_translations_written_through_the_registry(workspace: WorkspacePat
     assert export.report.sections[0].artifact == f"translations/vi/{DOC}/{chapter}.md"
     assert "Từ registry." in export.html
     assert '"source_section_hash"' not in export.html  # the .json sidecar is not content
+
+
+def test_fresh_registry_translation_has_no_freshness_warning(workspace: WorkspacePaths) -> None:
+    chapter, _, _ = _section_ids(workspace)
+    _register(workspace, chapter, "# Chương Một\n\nMới.\n")
+
+    export = build_translated_export(workspace, DOC, lang="vi", generated_at=GENERATED_AT)
+
+    assert export.report.sections[0].freshness == "fresh"
+    assert _codes(export.report, chapter) == []
+    assert "may be outdated" not in export.html
+
+
+def test_stale_translation_renders_flagged_and_counts_as_translated(
+    workspace: WorkspacePaths, tmp_path: Path
+) -> None:
+    chapter, second, third = _section_ids(workspace)
+    _register(workspace, chapter, "# Chương Một\n\nBản dịch cũ.\n")
+    _register(workspace, second, "# Phần Hai\n")
+    _register(workspace, third, "# Phần Ba\n")
+    _change_section_text(workspace, chapter)
+
+    # ``--fallback fail`` still accepts it: a stale translation is rendered.
+    export = build_translated_export(
+        workspace, DOC, lang="vi", fallback="fail", generated_at=GENERATED_AT
+    )
+    entry = export.report.sections[0]
+
+    assert entry.source == "translated"
+    assert entry.freshness == "stale"
+    assert export.report.translated_sections == 3
+    assert _codes(export.report, chapter) == [TRANSLATION_STALE]
+    assert "Bản dịch cũ." in export.html
+    # The note sits right under the section heading, and the TOC flags it too.
+    assert '<h1>Chương Một</h1>\n<p class="source-note">Translation may be outdated' in export.html
+    assert 'Chương Một</a> <span class="status">(may be outdated)</span>' in export.html
+
+    # ``--strict`` refuses to present it as current.
+    with pytest.raises(ExportError, match="strict mode"):
+        write_translated_export(export, tmp_path / "out.html", HtmlRenderer(), strict=True)
+    assert not (tmp_path / "out.html").exists()
+
+
+@pytest.mark.parametrize("edited_after_registration", [False, True])
+def test_untracked_translation_renders_with_a_warning(
+    workspace: WorkspacePaths, tmp_path: Path, edited_after_registration: bool
+) -> None:
+    chapter, _, _ = _section_ids(workspace)
+    if edited_after_registration:
+        _register(workspace, chapter, "# Chương Một\n\nBản gốc.\n")
+    _translate(workspace, chapter, "# Chương Một\n\nSửa tay.\n")
+
+    export = build_translated_export(
+        workspace, DOC, lang="vi", fallback="skip", generated_at=GENERATED_AT
+    )
+
+    assert export.report.sections[0].source == "translated"
+    assert export.report.sections[0].freshness == "untracked"
+    assert _codes(export.report, chapter) == [TRANSLATION_UNTRACKED]
+    assert "Sửa tay." in export.html
+    assert "Translation not tracked by the registry" in export.html
+    # Freshness unknown is not known-bad: ``--strict`` still writes the export.
+    report = write_translated_export(export, tmp_path / "out.html", HtmlRenderer(), strict=True)
+    assert report.sections[0].freshness == "untracked"
+
+
+def test_prose_only_translation_of_section_with_assets_is_flagged(
+    workspace: WorkspacePaths, tmp_path: Path
+) -> None:
+    chapter, _, third = _section_ids(workspace)  # chapter has a figure, third has none
+    _register(workspace, chapter, "# Chương Một\n\nChỉ có chữ.\n", includes_assets=False)
+    _register(workspace, third, "# Phần Ba\n", includes_assets=False)
+
+    export = build_translated_export(
+        workspace, DOC, lang="vi", fallback="skip", generated_at=GENERATED_AT
+    )
+
+    assert export.report.sections[0].freshness == "fresh"
+    assert _codes(export.report, chapter) == [TRANSLATION_MISSING_ASSETS]
+    assert _codes(export.report, third) == []
+    with pytest.raises(ExportError, match="strict mode"):
+        write_translated_export(export, tmp_path / "out.html", HtmlRenderer(), strict=True)
+
+
+def test_translation_with_assets_is_not_flagged(workspace: WorkspacePaths) -> None:
+    chapter, _, _ = _section_ids(workspace)
+    _register(workspace, chapter, "# Chương Một\n\n![Hình 1](images/fig1.png)\n")
+
+    export = build_translated_export(workspace, DOC, lang="vi", generated_at=GENERATED_AT)
+
+    assert _codes(export.report, chapter) == []
+
+
+def test_non_utf8_translation_is_unreadable_and_falls_back(workspace: WorkspacePaths) -> None:
+    chapter, _, _ = _section_ids(workspace)
+    path = _translate(workspace, chapter, "")
+    path.write_bytes(b"# Ch\xff\xfe\n")
+
+    export = build_translated_export(workspace, DOC, lang="vi", generated_at=GENERATED_AT)
+
+    assert export.report.sections[0].source == "original"
+    assert export.report.sections[0].freshness is None
+    assert _codes(export.report, chapter) == [TRANSLATION_UNREADABLE]

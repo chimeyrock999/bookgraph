@@ -14,7 +14,6 @@ from bookgraph.exports.translated import (
     TranslatedExport,
     UntranslatedSectionsError,
     build_translated_export,
-    find_translation_artifact,
     write_translated_export,
 )
 
@@ -29,7 +28,6 @@ __all__ = [
     "UntranslatedSectionsError",
     "build_translated_export",
     "default_renderer_registry",
-    "find_translation_artifact",
     "select_renderer",
     "write_translated_export",
 ]

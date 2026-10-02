@@ -489,7 +489,9 @@ def _translation_issues(workspace: WorkspacePaths, lang: str, section: Section) 
                     f"Translation '{relative}' changed structural Markdown "
                     f"({describe_structure_issues(structure)}); translate prose and link "
                     "labels only, keep every link destination, path, anchor, and heading "
-                    "id byte-for-byte, and rewrite it with write_section_translation."
+                    "id byte-for-byte, link carried figures/tables by their AssetRef.link "
+                    "(relative, never the absolute path), and rewrite it with "
+                    "write_section_translation."
                 ),
             )
         )

@@ -68,8 +68,9 @@ _HTML_ATTR_KINDS: dict[str, StructuralTargetKind] = {
 _HEADING_ID_RE = re.compile(r"\{\s*#(?P<id>[^\s{}]+)[^{}]*\}\s*$")
 _REMOTE_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
 _DATA_IMAGE_RE = re.compile(r"^data:image/", re.IGNORECASE)
-# An absolute local path, as the artifact hygiene rules define it (``/x``, ``~/x``,
-# ``file:``, ``C:\x``): an absolute asset link is contamination, never a fix.
+# An absolute local path (``/x``, ``~/x``, ``file:``, ``C:\x``). The reading-agent
+# contract links each figure/table by its relative ``AssetRef.link``, never by its
+# absolute path, so an absolute image link is never a carried figure or a fix.
 _ABSOLUTE_RE = re.compile(r"^(?:/(?!/)|~/|file:|[A-Za-z]:[\\/])")
 _BACKTICK_RUN_RE = re.compile(r"`+")
 _TARGET_DISPLAY_LIMIT = 80
@@ -92,26 +93,37 @@ def section_source_markdown(
     """The Markdown a translator works from: the section's title heading and its text.
 
     With the parsed document's ``blocks``, the text is rebuilt from the section's blocks
-    the way the segmenter joins them (title blocks are not part of the text), but code
-    blocks (``metadata.code``) and equations are fenced: parsers store them as plain
-    text with the fences removed, and parsing ``handlers[0](event)`` or
-    ``<div id="app">`` sample code as Markdown would invent links and anchors. Without
-    blocks (a sections-only workspace) ``Section.text`` is used as is.
+    with code blocks (``metadata.code``) and equations fenced: parsers store them as
+    plain text with the fences removed, and parsing ``handlers[0](event)`` or
+    ``<div id="app">`` sample code as Markdown would invent links and anchors. The
+    rebuild is used only when, fences aside, it reproduces ``Section.text`` exactly —
+    joined with or without title blocks, since segmenters differ on that (the heading
+    and bookmark segmenters drop them, the token/page one keeps them). Otherwise (no
+    blocks, missing block ids, a segmenter that joins differently) ``Section.text`` is
+    used as is.
     """
 
     owned = [blocks[b] for b in section.block_ids if b in blocks] if blocks else []
-    if not owned:
-        return f"# {section.title}\n\n{section.text}"
-    parts = [f"# {section.title}"]
-    for block in owned:
-        text = block.text.strip()
-        if block.type == "title" or not text:
+    rebuilt = _rebuilt_text(section, owned) if owned else None
+    return f"# {section.title}\n\n{section.text if rebuilt is None else rebuilt}"
+
+
+def _rebuilt_text(section: Section, owned: list[CanonicalBlock]) -> str | None:
+    for keep_titles in (False, True):
+        kept = [
+            block
+            for block in owned
+            if block.text.strip() and (keep_titles or block.type != "title")
+        ]
+        if "\n\n".join(block.text.strip() for block in kept) != section.text:
             continue
-        if block.metadata.get("code") or block.type == "equation":
-            parts.append(_fenced(text))
-        else:
-            parts.append(text)
-    return "\n\n".join(parts)
+        return "\n\n".join(
+            _fenced(block.text.strip())
+            if block.metadata.get("code") or block.type == "equation"
+            else block.text.strip()
+            for block in kept
+        )
+    return None
 
 
 def _fenced(code: str) -> str:
@@ -215,8 +227,9 @@ def check_translation_structure(
     whether a local image path points at a real file; with it, added images that
     resolve are allowed, and a source image path that does not resolve may be replaced
     by one that does — normalising a known broken asset path is the one permitted
-    rewrite. An added target that appears verbatim in the source's code (a code block
-    or span) is not reported: it is sample code the translation left unfenced. Missing
+    rewrite. Added targets that the source's code blocks and spans yield when parsed as
+    Markdown are not reported (up to their count): that is sample code the translation
+    left unfenced. Missing
     targets are listed first, in source order, then added ones in translation order.
     """
 
@@ -224,11 +237,12 @@ def check_translation_structure(
     actual = structural_targets(translated)
     missing = expected - actual
     added = actual - expected
-    code = _code_contents(source)
-    if code:
-        added = Counter(
-            {target: n for target, n in added.items() if not any(target[1] in c for c in code)}
-        )
+    # Targets the source's code would yield if read as Markdown: what a translation
+    # that left the sample code unfenced adds, and nothing else.
+    code_targets: Counter[Target] = Counter()
+    for code in _code_contents(source):
+        code_targets.update(structural_targets(code))
+    added -= code_targets
     if asset_resolves is not None:
         missing, added = _forgive_fixed_images(missing, added, asset_resolves)
     issues = [
@@ -284,8 +298,9 @@ def local_asset_resolver(root: Path, bases: list[Path]) -> Callable[[str], bool]
 
     Both use :func:`bookgraph.assets.resolve_workspace_link`: the query and fragment
     are dropped, the path is unquoted, and only regular files inside ``root`` count.
-    An absolute path never resolves here, even to a workspace file: it is an absolute
-    asset link (contamination), so adding one is a structure change, not a carried
+    An absolute path never resolves here, even to a workspace file: the reading-agent
+    contract links carried figures by their relative ``AssetRef.link``, never by their
+    absolute ``AssetRef.path``, so adding one is a structure change, not a carried
     figure or a fixed path.
     """
 
@@ -312,6 +327,9 @@ def describe_structure_issues(issues: list[TranslationStructureIssue], limit: in
 
 def _shorten(target: str) -> str:
     # A ``data:`` URI can be megabytes of base64; messages only need to identify it.
+    # Elide the middle so a long path keeps both its root and its file name.
     if len(target) <= _TARGET_DISPLAY_LIMIT:
         return target
-    return target[: _TARGET_DISPLAY_LIMIT - 1] + "…"
+    head = (_TARGET_DISPLAY_LIMIT - 1) // 2
+    tail = _TARGET_DISPLAY_LIMIT - 1 - head
+    return target[:head] + "…" + target[-tail:]

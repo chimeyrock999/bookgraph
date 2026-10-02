@@ -603,8 +603,9 @@ figures — a `data:image/…` URI, or a relative path found next to the body, t
 `sources/parsed/<doc_id>/images/`, `sources/parsed/<doc_id>/`, or the workspace root
 (the export's own lookup) — and a source image path that does not resolve may be
 replaced by one that does. An absolute path (`/…`, `~/…`, `file:`, `C:\…`) never
-counts as resolving, even when it points at a workspace file: it is an absolute asset
-link, so adding one is reported. Heading *text* may be translated: export navigation anchors
+counts as resolving, even when it points at a workspace file: the reading-agent
+contract links each carried figure/table by its relative `AssetRef.link`, never by its
+absolute `AssetRef.path`, so adding an absolute image link is reported. Heading *text* may be translated: export navigation anchors
 on section ids, never on heading text.
 
 What is compared:
@@ -612,9 +613,11 @@ What is compared:
 - The source is the section's title heading plus its text, rebuilt from the parsed
   blocks when `document.json` exists. Parsers store code blocks as plain text without
   fences, so code (`metadata.code`) and equation blocks are re-fenced and never count
-  as structure; a target the translation added that appears verbatim in the source's
-  code (sample code left unfenced) is not reported either. Without `document.json`,
-  `Section.text` is used as is.
+  as structure. The rebuild is used only when, fences aside, it reproduces
+  `Section.text` exactly (with or without title blocks, as segmenters differ);
+  otherwise, and without `document.json`, `Section.text` is used as is.
+- Targets the translation added that the source's code blocks and spans yield when
+  read as Markdown (sample code left unfenced) are not reported, up to their count.
 - The translation body is compared after its frontmatter is split off, exactly as the
   export renders it.
 - Code spans/blocks and HTML comments are not structure on either side.

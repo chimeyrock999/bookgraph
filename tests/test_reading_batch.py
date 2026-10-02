@@ -308,6 +308,7 @@ def test_translation_with_changed_link_targets_blocks(tmp_path: Path) -> None:
     ]
     assert "link '#fig_query' missing" in report.issues[0].message
     assert "link '#hinh_truy_van' added" in report.issues[0].message
+    assert "AssetRef.link" in report.issues[0].message
 
     # Translating the label but keeping the target byte-for-byte passes.
     service.write_section_translation(workspace, DOC, A, "vi", "Xem [hình](#fig_query).")

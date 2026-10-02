@@ -3,6 +3,7 @@ from __future__ import annotations
 from bookgraph.models import CanonicalBlock, Document, Section
 from bookgraph.parsers.markdown import blocks_from_markdown
 from bookgraph.segmenters.heading import HeadingSegmenter
+from bookgraph.segmenters.token_page import TokenPageSegmenter
 from bookgraph.translation_structure import (
     check_section_translation,
     check_translation_structure,
@@ -206,7 +207,8 @@ def test_data_image_may_be_added_and_long_targets_are_shortened() -> None:
     issues = check_translation_structure(f"![f]({payload})\n", "x\n")
     text = describe_structure_issues(issues)
     assert len(text) < 120
-    assert text.endswith("…' missing")
+    assert text.startswith("image 'data:image/png;base64,")
+    assert "…" in text
 
 
 def _parsed_section(markdown: str) -> tuple[Section, dict[str, CanonicalBlock]]:
@@ -261,3 +263,50 @@ def test_parser_drops_reference_definitions_so_they_are_not_checked() -> None:
 
     assert "[spec]:" not in section.text
     assert check_section_translation(section, "Đọc [đặc tả][spec].", blocks=blocks) == []
+
+
+def test_token_page_sections_keep_their_title_blocks_in_the_source() -> None:
+    # The token/page segmenter keeps title blocks in ``Section.text``; the rebuilt source
+    # must too, or the heading's link reads as "added" by a faithful translation.
+    blocks = blocks_from_markdown(
+        "# See [RFC 1](https://rfc.example/1)\n\nBody text.\n\n```\nf(x)\n```\n"
+    )
+    document = Document(doc_id="doc", title="Doc", blocks=blocks)
+    (section,) = TokenPageSegmenter().segment(document)
+    by_id = {block.id: block for block in blocks}
+    assert "[RFC 1](https://rfc.example/1)" in section.text
+
+    faithful = "Xem [RFC 1](https://rfc.example/1)\n\nNội dung.\n"
+    assert check_section_translation(section, faithful, blocks=by_id) == []
+    dropped = check_section_translation(section, "Xem RFC 1\n\nNội dung.\n", blocks=by_id)
+    assert [(i.target, i.change) for i in dropped] == [("https://rfc.example/1", "missing")]
+
+
+def test_rebuild_falls_back_to_section_text_when_blocks_disagree() -> None:
+    section, blocks = _parsed_section("# A\n\nSee [x](a.html).\n")
+    edited = section.model_copy(update={"text": "See [y](b.html)."})
+
+    issues = check_section_translation(edited, "Xem [y](b.html).", blocks=blocks)
+
+    assert issues == []
+
+
+def test_code_forgiveness_is_by_parsed_target_not_substring() -> None:
+    source = 'Call it:\n\n```js\nfetch("/api/users?id=1")\nhandlers[0](event)\n```\n'
+
+    unfenced = 'Gọi nó:\n\nfetch("/api/users?id=1")\nhandlers[0](event)\n'
+    assert check_translation_structure(source, unfenced) == []
+    for added in ("[API](/api)", "[u](u)", "[e](event) [e2](event)"):
+        issues = check_translation_structure(source, f"Gọi nó: {added}\n")
+        assert issues and all(i.change == "added" for i in issues), added
+
+
+def test_long_targets_keep_their_file_name() -> None:
+    path = "/workspace/" + "very-long-directory-name/" * 5 + "figure-12.png"
+    issues = check_translation_structure("x\n", f"![f]({path})\n")
+
+    text = describe_structure_issues(issues)
+
+    assert "figure-12.png' added" in text
+    assert text.startswith("image '/workspace/")
+    assert "…" in text

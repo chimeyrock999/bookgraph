@@ -670,9 +670,54 @@ telling the user to `uv sync --extra mcp`.
   title and text, with a short snippet. `doc_id` scopes to one document; omit it
   to search across every indexed document (cross-document search), each hit
   carrying its `doc_id`.
-- `get_outline(doc_id)` → the document's section outline (heading hierarchy) in
-  reading order: one node per section with `title`, `level`, `parent_id`, and
-  `child_ids`.
+- `get_outline(doc_id, root_id=None, max_depth=None)` → the document's section
+  outline (heading hierarchy) in reading order: one node per section with `title`,
+  `level`, `parent_id`, and `child_ids`. With no options it covers the whole
+  document, which can be very large for a real book. `root_id` scopes it to that
+  section's subtree (the section included). `max_depth` keeps that many **tree**
+  levels from the scope's top (`1` = top-level sections only, or `root_id` alone).
+  Depth follows the parent chain, not the heading `level`, so skipped levels don't
+  matter. The result also carries `root_id`, `total_nodes` (the document's full
+  section count), and `truncated` (whether `max_depth` cut deeper sections off).
+  Boundary nodes keep their full `child_ids`, so a client can drill in with
+  `root_id`. An unknown `root_id` or a `max_depth < 1` is an error. Note that on
+  a flat document (page/token fallback, every section top-level) `max_depth=1`
+  is still every section; `total_nodes` tells a client how large a level is.
+- `get_section_tree(doc_id, section_id, include_siblings=True,
+  include_children=True, sibling_window=10)` → a small outline around one
+  section: `section`, `ancestors` (root-first breadcrumb), `siblings` (the
+  parent's children in reading order, the section itself included; the
+  top-level sections for a top-level section), and direct `children`. Each
+  entry is an id/title/level reference. `siblings` keeps at most
+  `sibling_window` entries on each side of the section (`null` = all), and
+  `siblings_truncated` says whether any were dropped, so a flat document can't
+  turn this into the whole book.
+- `get_chapter_outline(plan_id, max_depth=2, chapter_level=None)` → the outline
+  of the chapter a reading plan is currently in (`current_section_id` = the
+  next unread section).
+  - The chapter and its span come from the shared `graph.chapter_span`, so they
+    always match `get_plan_progress`. By default the chapter is that section's
+    outermost ancestor-or-self, except that a lone top-level root (one
+    `# Book Title` heading above every chapter) is skipped one level down. With
+    `chapter_level`, it is the nearest ancestor-or-self whose heading `level` is
+    at most `chapter_level` (e.g. `2` for chapters under level-1 parts).
+  - The span is normally the chapter's whole subtree. The exception is a
+    wrapper heading that is itself the next unread section: then the span is
+    that heading's own section only, so a tick never spans a whole book or
+    part. A wrapper is the lone root by default, or, with `chapter_level`, any
+    heading shallower than that level. A deeper section under a level jump
+    (`part(1) > sec(3)`) still belongs to the part's span.
+  - Each node in the span carries a `read` flag. `nodes` contains only span
+    members, so a wrapper being read comes back alone; its `child_ids` still
+    point at its children.
+  - `completed` / `remaining` / `total` count the plan's sections in the
+    chapter's span, by membership, whatever `max_depth` is set to (a wrapper
+    being read counts as 1). `plan_completed` / `plan_total` are plan-wide.
+  - `max_depth` works as in `get_outline` and defaults to `2` (the chapter and
+    its direct subsections), so a chapter that turns out to be the whole book
+    stays small. Pass `null` for the full subtree.
+  - When the plan is done, `chapter` is null, `nodes` is empty, and the chapter
+    counts are zero.
 - `get_related(doc_id, section_id)` → a section's structural neighbours in the
   graph: `parent`, `prev`, `next`, and `children` (each a lightweight
   id/title/level reference).

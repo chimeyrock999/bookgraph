@@ -17,6 +17,7 @@ from fastmcp.exceptions import ToolError
 from bookgraph.mcp import service
 from bookgraph.mcp.service import (
     AnnotationResult,
+    ChapterOutline,
     ConceptInput,
     ConceptView,
     CreatedPlan,
@@ -32,6 +33,7 @@ from bookgraph.mcp.service import (
     SectionArtifactList,
     SectionArtifactView,
     SectionContext,
+    SectionTree,
     SectionView,
 )
 from bookgraph.workspace import WorkspacePaths
@@ -133,11 +135,69 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
             raise ToolError(str(exc)) from exc
 
     @mcp.tool
-    def get_outline(doc_id: str) -> Outline:
-        """Return a document's section outline (heading hierarchy) in reading order."""
+    def get_outline(
+        doc_id: str, root_id: str | None = None, max_depth: int | None = None
+    ) -> Outline:
+        """Return a document's section outline (heading hierarchy) in reading order.
+
+        Full-book outlines can be very large; prefer a scoped call. ``root_id`` limits
+        the outline to that section's subtree; ``max_depth`` keeps that many tree levels
+        (1 = top-level sections only, or ``root_id`` alone; on a flat, all-top-level
+        document that is still every section, so check ``total_nodes``). ``truncated``
+        says whether deeper sections were cut off — drill in with ``root_id`` from a
+        node's ``child_ids``. For "where am I" questions, see ``get_section_tree`` and
+        ``get_chapter_outline``.
+        """
 
         try:
-            return service.get_outline(workspace, doc_id)
+            return service.get_outline(workspace, doc_id, root_id, max_depth)
+        except ReadingServiceError as exc:
+            raise ToolError(str(exc)) from exc
+
+    @mcp.tool
+    def get_section_tree(
+        doc_id: str,
+        section_id: str,
+        include_siblings: bool = True,
+        include_children: bool = True,
+        sibling_window: int | None = 10,
+    ) -> SectionTree:
+        """Return a small outline around one section: breadcrumb, siblings, children.
+
+        ``ancestors`` run root-first; ``siblings`` (the section itself included) are in
+        reading order, at most ``sibling_window`` on each side (null = all;
+        ``siblings_truncated`` says whether any were dropped). A cheap alternative to the
+        full ``get_outline``.
+        """
+
+        try:
+            return service.get_section_tree(
+                workspace, doc_id, section_id, include_siblings, include_children,
+                sibling_window,
+            )
+        except ReadingServiceError as exc:
+            raise ToolError(str(exc)) from exc
+
+    @mcp.tool
+    def get_chapter_outline(
+        plan_id: str, max_depth: int | None = 2, chapter_level: int | None = None
+    ) -> ChapterOutline:
+        """Return the outline of the chapter a reading plan is currently in.
+
+        The chapter is the outermost ancestor of the plan's next unread section (a lone
+        book-title root is skipped), or with ``chapter_level`` the nearest one at that
+        heading level or above (use 2 when chapters sit under parts). It always matches
+        ``get_plan_progress``. While such a wrapper heading (book root or part) is itself
+        the next unread section, it comes back alone (``total == 1``) — that is
+        expected, not a failed lookup. Each node carries a ``read``
+        flag; ``completed``/``remaining``/``total`` count the chapter, and
+        ``plan_completed``/``plan_total`` the whole plan. ``max_depth`` (default 2: the
+        chapter and its direct subsections; null = full subtree) limits the nodes as in
+        ``get_outline``.
+        """
+
+        try:
+            return service.get_chapter_outline(workspace, plan_id, max_depth, chapter_level)
         except ReadingServiceError as exc:
             raise ToolError(str(exc)) from exc
 

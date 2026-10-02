@@ -104,7 +104,15 @@ A self-serve agent drives an entire session with these tools alone:
        reads as a source-grounded note.
      - `search(query, doc_id=None)` — find related sections (cross-document when
        `doc_id` is omitted).
-     - `get_outline(doc_id)` / `get_related(doc_id, section_id)` — navigate structure.
+     - `get_chapter_outline(plan_id)` / `get_section_tree(doc_id, section_id)` —
+       orient cheaply: the current chapter's subtree (two levels by default) with
+       read flags and in-chapter counts, or a section's breadcrumb, windowed
+       siblings and children. Pass `chapter_level=2` when chapters sit under
+       parts (a lone book-title root is skipped automatically).
+     - `get_outline(doc_id, root_id=None, max_depth=None)` /
+       `get_related(doc_id, section_id)` — navigate structure. Scope the outline
+       with `root_id` / `max_depth` (e.g. `max_depth=1` for the chapter list); a
+       full outline of a large book can overflow the agent's context.
    - `annotate_section(doc_id, section_id, concepts=[...], summary="...")` — **feed
      your judgment back** (see *The reinforcement loop* below): the real concepts of
      the section (each `{title, gloss}`, `slug` optional) and a prose summary. This is

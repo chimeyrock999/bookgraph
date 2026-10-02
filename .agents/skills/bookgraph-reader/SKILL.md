@@ -51,7 +51,9 @@ Optional navigation tools:
 
 - `search(query, doc_id=None)` — find sections by topic; omit `doc_id` for
   cross-document search.
-- `get_outline(doc_id)` — show document hierarchy.
+- `get_outline(doc_id, root_id=None, max_depth=None)` — show document hierarchy; scope it (`max_depth=1`, then `root_id`) on large books.
+- `get_section_tree(doc_id, section_id)` — show a section's breadcrumb, siblings, and children.
+- `get_chapter_outline(plan_id, chapter_level=None)` — show the current chapter's outline with read flags and in-chapter progress; use `chapter_level=2` when chapters sit under parts (a lone book-title root is skipped automatically). While a Part or book-root heading is itself next, it comes back alone (`total == 1`) — expected; mark it read and move on, don't retry.
 - `get_related(doc_id, section_id)` — show parent/prev/next/children neighbours.
 - `get_concept(concept)` — show cross-book mentions for a concept.
 - `get_plan_progress(plan_id, chapter_level=None)` — current chapter, sections
@@ -92,7 +94,7 @@ Optional translation cache tools (when the user wants sections translated):
 
 4. **Follow connections on demand**
    - Use `search` when the user asks where a topic appears.
-   - Use `get_outline` to orient or jump.
+   - Use `get_chapter_outline` / `get_section_tree` to orient; use a scoped `get_outline` to jump.
    - Use `get_related` to move around the current section.
    - Use `get_concept` when a concept should be connected across books.
 

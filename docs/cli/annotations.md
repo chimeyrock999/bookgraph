@@ -76,6 +76,9 @@ annotations/<doc_id>/<section_id>.json
     title, and the first non-empty gloss for that slug wins.
 - `summary`: the agent's explanation of the section. May be empty. Surfaced immediately
   by `get_context`.
+- `summary` and every `gloss` are book explanation only: progress lines, QA results
+  and `MEDIA:` markers belong in the agent's chat reply (see *Artifact channels* in
+  `artifacts.md`).
 - `model`: optional identifier of the model that produced the annotation.
 - `created_at`: optional ISO-8601 timestamp.
 

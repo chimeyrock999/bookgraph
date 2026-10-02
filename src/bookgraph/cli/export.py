@@ -35,7 +35,10 @@ def _print_report(report: ExportReport) -> None:
         f"({report.coverage * 100:.1f}%)"
     )
     for warning in report.warnings:
-        typer.echo(f"warning: {warning.code}: {warning.section_id}: {warning.message}")
+        line = f"warning: {warning.code}: {warning.section_id}: {warning.message}"
+        if warning.source_path:
+            line += f" (in {warning.source_path})"
+        typer.echo(line)
 
 
 @export_app.command("translated-pdf")
@@ -77,6 +80,15 @@ def export_translated_pdf(
             "stale, or a translation left out the section's figures/tables.",
         ),
     ] = False,
+    show_status: Annotated[
+        bool,
+        typer.Option(
+            "--show-status",
+            help="Debug: also print translation status, fallback notes, coverage and "
+            "missing-asset placeholders on the reading pages (by default they are only "
+            "in the report).",
+        ),
+    ] = False,
     check: Annotated[
         bool,
         typer.Option("--check", help="Preflight only: print coverage and warnings, write nothing."),
@@ -114,7 +126,11 @@ def export_translated_pdf(
 
     try:
         export = build_translated_export(
-            workspace, resolved_doc_id, lang=resolved_lang, fallback=policy
+            workspace,
+            resolved_doc_id,
+            lang=resolved_lang,
+            fallback=policy,
+            show_status=show_status,
         )
     except UntranslatedSectionsError as exc:
         _print_report(exc.report)

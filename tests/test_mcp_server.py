@@ -112,6 +112,8 @@ def test_complete_reading_batch_tool_blocks_then_commits(tmp_path: Path) -> None
     assert done.structured_content["committed"] is True
     assert done.structured_content["done"] is True
     assert done.structured_content["index_rebuild_needed"] is True
+
+
 def test_batch_tools_accept_boundary_arguments(tmp_path: Path) -> None:
     server = build_server(_workspace(tmp_path))
 
@@ -220,3 +222,24 @@ def test_translation_tools_round_trip_through_the_cache(tmp_path: Path) -> None:
     assert cached["status"] == "fresh"
     assert cached["content"] == "xin chào thế giới"
     assert [a["status"] for a in listing["artifacts"]] == ["fresh"]
+
+
+def test_server_instructions_tell_agents_where_diagnostics_go(tmp_path: Path) -> None:
+    server = build_server(_workspace(tmp_path))
+
+    instructions = server.instructions or ""
+    for rule in (
+        "write_section_translation",
+        "notes=",
+        "AssetRef.link",
+        "MEDIA:",
+        "complete_reading_batch",
+        "translation_lang",
+        "get_section_translation",
+        "any directory of your own",
+        "always pass translation_lang",
+        "require_annotation=False",
+        'index="ignore"',
+        "inspected_assets",
+    ):
+        assert rule in instructions

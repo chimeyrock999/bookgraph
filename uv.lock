@@ -296,7 +296,7 @@ mineru-torch = [
     { name = "mineru", extra = ["torch"] },
 ]
 parsers = [
-    { name = "markitdown" },
+    { name = "markitdown", extra = ["docx"] },
     { name = "pypdf" },
 ]
 pdf = [
@@ -310,7 +310,7 @@ pdf-chromium = [
 requires-dist = [
     { name = "fastmcp", marker = "extra == 'mcp'", specifier = ">=2.0" },
     { name = "markdown-it-py", specifier = ">=3.0" },
-    { name = "markitdown", marker = "extra == 'parsers'", specifier = ">=0.1.8" },
+    { name = "markitdown", extras = ["docx"], marker = "extra == 'parsers'", specifier = ">=0.1.8" },
     { name = "mdit-py-plugins", specifier = ">=0.4" },
     { name = "mineru", marker = "extra == 'mineru'", specifier = ">=4.0.10,<5" },
     { name = "mineru", extras = ["torch"], marker = "extra == 'mineru-torch'", specifier = ">=4.0.10,<5" },
@@ -2069,14 +2069,14 @@ wheels = [
 
 [[package]]
 name = "mammoth"
-version = "1.12.1"
+version = "1.11.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cobble" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/46/92/aca6c4208b3a8e56a788b224e6c9b7bb70fc68e6641124fcf784008338e1/mammoth-1.12.1.tar.gz", hash = "sha256:40521e02568583b671d9976b0fbeed50be734b40f73ca8e1939ab7146bf69bbe", size = 53797, upload-time = "2026-08-09T14:11:20.096Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ed/3c/a58418d2af00f2da60d4a51e18cd0311307b72d48d2fffec36a97b4a5e44/mammoth-1.11.0.tar.gz", hash = "sha256:a0f59e442f34d5b6447f4b0999306cbf3e67aaabfa8cb516f878fb1456744637", size = 53142, upload-time = "2025-09-19T10:35:20.373Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/be/b4/e7907b278386ffec0cf631db93836e02de9a6386add4653a52d7ac6b43ae/mammoth-1.12.1-py2.py3-none-any.whl", hash = "sha256:2af047e3e796faa25740112310ddf11f8de2a24c96dc57de3c87dfd7cb6543b3", size = 55091, upload-time = "2026-08-09T14:11:18.854Z" },
+    { url = "https://files.pythonhosted.org/packages/ca/54/2e39566a131b13f6d8d193f974cb6a34e81bb7cc2fa6f7e03de067b36588/mammoth-1.11.0-py2.py3-none-any.whl", hash = "sha256:c077ab0d450bd7c0c6ecd529a23bf7e0fa8190c929e28998308ff4eada3f063b", size = 54752, upload-time = "2025-09-19T10:35:18.699Z" },
 ]
 
 [[package]]
@@ -2120,6 +2120,12 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/11/60/2431842a40975524da12edd4d64dd7dc31ef56e209b4848ebf0b14ad1431/markitdown-0.1.8.tar.gz", hash = "sha256:17188ad827ea79fc264c7b1ca8cf5a242a16278d84cc32f2edc475dbe92812ed", size = 69112, upload-time = "2026-09-21T21:14:36.886Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/33/de/0b23cd8d8955221a39438ba8e4cf583e4f510fc79c6891fff88fb3e61198/markitdown-0.1.8-py3-none-any.whl", hash = "sha256:de7375a50578a39bcbbf13b48c67d99033d988e0ae8ad25af46ed432dbe4cbab", size = 89737, upload-time = "2026-09-21T21:14:35.654Z" },
+]
+
+[package.optional-dependencies]
+docx = [
+    { name = "lxml" },
+    { name = "mammoth" },
 ]
 
 [[package]]

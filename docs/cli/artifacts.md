@@ -169,6 +169,30 @@ Current behavior:
 | `markitdown` | `sources/parsed/<doc_id>/<doc_id>.md` | original `.docx`/`.pptx`/… |
 | `mineru-middle-json` | the `*_middle.json` file | same `*_middle.json` file |
 
+### MarkItDown conversion rules
+
+The `markitdown` adapter fixes what MarkItDown loses on the way to Markdown, so the
+staged Markdown and the blocks stay faithful to the source:
+
+- **Images.** MarkItDown writes no image files. EPUB `<img>` references are matched to
+  zip members and DOCX/PPTX pictures are converted with `keep_data_uris` and decoded.
+  Both are written under `sources/parsed/<doc_id>/images/` and the reference is
+  rewritten to `images/<name>`. A decoded picture is named
+  `image-<sha256 prefix>.<ext>`, so a repeated picture is stored once and a re-parse
+  keeps its name. A reference that cannot be staged stays as written and is counted in
+  `metadata.unresolved_image_count`. References inside code fences or inline code are
+  left alone; an image whose alt text holds a balanced inline-code span is still staged.
+- **DOCX `Title` style.** A `Title` paragraph becomes a level-1 heading, so it is the
+  document title.
+- **DOCX merged cells.** A horizontal merge keeps its first cell's text and pads the
+  rest with empty cells. A vertical merge (rowspan) keeps the text in its first row and
+  an empty cell in each row below, so every row keeps its columns.
+- **DOCX nested tables.** A Markdown table cell cannot hold a table, so a nested table
+  is flattened into its cell as text: cells joined by ` / `, rows by `; `. The count is
+  recorded in `metadata.flattened_table_count` and reported as a parse warning.
+- Known gap: an image inside a table cell or heading is rendered as alt text only by
+  MarkItDown, so it is neither staged nor reported.
+
 ### List block rules
 
 `list` blocks keep reading structure rather than flattening to bullets:

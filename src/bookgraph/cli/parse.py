@@ -86,3 +86,10 @@ def parse(
             fg=typer.colors.YELLOW,
             err=True,
         )
+    flattened = document.metadata.get("flattened_table_count")
+    if flattened:
+        typer.secho(
+            f"warning: {flattened} nested table(s) were flattened into their outer table cell",
+            fg=typer.colors.YELLOW,
+            err=True,
+        )

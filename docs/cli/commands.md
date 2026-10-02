@@ -213,7 +213,10 @@ sources/parsed/<doc_id>/document.json
 
 Parser adapters may write side artifacts inside the same directory. Current examples:
 
-- `markitdown` writes staged Markdown: `sources/parsed/<doc_id>/<doc_id>.md`.
+- `markitdown` writes staged Markdown: `sources/parsed/<doc_id>/<doc_id>.md`, and the
+  images it references under `sources/parsed/<doc_id>/images/` (EPUB members, and
+  embedded DOCX/PPTX pictures decoded from data URIs). See *MarkItDown conversion
+  rules* in `artifacts.md`.
 - `markdown` writes no side artifact beyond `document.json`.
 - `mineru-middle-json` writes no side artifact beyond `document.json`.
 
@@ -233,6 +236,13 @@ title: <document_title>
 blocks: <block_count>
 document: <workspace>/sources/parsed/<doc_id>/document.json
 ```
+
+Warnings go to stderr and do not fail the parse:
+
+- `warning: <n> image reference(s) had no matching asset and remain broken`
+  (`document.metadata.unresolved_image_count`);
+- `warning: <n> nested table(s) were flattened into their outer table cell`
+  (`document.metadata.flattened_table_count`, DOCX only).
 
 ## `bookgraph segment`
 

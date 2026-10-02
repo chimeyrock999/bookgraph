@@ -630,17 +630,24 @@ telling the user to `uv sync --extra mcp`.
 - `get_chapter_outline(plan_id, max_depth=2, chapter_level=None)` → the outline
   of the chapter a reading plan is currently in (`current_section_id` = the
   next unread section).
-  - The chapter comes from the shared `graph.chapter_span`, so it always
-    matches `get_plan_progress`. By default it is that section's outermost
-    ancestor-or-self, except that a lone top-level root (one `# Book Title`
-    heading above every chapter) is skipped one level down. While that root is
-    itself the section being read, the chapter is the root's own section only. With
+  - The chapter and its span come from the shared `graph.chapter_span`, so they
+    always match `get_plan_progress`. By default the chapter is that section's
+    outermost ancestor-or-self, except that a lone top-level root (one
+    `# Book Title` heading above every chapter) is skipped one level down. With
     `chapter_level`, it is the nearest ancestor-or-self whose heading `level` is
     at most `chapter_level` (e.g. `2` for chapters under level-1 parts).
-  - Each subtree node carries a `read` flag.
+  - The span is normally the chapter's whole subtree. The exception is a
+    wrapper heading that is itself the next unread section: then the span is
+    that heading's own section only, so a tick never spans a whole book or
+    part. A wrapper is the lone root by default, or, with `chapter_level`, any
+    heading shallower than that level. A deeper section under a level jump
+    (`part(1) > sec(3)`) still belongs to the part's span.
+  - Each node in the span carries a `read` flag. `nodes` contains only span
+    members, so a wrapper being read comes back alone; its `child_ids` still
+    point at its children.
   - `completed` / `remaining` / `total` count the plan's sections in the
-    chapter's whole subtree, by membership, whatever `max_depth` is set to.
-    `plan_completed` / `plan_total` are plan-wide.
+    chapter's span, by membership, whatever `max_depth` is set to (a wrapper
+    being read counts as 1). `plan_completed` / `plan_total` are plan-wide.
   - `max_depth` works as in `get_outline` and defaults to `2` (the chapter and
     its direct subsections), so a chapter that turns out to be the whole book
     stays small. Pass `null` for the full subtree.

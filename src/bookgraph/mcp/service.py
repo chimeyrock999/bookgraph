@@ -227,11 +227,13 @@ class ChapterOutline(BaseModel):
     """The outline of the chapter a reading plan is currently in.
 
     The chapter is the scope ancestor of ``current_section_id`` (the plan's next unread
-    section) — see :func:`bookgraph.graph.chapter_span`. ``completed`` /
-    ``remaining`` / ``total`` count the plan's sections in the chapter's whole subtree,
-    by membership (unaffected by ``max_depth``); ``plan_completed`` / ``plan_total`` are
-    plan-wide. When the plan is ``done`` there is no current section, so ``chapter`` is
-    ``None``, ``nodes`` is empty, and the chapter counts are zero.
+    section) — see :func:`bookgraph.graph.chapter_span`. ``nodes`` and ``completed`` /
+    ``remaining`` / ``total`` cover the chapter's span, by membership (counts unaffected
+    by ``max_depth``): normally its whole subtree, but only the heading's own section
+    while a wrapper heading (a lone book-title root, or with ``chapter_level`` any
+    shallower heading such as a part) is itself being read. ``plan_completed`` /
+    ``plan_total`` are plan-wide. When the plan is ``done`` there is no current section,
+    so ``chapter`` is ``None``, ``nodes`` is empty, and the chapter counts are zero.
     """
 
     plan_id: str
@@ -917,8 +919,9 @@ def get_chapter_outline(
         )
     span = chapter_span(graph.nodes, current_id, chapter_level=chapter_level)
     chapter = span.chapter
-    # The span's members, not the raw subtree, bound the chapter — while a lone
-    # book-title root is itself being read, the span is that root alone.
+    # The span's members, not the raw subtree, bound the chapter — while a wrapper
+    # heading (a lone book-title root, or with chapter_level any shallower heading such
+    # as a part) is itself being read, the span is that heading alone.
     members = set(span.member_ids)
     full = [node for node in _scoped_nodes(graph, chapter.id, None)[0] if node.id in members]
     nodes = [node for node in _scoped_nodes(graph, chapter.id, max_depth)[0] if node.id in members]

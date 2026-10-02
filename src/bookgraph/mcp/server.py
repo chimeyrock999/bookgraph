@@ -148,7 +148,9 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
         The chapter is the outermost ancestor of the plan's next unread section (a lone
         book-title root is skipped), or with ``chapter_level`` the nearest one at that
         heading level or above (use 2 when chapters sit under parts). It always matches
-        ``get_plan_progress``. Each node carries a ``read``
+        ``get_plan_progress``. While such a wrapper heading (book root or part) is itself
+        the next unread section, it comes back alone (``total == 1``) — that is
+        expected, not a failed lookup. Each node carries a ``read``
         flag; ``completed``/``remaining``/``total`` count the chapter, and
         ``plan_completed``/``plan_total`` the whole plan. ``max_depth`` (default 2: the
         chapter and its direct subsections; null = full subtree) limits the nodes as in

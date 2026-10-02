@@ -9,11 +9,16 @@ import threading
 import time
 import zipfile
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import BinaryIO
 
 from bookgraph.parsers.errors import UnsupportedSourceError
+from bookgraph.parsers.mineru_source_map import (
+    SOURCE_MAP_SUFFIX,
+    build_source_map,
+    write_source_map,
+)
 from bookgraph.utils import MINERU_MIDDLE_JSON_SUFFIX
 
 CommandRunner = Callable[[list[str]], "subprocess.CompletedProcess[str]"]
@@ -38,6 +43,23 @@ _ZIP_IMAGES_DIR = "images"
 # them instead of leaving stale debug output next to the new bundle.
 _LEGACY_ARTIFACT_SUFFIXES = ("_layout.pdf", "_span.pdf", "_content_list.json")
 
+# MinerU 4 parses these natively (``FLASH_ONLY_PARSE_EXTENSIONS`` in
+# ``mineru/filetypes.py``): ``flash`` is the only tier it accepts for them, and it
+# rejects a page range.
+FLASH_ONLY_TIER = "flash"
+MINERU_FLASH_ONLY_SUFFIXES = frozenset(
+    f".{ext}"
+    for ext in (
+        "doc docx ppt pptx xls xlsx rtf odt ods odp html htm shtml mhtml mht csv tsv epub ofd"
+    ).split()
+)
+
+
+def is_flash_only_source(path: Path) -> bool:
+    """Whether MinerU parses ``path`` natively, with the ``flash`` tier only."""
+
+    return path.suffix.lower() in MINERU_FLASH_ONLY_SUFFIXES
+
 
 class MinerUNotInstalledError(RuntimeError):
     """Raised when the MinerU executable is not on PATH."""
@@ -61,6 +83,7 @@ class MinerURunResult:
     structured_content: Path | None = None
     model_output: Path | None = None
     images_dir: Path | None = None
+    source_map: Path | None = None
 
     def artifacts(self) -> dict[str, Path]:
         """Return staged artifacts keyed by role, skipping the ones MinerU omitted."""
@@ -71,13 +94,19 @@ class MinerURunResult:
             "structured_content": self.structured_content,
             "model_output": self.model_output,
             "images_dir": self.images_dir,
+            "source_map": self.source_map,
         }
         return {role: path for role, path in mapping.items() if path is not None}
 
 
 @dataclass
 class MinerURunner:
-    """Invoke MinerU 4 on a raw PDF and stage its result bundle.
+    """Invoke MinerU 4 on a raw source and stage its result bundle.
+
+    Raw PDFs parse with the configured ``tier``. EPUB, Office and HTML sources
+    (:data:`MINERU_FLASH_ONLY_SUFFIXES`) always parse with ``--tier flash``, the only
+    tier MinerU accepts for them; a page range is refused for them, and a source map
+    (:mod:`bookgraph.parsers.mineru_source_map`) is staged next to the middle JSON.
 
     MinerU is a heavy external tool, so it stays out of the base install and is
     invoked as a subprocess (``mineru-kit parse <pdf> --format zip``) rather than
@@ -106,12 +135,19 @@ class MinerURunner:
     log_path: Path | None = None
 
     def run(self, pdf: Path, output_dir: Path) -> MinerURunResult:
-        if pdf.suffix.lower() != ".pdf":
+        flash_only = is_flash_only_source(pdf)
+        if pdf.suffix.lower() != ".pdf" and not flash_only:
             raise UnsupportedSourceError(
-                f"{pdf.name}: {self.name} runner only accepts raw .pdf input."
+                f"{pdf.name}: {self.name} runner accepts a raw .pdf or one of "
+                f"{', '.join(sorted(MINERU_FLASH_ONLY_SUFFIXES))}."
+            )
+        if flash_only and (self.start_page is not None or self.end_page is not None):
+            raise UnsupportedSourceError(
+                f"{pdf.name}: MinerU parses {pdf.suffix.lower()} files whole; a page range "
+                "(start_page/end_page) applies to PDFs only."
             )
         if not pdf.is_file():
-            raise UnsupportedSourceError(f"PDF not found: {pdf}")
+            raise UnsupportedSourceError(f"{'Source' if flash_only else 'PDF'} not found: {pdf}")
         if Path(self.command).name == _LEGACY_COMMAND:
             raise MinerURunError(
                 f"'{self.command}' is the MinerU 3.x parse command; MinerU 4 parses with "
@@ -157,9 +193,15 @@ class MinerURunner:
 
             bundle = _extract_result_bundle(result_zip, work_dir / "result", pdf)
             # Staging copies out of work_dir before the finally cleanup removes it.
-            return _stage_artifacts(bundle, output_dir, stem=output_dir.name, command=argv)
+            result = _stage_artifacts(bundle, output_dir, stem=output_dir.name, command=argv)
         finally:
             shutil.rmtree(work_dir, ignore_errors=True)
+        source_map = output_dir / f"{output_dir.name}{SOURCE_MAP_SUFFIX}"
+        source_map.unlink(missing_ok=True)
+        if not flash_only:
+            return result
+        write_source_map(build_source_map(pdf, result.images_dir), source_map)
+        return replace(result, source_map=source_map)
 
     def _build_argv(self, pdf: Path, result_zip: Path) -> list[str]:
         argv = [
@@ -171,7 +213,7 @@ class MinerURunner:
             "--format",
             "zip",
             "--tier",
-            self.tier,
+            FLASH_ONLY_TIER if is_flash_only_source(pdf) else self.tier,
         ]
         if self.url:
             # mineru-kit forwards only the tier and page range to a remote service,
@@ -200,9 +242,7 @@ def _page_range(start_page: int | None, end_page: int | None) -> str | None:
     return f"{first}-{last}"
 
 
-def _default_run_process(
-    argv: list[str], timeout: int | None
-) -> subprocess.CompletedProcess[str]:
+def _default_run_process(argv: list[str], timeout: int | None) -> subprocess.CompletedProcess[str]:
     return subprocess.run(  # noqa: S603
         argv, capture_output=True, text=True, check=False, timeout=timeout
     )

@@ -72,7 +72,9 @@ bookgraph paths /path/to/workspace
 ```
 
 Register a raw PDF book (copies it to `sources/inbox/<book_id>/` and writes a
-`book.json` registration manifest; add `--dry-run` to preview):
+`book.json` registration manifest; add `--dry-run` to preview). An EPUB or DOCX can be
+registered too, to parse it with MinerU explicitly; `bookgraph parse` reads it with
+MarkItDown without registration:
 
 ```bash
 bookgraph add-book /path/to/workspace /path/to/book.pdf
@@ -126,6 +128,7 @@ Sections that are not translated yet appear in the original language:
 ```bash
 bookgraph export translated-pdf /path/to/workspace <doc_id> --lang vi   # needs: --extra pdf or pdf-chromium
 bookgraph export translated-pdf /path/to/workspace <doc_id> --lang vi --mode bilingual   # original | translated side by side
+bookgraph export translated-pdf /path/to/workspace <doc_id> --lang vi --out exports/book.vi.epub   # EPUB 3, no extra needed
 bookgraph export translated-pdf /path/to/workspace <doc_id> --check     # coverage + missing-asset report
 bookgraph assets repair /path/to/workspace <doc_id> --dry-run           # recover figures the parser never staged
 ```
@@ -250,7 +253,9 @@ src/bookgraph/
     bilingual.py            # bilingual (original | translated) row layout and styles
     images.py               # image embedding (data: URIs) + asset warnings for exports
     html_attrs.py           # attribute-aware HTML tag scanning shared by exports
-    renderers.py            # ExportRenderer port: weasyprint / playwright / html
+    renderers.py            # ExportWriter port: weasyprint / playwright / html / epub
+    epub.py                 # EPUB 3 writer: chapter files, nav, OPF, images, file-aware links
+    xhtml.py                # HTML fragment -> well-formed XHTML for EPUB
   index/
     base.py                 # IndexBackend port + hits/concept models + tokenizer
     sqlite.py               # default backend: SQLite/FTS5 (indexes/bookgraph.db)

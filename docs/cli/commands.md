@@ -85,32 +85,35 @@ runs.root
 
 **Status:** Implemented.
 
-Register a raw PDF book without running parser, segmenter, wiki, or MCP stages.
+Register a raw PDF, EPUB or DOCX book without running parser, segmenter, wiki, or MCP stages.
 
 ```bash
 bookgraph add-book /path/to/workspace /path/to/book.pdf
+bookgraph add-book /path/to/workspace /path/to/book.epub
 bookgraph add-book /path/to/workspace /path/to/book.pdf --dry-run
 ```
 
 ### Inputs
 
 - `workspace_path`: workspace/output root.
-- `pdf_path`: raw PDF source path.
+- `pdf_path`: raw source path: `.pdf`, `.epub` or `.docx`. An EPUB or DOCX is
+  registered for the explicit MinerU path (`parse-book`, see *Explicit MinerU path for
+  EPUB/DOCX*); MarkItDown parses it without registration (`bookgraph parse`).
 - `--dry-run`: compute contract and print paths, but write nothing.
 
 ### Writes
 
-For a book id `<book_id>` derived from the PDF filename:
+For a book id `<book_id>` derived from the source filename:
 
 ```text
 sources/inbox/<book_id>/
-  original.pdf
-  book.json
+  original.<pdf|epub|docx>
+  book.json            # source_type: pdf | epub | docx
 ```
 
 ### Must not do
 
-- Must not parse the PDF.
+- Must not parse the source.
 - Must not call MinerU, MarkItDown, segmenters, wiki backends, MCP tools, embeddings, or LLMs.
 - Must not write under `sources/parsed/`, `sources/sections/`, `wiki/`, `indexes/`, or `reading_plans/`.
 
@@ -212,14 +215,15 @@ no models), but the comparison on issue 87 found it not ready to be the default
 (<https://github.com/chimeyrock999/bookgraph/issues/87#issuecomment-5956663497>):
 
 - EPUB: both adapters give the same heading structure and sections, while MinerU costs a
-  1.2 GB extra, and through `mineru-middle-json` loses the internal links, anchors and
-  `<source.epub>!<member>` provenance that exports rely on.
-- DOCX: MinerU's own output keeps merged and nested tables and images, but
-  `mineru-middle-json` drops native table bodies, and MinerU drops footnotes.
+  1.2 GB extra. At the time, `mineru-middle-json` also lost the internal links, anchors
+  and `<source.epub>!<member>` provenance (kept since issue 89).
+- DOCX: MinerU's own output keeps merged and nested tables and images, but MinerU drops
+  footnotes (`mineru-middle-json` also dropped native table bodies before issue 89).
 
-An explicit MinerU path for non-PDF sources is follow-up work (issue 89). Until then,
-`--parser mineru-middle-json` accepts only MinerU `*_middle.json` output and
-`parse-book` runs MinerU on raw PDFs only.
+MinerU is used for EPUB/DOCX only when chosen explicitly, through `parse-book` on a
+registered book (see *Explicit MinerU path for EPUB/DOCX* under `parse-book`). The
+`mineru` extra is never required for non-PDF input, and `--parser mineru-middle-json`
+still accepts only MinerU `*_middle.json` output.
 
 `mineru-middle-json` reads MinerU 4's `docvortex.middle` schema 2.x, and still reads
 MinerU 3.x `pdf_info` middle JSON staged before the MinerU 4 migration. An unknown
@@ -1215,7 +1219,8 @@ bookgraph llmwiki view /path/to/workspace --print         # print the command on
 
 **Status:** Implemented.
 
-Assemble a partially translated book into one reading edition. A section with a
+Assemble a partially translated book into one reading edition: a PDF, a
+self-contained HTML page, or an EPUB 3 book (see *EPUB output* below). A section with a
 translation artifact for `--lang` renders that artifact; any other section follows
 `--fallback`. This produces a clean reading edition. It does not reproduce the
 publisher's page layout.
@@ -1252,7 +1257,9 @@ the export is one document anchored on section ids. When it renders the page, th
 export rewrites each internal-book `<a href>` (a `#fragment`, or a link to a source
 `.html`/`.htm`/`.xhtml` file) to one of its own anchors, in this order:
 
-1. the fragment is an `id` already on the page → that anchor;
+1. the fragment is an `id` already on the page → that anchor; else a block's
+   `metadata.anchor` (MinerU's EPUB path rewrites internal links to these) → the
+   deepest section holding that block;
 2. the file names a section: `ch10.html` (or `chapter-10`, `ch10s02`) → the section
    titled *Chapter 10* (or *10. …*); `app01.html`/`appa.html` → *Appendix A*;
    `part02.html` → *Part II*; any other file → the section with the same title
@@ -1297,6 +1304,8 @@ bookgraph export translated-pdf /path/to/workspace ddia --lang vi --fallback ski
 bookgraph export translated-pdf /path/to/workspace ddia --lang vi --mode bilingual \
   --out exports/ddia.en-vi.pdf
 bookgraph export translated-pdf /path/to/workspace ddia --renderer html   # no PDF extra needed
+bookgraph export translated-pdf /path/to/workspace ddia --lang vi --mode bilingual \
+  --source-lang en --out exports/ddia.en-vi.epub                           # EPUB, no extra needed
 bookgraph export translated-pdf /path/to/workspace ddia --check           # coverage + QA only
 ```
 
@@ -1330,8 +1339,9 @@ bookgraph export translated-pdf /path/to/workspace ddia --check           # cove
     shows the original in both columns. HTML anchors (`id`, and `name` on `<a>`) are
     kept only in the right column, so every id on the page is unique and in-page links
     from either column land in the reading edition. The left column is tagged
-    `lang="und"` (no source language is stored), and only right-column headings feed
-    the PDF outline.
+    with `--source-lang`, else `lang="und"` (no source language is stored), and only
+    right-column headings feed the PDF outline. EPUB output lays these rows out
+    one after the other instead (see *EPUB output*).
 - `--fallback original|skip|fail` (default `original`). This controls what happens to
   a section that has no translation (in `bilingual` mode, to its right column):
   - `original` renders the original section;
@@ -1339,13 +1349,19 @@ bookgraph export translated-pdf /path/to/workspace ddia --check           # cove
   - `fail` exits `1` and lists every untranslated section. Nothing is written. A
     `stale` or `untracked` translation counts as translated (use `--strict` to refuse
     stale ones).
+- `--source-lang`: the language of the original text, e.g. `en` (normalised like
+  `--lang`). It is only used to tag original-language content for readers (fonts,
+  hyphenation, text-to-speech): the `bilingual` original column and, in EPUB output,
+  untranslated sections. Without it that content is tagged `lang="und"`
+  (undetermined), as before. It is recorded as `source_lang` in the report.
 - `--out`: output file. A relative path is resolved under the workspace. The default
   is `exports/<doc_id>.<lang>-progress.pdf` (`exports/<doc_id>.<lang>-bilingual.pdf`
-  with `--mode bilingual`), or `.html` with `--renderer html`.
-- `--renderer auto|weasyprint|playwright|html` (default `auto`). `auto` writes HTML
-  for a `.html`/`.htm` output. For any other output it uses the first installed PDF
-  backend, trying `weasyprint` first and then `playwright`. Naming a backend that is
-  not installed is an error.
+  with `--mode bilingual`), or `.html` with `--renderer html` and `.epub` with
+  `--renderer epub`.
+- `--renderer auto|weasyprint|playwright|html|epub` (default `auto`). `auto` writes
+  HTML for a `.html`/`.htm` output and EPUB for a `.epub` output. For any other output
+  it uses the first installed PDF backend, trying `weasyprint` first and then
+  `playwright`. Naming a backend that is not installed is an error.
 - `--strict`: exit `1` without writing anything if any asset is missing, remote, or
   unsupported, a translation is `stale` (`translation_stale`), or a registered
   translation left out its section's figures/tables (`translation_missing_assets`,
@@ -1369,8 +1385,8 @@ bookgraph export translated-pdf /path/to/workspace ddia --check           # cove
 - `--check`: preflight only. Prints coverage and warnings and writes nothing. With
   `--strict`, it exits `1` whenever the real export would be refused.
 - The `--out` suffix must match the renderer: `.pdf` for `weasyprint`/`playwright`,
-  `.html`/`.htm` for `html`. A mismatch, or a suffix that `auto` cannot map to a
-  format, exits `2`.
+  `.html`/`.htm` for `html`, `.epub` for `epub`. A mismatch, or a suffix that `auto`
+  cannot map to a format, exits `2`.
 
 ### Reads
 
@@ -1439,6 +1455,71 @@ All images are embedded as `data:` URIs, so the output is self-contained.
   asset problems or stale / prose-only translations (also under `--check`), or a
   missing or failing renderer → exit 1, with nothing written.
 
+### EPUB output
+
+`--renderer epub` (or `auto` with a `.epub` output) writes an EPUB 3 book with the
+standard library only, so it needs no extra. It is built from the same assembled
+sections as the PDF/HTML page (same structure, fallback, links, assets and report),
+laid out for reflowable screens:
+
+- **Container.** A zip whose first entry is `mimetype` (`application/epub+zip`,
+  stored uncompressed), then `META-INF/container.xml`, `OEBPS/content.opf` (Dublin
+  Core title, `dc:language` = `--lang` plus `--source-lang` in `bilingual` mode, a
+  `urn:uuid` identifier derived from `doc_id`, `lang` and `mode`, and
+  `dcterms:modified` = the report's `generated_at`), `OEBPS/nav.xhtml`,
+  `OEBPS/style.css`, `OEBPS/title.xhtml`, one XHTML file per chapter and the images.
+  Entries carry the `generated_at` timestamp, so unchanged inputs with a pinned
+  `SOURCE_DATE_EPOCH` give a byte-identical file.
+- **Files.** Each *chapter* of the export structure (every top-level section, and each
+  child of a part; the sections that start a new page in the PDF) is one
+  `OEBPS/chapter-NNN.xhtml` file, in reading order. Its child sections stay inside it.
+  The spine reads the title page, the contents page (`nav.xhtml`), then the chapters.
+- **Navigation.** `nav.xhtml` holds the `epub:type="toc"` table of contents: every
+  section of the outline, nested the same way, in reading order, linking
+  `chapter-NNN.xhtml#<section_id>`. `--show-status` TOC markers are not added to it.
+- **Images.** Every embedded image (`data:` URI) is written once as
+  `OEBPS/images/<sha256 prefix>.<ext>`, content-addressed, and the `<img src>` points
+  at it. Images the export left out stay out, as in the PDF.
+- **Links.** Internal links are resolved as above, then pointed at the file that holds
+  their anchor (`chapter-003.xhtml#tiny.section-two`); a link inside its own file
+  stays `#anchor`. External URLs stay. A link to nothing in the book (an unresolved
+  internal link, still reported as `internal_link_unresolved`, or a relative link to a
+  file the book does not carry) keeps its text but loses its `href`: no reading
+  system can follow it, and epubcheck rejects it.
+- **XHTML.** Every section body is re-serialised as well-formed XHTML: void elements
+  self-closed, text and attributes escaped, implied end tags (`p`, `li`, `td`, …)
+  added, and tags balanced (each side of a `bilingual` pair on its own). Quotes in text
+  are escaped too. What changes the content is reported as `xhtml_repaired` (once per
+  section and side, naming the file the markup came from): a stray end tag dropped, an element left open
+  closed, a `script`/`style`/`iframe`/`object`/`embed` element dropped with its
+  content, a document wrapper or obsolete presentational tag (`body`, `center`,
+  `font`, …) dropped with its content kept, an attribute name XML cannot carry or an
+  event handler (`onclick`) dropped, or an element HTML does not define kept as
+  escaped text. The last is raw XML in a parsed book (an RDF or Avro schema example)
+  that the Markdown renderer read as tags: as text, the reader still sees the example.
+  Comments are dropped.
+- **Languages.** The root element of every file carries `lang`/`xml:lang` = `--lang`.
+  Original-language content carries `--source-lang` (else `und`): untranslated
+  sections in `translated` mode, and the original side in `bilingual` mode.
+- **Bilingual layout.** Readers reflow text, so the two-column table is not used:
+  - an aligned translation is interleaved by unit, the source blocks first, then the
+    translation: `<div class="bilingual-unit"><div class="original" lang="en">…</div>
+    <div class="translation" lang="vi">…</div></div>`, the translation styled apart;
+    source blocks no unit translates get an original `div` alone;
+  - an unaligned translation stacks the original section before the translated one
+    (`<div class="bilingual-section">`), and a `@media (min-width: 48em)` rule sets
+    them side by side on wide screens;
+  - an untranslated section shows the original once (not twice, as the PDF's two
+    columns do).
+  There is no in-book language toggle (readers cannot run scripts reliably):
+  `--mode translated` and `--mode bilingual` stay separate books.
+- **Report.** `renderer` is `epub`. `xhtml_repaired` warnings are found while the
+  book is written, so they are in the written report and printed after the export,
+  but not in a `--check` run.
+
+To validate a written book, run [epubcheck](https://github.com/w3c/epubcheck)
+locally (`epubcheck exports/ddia.en-vi.epub`); it is not part of the test suite.
+
 ### PDF backends (optional extras)
 
 | Renderer | Install |
@@ -1446,6 +1527,7 @@ All images are embedded as `data:` URIs, so the output is self-contained.
 | `weasyprint` | `uv sync --extra pdf` (also needs the Pango system library, e.g. `brew install pango`) |
 | `playwright` | `uv sync --extra pdf-chromium && uv run playwright install chromium` |
 | `html` | built in |
+| `epub` | built in |
 
 ## `bookgraph assets repair`
 
@@ -1558,6 +1640,9 @@ Options:
 - `--timeout-seconds`: subprocess timeout. Default: config; pass `0` for no timeout.
 - `--parser/-p`: parser after runner output is staged. Default: `[parsers].default_pdf` (`mineru-middle-json`).
 
+A registered EPUB or DOCX always parses with `--tier flash` and no page range; see
+*Explicit MinerU path for EPUB/DOCX* below.
+
 Precedence is CLI flag > workspace config (`[mineru]`) > profile default. The resolved
 profile and the exact MinerU argv are recorded in the run log (the
 `$ mineru-kit parse <pdf> --output …/_mineru/result.zip --format zip --tier …` line).
@@ -1603,6 +1688,7 @@ Writes (staged from the `mineru-kit --format zip` bundle):
 sources/parsed/<book_id>/
   document.json
   <book_id>_middle.json       # MinerU 4 middle JSON (docvortex.middle 2.x)
+  <book_id>_source_map.json   # EPUB/DOCX only: source spine and image members
   optional <book_id>.md / <book_id>_structured_content.json / <book_id>_model_output.json / images/
 ```
 
@@ -1635,6 +1721,56 @@ document: <workspace>/sources/parsed/<book_id>/document.json
 
 Failures include `Log: <...>` so users/agents can inspect the durable run log.
 For large PDFs and agent/cron operation, see `docs/cli/parse-book-large-pdfs.md`.
+
+#### Explicit MinerU path for EPUB/DOCX
+
+`parse-book` on a book registered from an `.epub` or `.docx` is the explicit way to
+parse it with MinerU. MarkItDown stays the default for these formats (`bookgraph
+parse`); nothing routes them to MinerU on its own.
+
+```bash
+bookgraph add-book /path/to/workspace /path/to/book.epub
+bookgraph parse-book /path/to/workspace <book_id>
+```
+
+- **Entry point.** `parse-book`, which already owns running MinerU, staging its bundle
+  and logging the run. `bookgraph parse` stays an adapter over existing files and never
+  invokes MinerU.
+- **Tier.** MinerU 4 parses these formats natively and accepts only `--tier flash`
+  (no models, no GPU; the `mineru` extra is still needed). The runner always passes
+  `--tier flash` for them: a tier from the profile or `[mineru].tier` gives way, and
+  `--tier` other than `flash` on the command line is rejected.
+- **Page range.** MinerU parses these formats whole and rejects `--pages`, so
+  `--start-page`/`--end-page` (and `[mineru].start_page`/`end_page`) are rejected
+  before MinerU runs.
+- **Provenance.** The runner also stages `<book_id>_source_map.json` (the source's EPUB
+  spine and the original member of each image), and `mineru-middle-json` records it on
+  the blocks: an EPUB block's `metadata.source_locator` is
+  `<source.epub>!<spine member>` (MinerU's `page_idx` is the spine index), and an image
+  block's `metadata.asset_source_member` is the EPUB member with the same bytes. A DOCX
+  has no spine: MinerU puts it all on `page_idx` 0, so the block id `p0.b<index>` is its
+  only locator, and its pictures (re-encoded as JPEG) record no member. Within an EPUB
+  member the block id `p<page_idx>.b<index>` is the only finer locator.
+- **Content.** Native tables keep their HTML (colspan, rowspan, nested tables) as the
+  block text; hyperlinks stay Markdown links; and a block's `anchor` is kept in
+  `metadata.anchor`. Inline spans join verbatim. For an EPUB the anchor is an id MinerU
+  assigns (`epub-<hash>`) and rewrites the book's internal `#…` links to: a link target
+  inside the parsed document, not the source element's `id`, so it does not locate the
+  block within its member. A DOCX bookmark name is kept as written. Exports resolve a
+  link to a block anchor to the section holding the block.
+- **Heading levels.** For DOCX, MinerU reserves level 1 for the `Title` style and maps
+  `Heading N` to level N+1. `mineru-middle-json` shifts DOCX section titles back by one,
+  matching MarkItDown (`Title` and `Heading 1` → 1, `Heading 2` → 2), so switching
+  adapters does not change the sections. EPUB levels are kept (`h1` → 1, `h2` → 2).
+
+Known limitations of MinerU 4.0.10 on this path:
+
+- DOCX footnotes (`word/footnotes.xml`) are dropped: neither the text nor the reference
+  marker reaches any MinerU output. Use MarkItDown for a DOCX whose footnotes matter.
+- A DOCX heading is detected from its style's outline level; a heading style without
+  `w:outlineLvl` comes out as body text.
+- EPUB links to an element MinerU emits no anchor for (a `<figure id>`, say) become
+  plain text.
 
 ### `bookgraph wiki compile`
 

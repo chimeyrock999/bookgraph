@@ -1,0 +1,184 @@
+{
+  "metadata": {
+    "file_suffix": "docx",
+    "producer": {
+      "name": "mineru",
+      "version": "4.0.10"
+    },
+    "document": {}
+  },
+  "extensions": {
+    "mineru": {
+      "tier": "flash",
+      "parse_mode": "txt"
+    }
+  },
+  "pages": [
+    {
+      "page_idx": 0,
+      "blocks": [
+        {
+          "type": "doc_title",
+          "index": 0,
+          "content": [
+            {
+              "type": "text",
+              "content": "Sample Report"
+            }
+          ],
+          "level": 1
+        },
+        {
+          "type": "paragraph_title",
+          "index": 1,
+          "content": [
+            {
+              "type": "text",
+              "content": "Introduction"
+            }
+          ],
+          "level": 2
+        },
+        {
+          "type": "text",
+          "index": 2,
+          "content": [
+            {
+              "type": "text",
+              "content": "See "
+            },
+            {
+              "type": "hyperlink",
+              "url": "#sec_results",
+              "content": [
+                {
+                  "type": "text",
+                  "content": "the results section"
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "content": " and "
+            },
+            {
+              "type": "hyperlink",
+              "url": "https://example.com/",
+              "content": [
+                {
+                  "type": "text",
+                  "content": "the website"
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "content": " (Example 5-2) [3]."
+            }
+          ]
+        },
+        {
+          "type": "paragraph_title",
+          "index": 3,
+          "content": [
+            {
+              "type": "text",
+              "content": "Details"
+            }
+          ],
+          "level": 3
+        },
+        {
+          "type": "paragraph_title",
+          "index": 4,
+          "content": [
+            {
+              "type": "text",
+              "content": "Deep"
+            }
+          ],
+          "level": 4
+        },
+        {
+          "type": "text",
+          "index": 5,
+          "content": [
+            {
+              "type": "text",
+              "content": "Merged table follows."
+            }
+          ]
+        },
+        {
+          "type": "table",
+          "index": 6,
+          "content": [
+            {
+              "type": "table_body",
+              "index": 6,
+              "content": "<table><tr><td rowspan=\"2\"><p>Region</p></td><td colspan=\"2\"><p>Sales</p></td></tr><tr><td><p>Q1</p></td><td><p>Q2</p></td></tr><tr><td><p>North</p></td><td><p>10</p></td><td><p>12</p></td></tr></table>"
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "index": 7,
+          "content": [
+            {
+              "type": "text",
+              "content": "Nested table follows."
+            }
+          ]
+        },
+        {
+          "type": "table",
+          "index": 8,
+          "content": [
+            {
+              "type": "table_body",
+              "index": 8,
+              "content": "<table><tr><td><p>Outer</p></td><td><table><tr><td><p>inner A</p></td><td><p>inner B</p></td></tr></table></td></tr></table>"
+            }
+          ]
+        },
+        {
+          "type": "image",
+          "index": 9,
+          "content": [
+            {
+              "type": "image_body",
+              "index": 9,
+              "image_path": "images/page_0_image_9.jpg",
+              "content": "Figure 1"
+            }
+          ]
+        },
+        {
+          "type": "paragraph_title",
+          "index": 10,
+          "content": [
+            {
+              "type": "text",
+              "content": "Results"
+            }
+          ],
+          "anchor": "sec_results",
+          "level": 2
+        },
+        {
+          "type": "text",
+          "index": 11,
+          "content": [
+            {
+              "type": "text",
+              "content": "The results are good."
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "is_full_document": true,
+  "schema": "docvortex.middle",
+  "schema_version": "2.0"
+}

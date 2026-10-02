@@ -12,7 +12,9 @@ The source's own anchor ids are not kept by the parsers, so a destination is map
 the book's structure, in this order:
 
 1. its fragment is an ``id`` already on the page (a translation or the parsed text
-   carried the source anchor) → that anchor;
+   carried the source anchor) → that anchor; else the ``anchor`` a parser recorded on
+   one of the book's blocks (``metadata.anchor``; MinerU rewrites an EPUB's internal
+   links to such anchors) → the section holding that block;
 2. its file names a section of the export (``ch10.html`` → the section titled
    *Chapter 10*; ``app01.html`` → *Appendix A*; ``part02.html`` → *Part II*;
    ``preface.html`` → *Preface*);
@@ -50,13 +52,14 @@ from bookgraph.exports.bilingual import bilingual_section
 from bookgraph.exports.html_attrs import HTML_ATTR_RE, HTML_START_TAG_RE
 from bookgraph.exports.models import (
     INTERNAL_LINK_UNRESOLVED,
+    BilingualLayout,
     ExportSection,
     ExportWarning,
     WarningColumn,
     WarningOrigin,
 )
 from bookgraph.exports.outline import OutlineNode, flatten
-from bookgraph.models import Section
+from bookgraph.models import CanonicalBlock, Section
 from bookgraph.translation_alignment import AlignmentCheck
 
 # File types of a source book's own documents (EPUB/HTML book chapters).
@@ -85,12 +88,18 @@ class InternalLinks:
 
     ``bodies`` are the rendered section bodies that keep their anchors (in ``bilingual``
     mode the mixed column only: the original column's ids are stripped). Every section
-    id of ``outline`` is an anchor too.
+    id of ``outline`` is an anchor too. ``block_anchors`` maps a block anchor to the
+    section holding the block (:func:`block_anchor_sections`).
     """
 
-    def __init__(self, outline: list[OutlineNode], bodies: Iterable[str]) -> None:
+    def __init__(
+        self,
+        outline: list[OutlineNode],
+        bodies: Iterable[str],
+        block_anchors: Mapping[str, str] | None = None,
+    ) -> None:
         anchors = _page_anchors(bodies) | {node.section.id for node in flatten(outline)}
-        self._resolver = _Resolver(outline, anchors)
+        self._resolver = _Resolver(outline, anchors, block_anchors or {})
 
     def rewrite(self, html: str, section_id: str) -> tuple[str, list[str]]:
         """``html`` with its internal-book ``<a href>`` pointed at export anchors.
@@ -104,6 +113,22 @@ class InternalLinks:
         return html, list(dict.fromkeys(missing))
 
 
+def block_anchor_sections(
+    outline: list[OutlineNode], blocks: Mapping[str, CanonicalBlock]
+) -> dict[str, str]:
+    """Each block ``metadata.anchor`` → the id of the deepest section holding the block."""
+
+    sections: dict[str, str] = {}
+    # ``flatten`` lists a parent before its children, so a child's claim wins.
+    for node in flatten(outline):
+        for block_id in node.section.block_ids:
+            block = blocks.get(block_id)
+            anchor = block.metadata.get("anchor") if block is not None else None
+            if isinstance(anchor, str) and anchor:
+                sections[anchor] = node.section.id
+    return sections
+
+
 def resolve_section_links(
     outline: list[OutlineNode],
     rendered: dict[str, tuple[ExportSection, str]],
@@ -111,21 +136,27 @@ def resolve_section_links(
     original_source: Callable[[Section], str | None],
     lang: str,
     alignments: Mapping[str, AlignmentCheck] | None = None,
+    *,
+    layout: BilingualLayout = "columns",
+    source_lang: str | None = None,
+    block_anchors: Mapping[str, str] | None = None,
 ) -> tuple[dict[str, tuple[ExportSection, str]], list[ExportWarning]]:
     """Resolve every section's links, and pair it with its original in ``bilingual`` mode.
 
     ``rendered`` is each section's report entry and mixed rendering; ``originals`` its
     bilingual left column as ``(html, assets_embedded, assets_missing)`` (empty in
     ``translated`` mode), and ``alignments`` the translations' block alignments, which
-    split an aligned section into one row per unit. Links resolve against the anchors
-    the page keeps — the mixed renderings' (the left column's ids are stripped). Each
-    column is resolved on its own, so an unresolved link names the file it was read
-    from (``original_source`` for an original section) and the column it is in, once
-    per section: a link in both columns is reported for the mixed one. Returns the
-    sections' final entries and bodies, and the warnings in reading order.
+    split an aligned section into one row per unit; ``layout`` and ``source_lang`` are
+    passed to :func:`~bookgraph.exports.bilingual.bilingual_section`. Links resolve
+    against the anchors the page keeps — the mixed renderings' (the left column's ids
+    are stripped) — then ``block_anchors`` (:func:`block_anchor_sections`). Each column
+    is resolved on its own, so an unresolved link names the file it was read from
+    (``original_source`` for an original section) and the column it is in, once per
+    section: a link in both columns is reported for the mixed one.
+    Returns the sections' final entries and bodies, and the warnings in reading order.
     """
 
-    links = InternalLinks(outline, [body for _, body in rendered.values()])
+    links = InternalLinks(outline, [body for _, body in rendered.values()], block_anchors)
     resolved: dict[str, tuple[ExportSection, str]] = {}
     warnings: list[ExportWarning] = []
     alignments = alignments or {}
@@ -151,6 +182,8 @@ def resolve_section_links(
                 # Only a rendered translation is aligned; a fallback row has none.
                 alignment=alignments.get(section.id) if entry.artifact is not None else None,
                 block_ids=section.block_ids,
+                layout=layout,
+                source_lang=source_lang,
             )
         resolved[section.id] = (entry, body)
     return resolved, warnings
@@ -241,8 +274,11 @@ def _roman(number: int) -> str:
 
 
 class _Resolver:
-    def __init__(self, outline: list[OutlineNode], anchors: set[str]) -> None:
+    def __init__(
+        self, outline: list[OutlineNode], anchors: set[str], block_anchors: Mapping[str, str]
+    ) -> None:
         self._anchors = anchors
+        self._block_anchors = block_anchors
         self._nodes = flatten(outline)
         self._order = {node.section.id: index for index, node in enumerate(self._nodes)}
         # The chapter each section reads in: its nearest chapter ancestor (or itself),
@@ -262,6 +298,8 @@ class _Resolver:
         fragment = unquote(fragment)
         if fragment in self._anchors:
             return fragment
+        if fragment in self._block_anchors:
+            return self._block_anchors[fragment]
         path = path.split("?", 1)[0]
         if path:
             document = self._document_node(PurePosixPath(unquote(path)).stem.lower())

@@ -44,7 +44,7 @@ Current schema:
 
 - `book_id`: stable slug derived from title/path unless explicitly overridden by a future option.
 - `title`: human title derived from filename unless explicitly overridden by a future option.
-- `source_type`: currently `pdf` only for `add-book`.
+- `source_type`: `pdf`, `epub` or `docx` (the registered file is `original.<source_type>`). The `pdf` object is filled for PDFs only; an EPUB/DOCX gets the empty one.
 - `source_path`: absolute path to the user-provided source path at registration time.
 - `workspace_path`: absolute workspace path used at registration time.
 - `status`: current book-level lifecycle state.
@@ -214,13 +214,20 @@ sources/parsed/<doc_id>/<doc_id>_middle.json              # staged MinerU 4 midd
 sources/parsed/<doc_id>/<doc_id>_structured_content.json  # MinerU 4 structured content
 sources/parsed/<doc_id>/<doc_id>_model_output.json        # MinerU 4 raw model output
 sources/parsed/<doc_id>/images/...                        # MinerU extracted images
+sources/parsed/<doc_id>/<doc_id>_source_map.json          # MinerU on EPUB/DOCX: source members
 ```
 
 MinerU runner staging contract (`bookgraph parse-book`):
 
-- `MinerURunner.run(original_pdf, sources/parsed/<doc_id>)` runs
-  `mineru-kit parse <pdf> --output <work>/result.zip --format zip --tier <tier> --ocr-mode <mode>`
+- `MinerURunner.run(original_source, sources/parsed/<doc_id>)` runs
+  `mineru-kit parse <source> --output <work>/result.zip --format zip --tier <tier> --ocr-mode <mode>`
   in a temporary `sources/parsed/<doc_id>/_mineru/` work dir, removed afterwards.
+- A source MinerU parses natively (EPUB, Office, HTML: MinerU's flash-only formats)
+  always runs with `--tier flash` and never with `--pages`; a page range for it is
+  rejected. The runner then writes `<doc_id>_source_map.json`:
+  `{"source": "<file name>", "spine": [<EPUB spine members in order>] | null,
+  "images": {"images/<staged file>": "<package member with the same bytes>"}}`.
+  A PDF run removes a map left by an earlier run.
 - It stages the bundle's members flat under `sources/parsed/<doc_id>/` using
   `<doc_id>` as the filename stem: `middle_json.json` → `<doc_id>_middle.json`,
   `markdown.md` → `<doc_id>.md`, `structured_content.json` →
@@ -238,12 +245,31 @@ MinerU runner staging contract (`bookgraph parse-book`):
 - block ids are `p<page_idx>.b<index>` with MinerU's page-local block `index`, so
   they line up with MinerU's `page:{page}/block:{index}` locators;
 - `doc_title` → `title` level 1, `paragraph_title` → `title` with MinerU's level (2–6);
+  for a DOCX (`metadata.file_suffix` `docx`) a `paragraph_title` level is one lower
+  (MinerU maps `Heading N` to N+1), so it matches MarkItDown's levels;
 - `text`, `ref_text`, `page_footnote`, `code`, `index` → `text`; `list` → `list`;
   `equation` → `equation`; `image`/`table`/`chart` → the same type with
   `asset_path` from the body's `image_path` and text from captions and footnotes;
+  a table whose body has no `image_path` (EPUB/DOCX) keeps the body's table HTML as
+  its text, followed by the captions; a non-PDF image without a caption takes the body
+  text (a DOCX picture's name), while a PDF image keeps none (its body text is lettering
+  read inside the figure);
+- inline spans are joined verbatim; a `hyperlink` span becomes a Markdown link
+  `[label](url)`, `equation_inline` becomes `$…$` and `code_inline` becomes `` `…` ``;
+- a block's `anchor` is kept as `metadata.anchor`: for an EPUB an id MinerU assigns
+  (`epub-<hash>`) that its internal `#…` links point to, not the source element's `id`;
+  a DOCX bookmark name as written;
+- with a `<doc_id>_source_map.json` next to the middle JSON (non-PDF sources), an EPUB
+  block records `metadata.source_member` (the spine member at its `page_idx`) and
+  `metadata.source_locator` (`<source>!<member>`; the spine keeps one entry per
+  `itemref`, `null` for an `idref` the manifest lacks, and hrefs are percent-decoded),
+  an image block whose file matched
+  records `metadata.asset_source_member`, and `document.metadata.source_name` names
+  the source;
 - `header`, `footer`, `page_number`, `aside_text` are page furniture and dropped;
 - each block's `metadata.mineru_type` keeps the MinerU type, and
-  `document.metadata` records `mineru_schema`, `mineru_version` and `mineru_tier`.
+  `document.metadata` records `mineru_schema`, `mineru_version`, `mineru_tier` and
+  `mineru_file_suffix`.
 - `bbox` is MinerU 4's page-normalized `[x0, y0, x1, y1]` (0–1), not PDF points.
 
 If a parser writes side artifacts, it should reference them from `document.metadata` when useful.
@@ -853,7 +879,7 @@ then reads as `untracked`), or re-register it with `write_section_translation`.
 - An empty or unreadable (including non-UTF-8) body counts as untranslated and is
   reported (`translation_empty` / `translation_unreadable`).
 
-## `exports/<doc_id>.<lang>-progress.pdf` / `-bilingual.pdf` + `.report.json`
+## `exports/<doc_id>.<lang>-progress.pdf` / `-bilingual.pdf` / `.epub` + `.report.json`
 
 Owner: `bookgraph export translated-pdf`. This is derived, reader-facing output and
 can be regenerated at any time. The report (`bookgraph.exports.models.ExportReport`)
@@ -864,6 +890,7 @@ is written beside the export:
   "doc_id": "ddia",
   "title": "Designing Data-Intensive Applications",
   "lang": "vi",
+  "source_lang": null,
   "mode": "translated",
   "fallback": "original",
   "generated_at": "2026-10-02T00:00:00Z",
@@ -893,7 +920,10 @@ is written beside the export:
 }
 ```
 
-- `mode` is `translated` or `bilingual` (`--mode`).
+- `mode` is `translated` or `bilingual` (`--mode`). `source_lang` is `--source-lang`
+  (`null` when not given: original-language content is then tagged `und`).
+- `renderer` is the writer that produced `output`: `weasyprint`, `playwright`, `html`,
+  or `epub` (the EPUB 3 layout is described under *EPUB output* in `commands.md`).
 - `sections` are in the export's reading order: the source PDF outline's order when
   `book.json` has one, else `sections.jsonl` order (see `commands.md`).
 - `level` is the manifest's `Section.level`. `depth` is the heading level the section
@@ -967,6 +997,18 @@ is written beside the export:
     from the artifact, `source` otherwise. A diagnostic only: `--strict` does not
     refuse it yet.
   - `translation_empty`, `translation_unreadable`: the section falls back.
+  - `xhtml_repaired`: EPUB output only. The section's HTML had to be changed to be
+    well-formed XHTML beyond the routine fixes (self-closing void elements, escaping,
+    implied end tags): a stray end tag or an unclosed element, a dropped
+    `script`/`style`/`iframe`/`object`/`embed` element, obsolete tag, attribute name
+    or event handler, or an element HTML does not define kept as text. One per
+    section and side, listing what was changed. A repair of the translation names the
+    artifact (`origin: translation`, `column: mixed`); a repair of the original text
+    names `document.json` / `sections.jsonl` (`origin: source`), with `column:
+    original` for the original side of a translated or skipped section in `bilingual`
+    mode, `mixed` otherwise. Each side of a `bilingual` pair is normalised on its own,
+    so broken markup on one side never spills into the other. Found while writing, so a `--check` run
+    does not report it. A diagnostic only: `--strict` does not refuse it.
   - `asset_captions_only` / `asset_text_sparse`: ingest quality warnings, passed
     through for rendered sections whose source prose is mostly captions.
 

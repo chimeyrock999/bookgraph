@@ -13,14 +13,34 @@ locators (``.../page:{page}/block:{index}``), so canonical block ids keep it
 (``p{page}.b{index}``) instead of renumbering. Running headers, footers, page
 numbers and margin notes are page furniture, not reading content, and are dropped
 the way 3.x moved them to ``discarded_blocks``.
+
+Inline spans are joined verbatim, as MinerU's own Markdown renderer joins them, and
+hyperlinks stay Markdown links; a block's ``anchor`` is kept in its metadata so
+internal links have targets. For an EPUB that anchor is an id MinerU assigns
+(``epub-<hash>``, which its internal ``#…`` links are rewritten to), not the source
+element's id; a DOCX bookmark name is kept as written. A table
+MinerU read natively (EPUB/DOCX) has no image, only its HTML, so that HTML is the
+block text and keeps colspan, rowspan and nested tables.
+
+Non-PDF sources (MinerU's ``flash``-only formats) get two more rules:
+
+- provenance from the source map :class:`MinerURunner` stages next to the middle
+  JSON (:mod:`bookgraph.parsers.mineru_source_map`): an EPUB block records the spine
+  member its page came from as ``<source.epub>!<member>``;
+- DOCX heading levels are normalized. MinerU reserves level 1 for the ``Title``
+  style and maps ``Heading N`` to level N+1, while MarkItDown maps ``Heading N`` to
+  N; the reader shifts DOCX section titles back by one so switching adapters does
+  not change the sections.
 """
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
 from bookgraph.models import BlockType, CanonicalBlock, Document
+from bookgraph.parsers.mineru_source_map import read_source_map
 from bookgraph.utils import doc_id_from_path
 
 MIDDLE_V2_SCHEMA = "docvortex.middle"
@@ -47,6 +67,11 @@ _TYPE_MAP: dict[str, BlockType] = {
 # Visual blocks keep their file on the ``*_body`` child; captions and footnotes are
 # the human-readable text, matching what the 3.x adapter surfaced for assets.
 _VISUAL_BODY_TYPES = frozenset({"image_body", "table_body", "chart_body"})
+_VISUAL_TYPES = frozenset({"image", "table", "chart"})
+
+# Inline span types of the ``docvortex.middle`` contract. Any other ``content`` list
+# item is a nested child block (a list item, an index entry).
+_INLINE_SPAN_TYPES = frozenset({"text", "hyperlink", "equation_inline", "code_inline"})
 
 
 def is_middle_v2(payload: object) -> bool:
@@ -70,6 +95,9 @@ def parse_middle_v2(payload: dict[str, Any], source: Path, parser_name: str) -> 
     if not isinstance(pages, list):
         raise ValueError(f"{source.name}: {MIDDLE_V2_SCHEMA} payload has no 'pages' list.")
 
+    metadata = payload.get("metadata") or {}
+    file_suffix = str(metadata.get("file_suffix") or "pdf").lower()
+    provenance = _Provenance(read_source_map(source) if file_suffix != "pdf" else None)
     blocks: list[CanonicalBlock] = []
     for page in pages:
         page_idx = page.get("page_idx")
@@ -81,22 +109,26 @@ def parse_middle_v2(payload: dict[str, Any], source: Path, parser_name: str) -> 
             index = raw_block.get("index")
             block_index = index if isinstance(index, int) else position
             bbox = raw_block.get("bbox")
+            asset_path = _asset_path(raw_block)
+            block_metadata: dict[str, str | int | float | bool | None] = {"mineru_type": raw_type}
+            if isinstance(anchor := raw_block.get("anchor"), str) and anchor:
+                block_metadata["anchor"] = anchor
+            block_metadata.update(provenance.locate(page_idx, asset_path))
             blocks.append(
                 CanonicalBlock(
                     id=f"p{page_idx}.b{block_index}",
                     type=block_type,
-                    level=_title_level(raw_block) if block_type == "title" else None,
-                    text=_block_text(raw_block),
+                    level=(_title_level(raw_block, file_suffix) if block_type == "title" else None),
+                    text=_block_text(raw_block) or _uncaptioned_image_text(raw_block, file_suffix),
                     page_idx=page_idx,
                     bbox=tuple(bbox) if isinstance(bbox, list) and len(bbox) == 4 else None,
-                    asset_path=_asset_path(raw_block),
+                    asset_path=asset_path,
                     source_path=str(source),
                     order=len(blocks),
-                    metadata={"mineru_type": raw_type},
+                    metadata=block_metadata,
                 )
             )
 
-    metadata = payload.get("metadata") or {}
     mineru = (payload.get("extensions") or {}).get("mineru") or {}
     producer = metadata.get("producer") or {}
     document_props = metadata.get("document") or {}
@@ -113,13 +145,57 @@ def parse_middle_v2(payload: dict[str, Any], source: Path, parser_name: str) -> 
             "mineru_schema": f"{MIDDLE_V2_SCHEMA}/{version}",
             "mineru_version": producer.get("version"),
             "mineru_tier": mineru.get("tier"),
+            "mineru_file_suffix": file_suffix,
+            **provenance.document_metadata(),
         },
     )
 
 
-def _title_level(raw_block: dict[str, Any]) -> int:
+class _Provenance:
+    """Where a block of a non-PDF source came from, read from the staged source map."""
+
+    def __init__(self, source_map: dict[str, Any] | None) -> None:
+        source_map = source_map or {}
+        source = source_map.get("source")
+        spine = source_map.get("spine")
+        images = source_map.get("images")
+        self.source = source if isinstance(source, str) else None
+        self.spine = (
+            [m if isinstance(m, str) else None for m in spine] if isinstance(spine, list) else None
+        )
+        self.images = (
+            {str(k): str(v) for k, v in images.items()} if isinstance(images, dict) else {}
+        )
+
+    def locate(
+        self, page_idx: object, asset_path: str | None
+    ) -> dict[str, str | int | float | bool | None]:
+        located: dict[str, str | int | float | bool | None] = {}
+        if self.source is None:
+            return located
+        spine = self.spine or []
+        # An itemref the manifest does not name is a page with no member (``None``).
+        member = (
+            spine[page_idx] if isinstance(page_idx, int) and 0 <= page_idx < len(spine) else None
+        )
+        if member is not None:
+            located["source_member"] = member
+            located["source_locator"] = f"{self.source}!{member}"
+        if asset_path and (asset_member := self.images.get(asset_path)):
+            located["asset_source_member"] = asset_member
+        return located
+
+    def document_metadata(self) -> dict[str, str | int | float | bool | None]:
+        return {"source_name": self.source} if self.source is not None else {}
+
+
+def _title_level(raw_block: dict[str, Any], file_suffix: str) -> int:
     level = raw_block.get("level")
-    return level if isinstance(level, int) and level >= 1 else 1
+    level = level if isinstance(level, int) and level >= 1 else 1
+    if file_suffix == "docx" and raw_block.get("type") == "paragraph_title":
+        # MinerU keeps level 1 for the Title style: Heading N arrives as N+1.
+        return max(level - 1, 1)
+    return level
 
 
 def _asset_path(raw_block: dict[str, Any]) -> str | None:
@@ -133,32 +209,96 @@ def _block_text(raw_block: dict[str, Any]) -> str:
     content = raw_block.get("content")
     if isinstance(content, str):
         return content.strip()
-    if raw_block.get("type") in {"image", "table", "chart"}:
-        # The body holds the asset (and table HTML); captions/footnotes are the text.
-        parts = [
-            _block_text(child)
-            for child in _children(raw_block)
-            if child.get("type") not in _VISUAL_BODY_TYPES
-        ]
-    else:
-        parts = [_inline_text(item) for item in content or [] if isinstance(item, dict)]
+    if raw_block.get("type") in _VISUAL_TYPES:
+        return _visual_text(raw_block)
+    return _content_text(content or [])
+
+
+def _visual_text(raw_block: dict[str, Any]) -> str:
+    """Captions and footnotes, after the table HTML when there is no rendered asset.
+
+    A PDF table or figure keeps its image on the ``*_body`` child, so its text is the
+    caption. A table MinerU read natively (EPUB/DOCX) has only HTML; dropping it would
+    leave an empty block, so the HTML is kept as the block's text.
+    """
+
+    children = _children(raw_block)
+    notes = " ".join(
+        text
+        for text in (_block_text(c) for c in children if c.get("type") not in _VISUAL_BODY_TYPES)
+        if text
+    )
+    body = next((c for c in children if c.get("type") in _VISUAL_BODY_TYPES), None)
+    body_text = body.get("content") if body is not None else None
+    body_text = body_text.strip() if isinstance(body_text, str) else ""
+    if body is not None and not body.get("image_path") and raw_block.get("type") == "table":
+        return "\n\n".join(part for part in (body_text, notes) if part)
+    return notes
+
+
+def _uncaptioned_image_text(raw_block: dict[str, Any], file_suffix: str) -> str:
+    """A non-PDF picture's own text (a DOCX picture's name) when it has no caption.
+
+    For a PDF the body text is whatever was read inside the figure (a cover's or a
+    diagram's lettering), not a description of it, so PDFs keep no text here.
+    """
+
+    if file_suffix == "pdf" or raw_block.get("type") != "image":
+        return ""
+    for child in _children(raw_block):
+        if child.get("type") == "image_body" and isinstance(text := child.get("content"), str):
+            return text.strip()
+    return ""
+
+
+def _content_text(items: list[Any]) -> str:
+    """Join a block's content: inline spans verbatim, nested child blocks by a space."""
+
+    parts: list[str] = []
+    run: list[str] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") in _INLINE_SPAN_TYPES and (
+            isinstance(item.get("content"), str) or item.get("type") == "hyperlink"
+        ):
+            run.append(_inline_text(item))
+            continue
+        parts.append("".join(run).strip())
+        run = []
+        parts.append(_block_text(item))
+    parts.append("".join(run).strip())
     return " ".join(part for part in parts if part)
 
 
-def _inline_text(item: dict[str, Any]) -> str:
-    """Flatten one inline span or nested child block to plain text."""
+def _inline_text(span: dict[str, Any]) -> str:
+    """Render one inline span the way MinerU's Markdown output writes it."""
 
-    content = item.get("content")
-    if isinstance(content, str):
-        return content.strip()
-    if isinstance(content, list):
-        # Hyperlink spans and list/index/code children nest further content.
-        return " ".join(
-            text
-            for text in (_inline_text(child) for child in content if isinstance(child, dict))
-            if text
-        )
-    return ""
+    span_type = span.get("type")
+    content = span.get("content")
+    if span_type == "hyperlink":
+        label = "".join(
+            _inline_text(child) for child in content or [] if isinstance(child, dict)
+        ).strip()
+        url = span.get("url")
+        if not label or not isinstance(url, str) or not url or url == ".":
+            return label
+        return f"[{_escape_link_label(label)}]({_escape_link_url(url)})"
+    if not isinstance(content, str):
+        return ""
+    if span_type == "equation_inline":
+        return f"${content}$"
+    if span_type == "code_inline":
+        return f"`{content}`"
+    return content
+
+
+def _escape_link_label(label: str) -> str:
+    return re.sub(r"(?<!\\)([\[\]])", r"\\\1", label)
+
+
+def _escape_link_url(url: str) -> str:
+    return url.replace("\\", "%5C").replace(" ", "%20").replace("(", "%28").replace(")", "%29")
 
 
 def _children(raw_block: dict[str, Any]) -> list[dict[str, Any]]:

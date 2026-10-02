@@ -104,12 +104,18 @@ def document_html(
         f'<meta name="generator" content="bookgraph export translated-pdf">\n'
         f"<title>{escape(report.title)}</title>\n"
         f"<style>{_STYLE}{page_style(report)}</style>\n</head>\n<body>\n"
-        + (_status_frontmatter(report) if show_status else _title_page(report))
+        + front_matter(report, show_status=show_status)
         + toc
         + "<main>\n"
         + main
         + "</main>\n</body>\n</html>\n"
     )
+
+
+def front_matter(report: ExportReport, *, show_status: bool) -> str:
+    """The title page: the title (and bilingual legend), or the status frontmatter."""
+
+    return _status_frontmatter(report) if show_status else _title_page(report)
 
 
 def _title_page(report: ExportReport) -> str:

@@ -80,18 +80,19 @@ A self-serve agent drives an entire session with these tools alone:
      neighbourhood (parent/prev/next/children), its `concepts`, and any `summary`
      already written for it.
    - Both `get_section` and `get_context` return the section's figures/tables as a
-     structured `assets` list (each `{block_id, type, path, caption, order, page_idx,
-     type_confidence, suggested_type}`) so you never have to grep
+     structured `assets` list (each `{block_id, type, path, link, caption, order,
+     page_idx, type_confidence, suggested_type}`) so you never have to grep
      `sources/parsed/<doc_id>/document.json` for image paths. `path` resolves under the
-     workspace; open it directly to OCR/inspect labels or table content. `type` is the
+     workspace; open it directly to OCR/inspect labels or table content. `link` is the
+     relative reference (e.g. `images/fig1.png`) to write into a translation. `type` is the
      parser's guess: when `suggested_type` is set the caption contradicts it (a figure
      emitted as a `table`), so trust the file over the label. Pass
      `include_assets=false` to omit.
    - Every section also carries `warnings` — the data-quality anomalies found in it
-     (each `{code, message, block_id}`): a broken page span (`page_range_inverted`,
+     (each `{code, message, block_id, reference}`): a broken page span (`page_range_inverted`,
      `page_range_incomplete`), a disputed asset type (`asset_type_ambiguous`), an asset
      file the parser never staged (`asset_file_missing` — the figure is gone, not just
-     unlisted), or a section whose text is only captions / almost no prose around its
+     unlisted; `reference` is the path the parsed document points at), or a section whose text is only captions / almost no prose around its
      figures (`asset_captions_only`, `asset_text_sparse`). Read them before trusting `text` or
      the page provenance; they are the same warnings ingest recorded in
      `sources/sections/<doc_id>/quality.json`.
@@ -128,8 +129,30 @@ A self-serve agent drives an entire session with these tools alone:
      result's `structure_issues` lists any that changed.
      `list_section_artifacts(doc_id, lang)` lists every cached translation with its
      status, so a job can redo the `stale` ones after a re-segment.
+   - **Keep artifacts publication-clean — use the right channel.** A translation
+     body, annotation summary or gloss is book content only:
+     - QA/checker results and terminology decisions → `write_section_translation(...,
+       notes="...")` (stored in the registry sidecar, returned by
+       `get_section_translation`, never exported);
+     - `MEDIA:/path` markers, `Đã lưu cache/enrich và mark read: …` and other
+       progress lines → your final chat reply;
+     - export coverage/freshness/missing assets → the export's `.report.json`.
+
+     Write translations only through `write_section_translation`, the only
+     translation store. Never write translation files yourself, not under
+     `translations/` and not in any directory of your own (such as a
+     `translation_cache/`): nothing reads them, so the section stays untranslated in
+     the export and in batch completion. Link each figure/table by its
+     `AssetRef.link` (relative, e.g. `images/fig1.png`) — `AssetRef.path` is the
+     absolute file to open, not to write. In a translation job, always pass
+     `translation_lang` to `complete_reading_batch`: without it, nothing checks that
+     a translation was saved. The server sends these rules as its MCP `instructions`
+     at connect time, and the `bookgraph-reader` skill
+     (`.claude/skills/bookgraph-reader/SKILL.md`) spells out the workflow.
    - `mark_read(plan_id)` — mark the section read (defaults to the next unread) and
-     persist progress.
+     persist progress. It checks nothing: when the batch involved translation or
+     annotation, advance with `complete_reading_batch` instead (see below), which runs
+     the readiness checks first.
 4. `list_plans()` — resume or report progress across sessions (`completed`/`total`/`done`).
    For "how many sections are left in this chapter?", call
    `get_plan_progress(plan_id)` — it answers from the plan + hierarchy without
@@ -146,7 +169,7 @@ and the report lists every reason:
 
 ```text
 get_next_section(plan_id)                       # the batch
-  … translate → translations/vi/<doc_id>/<section_id>.md
+  … write_section_translation(doc_id, section_id, "vi", content, ...)
   … open each asset path, annotate_section(...)
   … bookgraph index build <ws> <doc_id>         # or index="deferred", see below
 complete_reading_batch(plan_id,
@@ -162,7 +185,9 @@ By default it requires, per section, a valid annotation, an index that reflects 
 Relax what does not apply: `require_annotation=False`, `require_assets=False`,
 `index="deferred"` (report a stale index as `index_rebuild_needed` without blocking —
 for agents that cannot run the CLI and rely on the nightly rebuild) or
-`index="ignore"`. Add `translation_lang` and `artifacts` (path templates with
+`index="ignore"`. A translation-only job (no annotating, no index build) passes
+`translation_lang="vi", require_annotation=False, index="ignore"` (or `"deferred"`)
+plus the `inspected_assets` it opened. Add `translation_lang` and `artifacts` (path templates with
 `{doc_id}`/`{section_id}`/`{plan_id}`) for outputs your job produces. If you read
 boundary-clipped batches (`get_next_section(plan_id, stop_at_boundary=True)`), pass the
 same `stop_at_boundary` / `chapter_level` here so the default batch is the one you were

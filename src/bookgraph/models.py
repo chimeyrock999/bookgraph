@@ -121,6 +121,9 @@ class SectionArtifact(BaseModel):
     registration is no longer vouched for by this record.
     ``includes_assets`` records whether the section's figures/tables were carried into
     the artifact (a translation of the prose alone is incomplete for an asset section).
+    ``notes`` is the writer's free-text side channel — QA/checker results, terminology
+    decisions, job remarks. It lives only here, never in the body, so a translator has
+    a place for everything that is not book content.
     """
 
     type: SectionArtifactType = "translation"
@@ -133,6 +136,7 @@ class SectionArtifact(BaseModel):
     includes_assets: bool = False
     model: str | None = None
     created_at: str | None = None
+    notes: str | None = None
 
 
 # What a translation must carry over unchanged from its source section (see

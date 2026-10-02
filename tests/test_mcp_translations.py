@@ -350,3 +350,22 @@ def test_absolute_image_path_is_never_a_carried_figure(tmp_path: Path) -> None:
     assert [(i.kind, i.target, i.change) for i in written.structure_issues] == [
         ("image", str(absolute), "added")
     ]
+
+
+def test_notes_are_stored_beside_the_translation_not_in_it(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path, _section("deep-work.a"))
+    notes = "QA: ✅ glossary checked; kept 'deep work' untranslated.\nMEDIA:/tmp/review.pdf"
+
+    service.write_section_translation(
+        workspace, "deep-work", "deep-work.a", "vi", "# Bản dịch\n", notes=notes
+    )
+    view = service.get_section_translation(workspace, "deep-work", "deep-work.a", "vi")
+
+    assert view.status == "fresh"
+    assert view.notes == notes
+    assert view.content == "# Bản dịch\n"
+    assert view.metadata_path is not None and "glossary checked" in Path(
+        view.metadata_path
+    ).read_text(encoding="utf-8")
+    listed = service.list_section_artifacts(workspace, "deep-work", "vi").artifacts
+    assert [entry.notes for entry in listed] == [notes]

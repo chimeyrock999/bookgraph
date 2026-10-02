@@ -1074,7 +1074,11 @@ bookgraph export translated-pdf /path/to/workspace ddia --check           # cove
     so finer alignment is not attempted. Figures, tables and code appear in the
     column whose content carries them (the original's figures on the left, the
     translation's own image links and code on the right); an untranslated section
-    shows the original in both columns.
+    shows the original in both columns. HTML anchors (`id`, and `name` on `<a>`) are
+    kept only in the right column, so every id on the page is unique and in-page links
+    from either column land in the reading edition. The left column is tagged
+    `lang="und"` (no source language is stored), and only right-column headings feed
+    the PDF outline.
 - `--fallback original|skip|fail` (default `original`). This controls what happens to
   a section that has no translation (in `bilingual` mode, to its right column):
   - `original` renders the original section, labelled *Untranslated — original text*;
@@ -1092,7 +1096,10 @@ bookgraph export translated-pdf /path/to/workspace ddia --check           # cove
 - `--strict`: exit `1` without writing anything if any asset is missing, remote, or
   unsupported, a translation is `stale` (`translation_stale`), or a registered
   translation left out its section's figures/tables (`translation_missing_assets`).
-  An `untracked` translation only warns.
+  An `untracked` translation only warns. In `bilingual` mode the left column counts
+  too: a missing original asset of a **translated** section is refused, even though
+  `translated` mode never shows it. The same workspace can therefore pass
+  `--strict` in `translated` mode and fail it in `bilingual` mode.
 - `--check`: preflight only. Prints coverage and warnings and writes nothing. With
   `--strict`, it exits `1` whenever the real export would be refused.
 - The `--out` suffix must match the renderer: `.pdf` for `weasyprint`/`playwright`,

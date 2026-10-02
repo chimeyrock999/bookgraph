@@ -94,7 +94,7 @@ class ExportReport(BaseModel):
     document). ``original_sections`` / ``skipped_sections`` count the sections that
     took the ``--fallback`` path. ``unpaired_sections`` counts bilingual rows with no
     translation to compare against (``0`` in ``translated`` mode), and
-    ``assets_missing`` every *Missing asset* placeholder on the page.
+    ``assets_missing`` the asset references that could not be embedded, per column.
     ``output``/``renderer`` stay ``None`` for a preflight-only run.
     """
 

@@ -18,6 +18,7 @@ from bookgraph.exports.models import (
     TRANSLATION_UNREADABLE,
     TRANSLATION_UNTRACKED,
     ExportReport,
+    FallbackPolicy,
 )
 from bookgraph.exports.renderers import (
     ExportRenderer,
@@ -733,7 +734,7 @@ def _section_body(html: str, section_id: str) -> str:
 def _columns(html: str, section_id: str) -> tuple[str, str]:
     match = re.fullmatch(
         r'<table class="bilingual"><tr>'
-        r'<td class="column column-original" data-column="original">(.*)</td>'
+        r'<td class="column column-original" data-column="original" lang="und">(.*)</td>'
         r'<td class="column column-mixed" data-column="mixed" lang="vi">(.*)</td>'
         r"</tr></table>",
         _section_body(html, section_id),
@@ -901,3 +902,94 @@ def test_real_pdf_backend_renders_bilingual(workspace: WorkspacePaths, backend: 
         pytest.skip(str(exc))
 
     assert output.read_bytes().startswith(b"%PDF")
+
+
+def _rewrite_blocks(paths: WorkspacePaths, texts: dict[str, str]) -> None:
+    """Replace some original blocks' text and re-segment the document."""
+
+    blocks = [b.model_copy(update={"text": texts.get(b.id, b.text)}) for b in _blocks()]
+    document = Document(doc_id=DOC, title="Tiny Book", blocks=blocks)
+    write_document(document, paths.sources_parsed / DOC)
+    write_sections(HeadingSegmenter(target_level=2).segment(document), paths.sources_sections / DOC)
+
+
+def test_bilingual_html_ids_are_unique_and_anchors_land_in_the_mixed_column(
+    workspace: WorkspacePaths,
+) -> None:
+    _rewrite_blocks(
+        workspace,
+        {
+            "b1": 'Footnote <a id="fn1"></a> [see](#fn1)',
+            "b5": 'Second section <a name="note2"></a> text.',
+        },
+    )
+    chapter, second, _ = _section_ids(workspace)
+    _register(workspace, chapter, '# Chương Một\n\nChú thích <a id="fn1"></a> [xem](#fn1)\n')
+
+    mixed = build_translated_export(workspace, DOC, lang="vi", generated_at=GENERATED_AT)
+    export = build_translated_export(
+        workspace, DOC, lang="vi", mode="bilingual", generated_at=GENERATED_AT
+    )
+
+    anchors = re.findall(r'\s(?:id|name)="([^"]*)"', export.html)
+    assert len(anchors) == len(set(anchors)), anchors
+    for section_id in (chapter, second):
+        left, right = _columns(export.html, section_id)
+        assert right == _section_body(mixed.html, section_id)  # mixed column keeps them
+        assert 'id="fn1"' not in left and 'name="note2"' not in left
+    left, _ = _columns(export.html, chapter)
+    assert '<a href="#fn1">see</a>' in left  # the link target itself is unchanged
+    assert 'id="fn1"' in _columns(export.html, chapter)[1]
+    assert 'name="note2"' in _columns(export.html, second)[1]
+
+
+def test_bilingual_columns_are_styled_for_pdf_outline_images_and_language(
+    workspace: WorkspacePaths,
+) -> None:
+    export = build_translated_export(
+        workspace, DOC, lang="vi", mode="bilingual", generated_at=GENERATED_AT
+    )
+    html = export.html
+
+    # Only the mixed column's headings feed the PDF outline (WeasyPrint bookmarks).
+    assert "td.column-original :is(h1, h2, h3, h4, h5, h6) { bookmark-level: none; }" in html
+    # Raw HTML images (outside figure/p) stay inside their column too.
+    assert "td.column img { max-width: 100%; height: auto;" in html
+    # The original is not tagged as the target language.
+    assert '<td class="column column-original" data-column="original" lang="und">' in html
+
+
+@pytest.mark.parametrize(
+    ("fallback", "wording"),
+    [
+        ("original", "Untranslated sections repeat the original text."),
+        ("skip", "Untranslated sections are left out."),
+    ],
+)
+def test_bilingual_legend_describes_the_fallback_in_reader_terms(
+    workspace: WorkspacePaths, fallback: FallbackPolicy, wording: str
+) -> None:
+    html = build_translated_export(
+        workspace, DOC, lang="vi", mode="bilingual", fallback=fallback, generated_at=GENERATED_AT
+    ).html
+
+    assert "Left column: original text. Right column: vi reading edition." in html
+    assert wording in html
+    assert f"{fallback} fallback" not in html
+
+
+def test_bilingual_strict_also_covers_original_assets_of_translated_sections(
+    workspace: WorkspacePaths,
+) -> None:
+    _, second, _ = _section_ids(workspace)
+    _register(workspace, second, "# Phần Hai\n\nĐã dịch.\n")
+
+    translated = build_translated_export(workspace, DOC, lang="vi", generated_at=GENERATED_AT)
+    bilingual = build_translated_export(
+        workspace, DOC, lang="vi", mode="bilingual", generated_at=GENERATED_AT
+    )
+
+    assert translated.report.strict_warnings == []
+    assert [(w.code, w.section_id) for w in bilingual.report.strict_warnings] == [
+        (ASSET_MISSING, second)
+    ]

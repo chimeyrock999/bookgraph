@@ -98,6 +98,13 @@ _HTML_IMG_SCAN_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 
+# Any start tag (attribute-aware, like ``_HTML_IMG_SCAN_RE``), with HTML comments
+# matched first so a commented-out tag is left alone.
+_HTML_START_TAG_RE = re.compile(
+    rf"(?P<comment><!--.*?-->)|<(?P<name>[A-Za-z][\w:-]*)(?P<attrs>(?:\s+{_HTML_ATTR})*)\s*(?P<end>/?>)",
+    re.DOTALL,
+)
+
 # Ingest quality warnings worth repeating in an export report: the section's source
 # prose is mostly captions, so the reader (or translator) should inspect its assets.
 _PASSTHROUGH_QUALITY_CODES = frozenset({ASSET_CAPTIONS_ONLY, ASSET_TEXT_SPARSE})
@@ -335,7 +342,9 @@ class _Assembler:
 
         counter = _AssetCounter()
         body = _heading(section.level, section.title) + self._original_body(section, counter)
-        return body, counter
+        # The mixed column carries the same anchors (a translation keeps them; a fallback
+        # row repeats the original), so only it keeps ids and in-page links land there.
+        return _strip_anchor_ids(body), counter
 
     def _entry(
         self,
@@ -756,6 +765,27 @@ def _heading(level: int, title: str) -> str:
     return f"<{tag}>{escape(title)}</{tag}>"
 
 
+def _strip_anchor_ids(html: str) -> str:
+    """Drop ``id`` attributes, and ``name`` on ``<a>``, from every start tag in ``html``.
+
+    Link targets (``href``) are untouched; only the anchors they point at go.
+    """
+
+    def replace(match: re.Match[str]) -> str:
+        if match.group("comment"):
+            return match.group(0)
+        tag = match.group("name")
+        dropped = {"id", "name"} if tag.lower() == "a" else {"id"}
+        attrs = "".join(
+            f" {attr.group(0)}"
+            for attr in _HTML_ATTR_RE.finditer(match.group("attrs"))
+            if attr.group(1).lower() not in dropped
+        )
+        return f"<{tag}{attrs}{match.group('end')}"
+
+    return _HTML_START_TAG_RE.sub(replace, html)
+
+
 def _bilingual_row(original: str, mixed: str, lang: str) -> str:
     """One section as a two-column row: original left, mixed reading edition right.
 
@@ -765,7 +795,9 @@ def _bilingual_row(original: str, mixed: str, lang: str) -> str:
 
     return (
         '<table class="bilingual"><tr>'
-        f'<td class="column column-original" data-column="original">{original}</td>'
+        # No source language is stored, so the original is "undetermined" rather than
+        # inheriting the page's target language.
+        f'<td class="column column-original" data-column="original" lang="und">{original}</td>'
         f'<td class="column column-mixed" data-column="mixed" lang="{escape(lang, quote=True)}">'
         f"{mixed}</td></tr></table>"
     )
@@ -821,10 +853,15 @@ html { font-size: 10pt; }
 table.bilingual { width: 100%; table-layout: fixed; border-collapse: collapse; margin: 0;
   font-size: inherit; }
 table.bilingual td.column { width: 50%; border: none; padding: 0 8pt; vertical-align: top;
-  overflow-wrap: anywhere; }
+  overflow-wrap: break-word; }
 table.bilingual td.column-original { border-right: 1px solid #ccc; padding-left: 0; }
 table.bilingual td.column-mixed { padding-right: 0; }
-td.column img { max-height: 160mm; }
+td.column pre, td.column code, td.column a { overflow-wrap: anywhere; }
+/* A nested table is held to its column: words wrap at boundaries and only a word
+   wider than its cell breaks, instead of the table running into the other column. */
+td.column table { width: 100%; table-layout: fixed; font-size: 8pt; }
+td.column img { max-width: 100%; height: auto; max-height: 160mm; }
+td.column-original :is(h1, h2, h3, h4, h5, h6) { bookmark-level: none; }
 """
 
 # Self-contained page: images are data: URIs and nothing else may load or run, so a
@@ -845,13 +882,20 @@ _FRESHNESS_NOTES = {
 _FRESHNESS_LABELS = {"stale": "may be outdated", "untracked": "not tracked"}
 
 
+# How the bilingual legend describes untranslated rows. ``fail`` never writes an export.
+_LEGEND_FALLBACK = {
+    "original": "Untranslated sections repeat the original text.",
+    "skip": "Untranslated sections are left out.",
+    "fail": "",
+}
+
+
 def _document_html(report: ExportReport, bodies: list[str]) -> str:
     percent = f"{report.coverage * 100:.1f}%"
     bilingual = report.mode == "bilingual"
     legend = (
-        '<p class="columns-legend">Left column: original text. Right column: the '
-        f"{escape(report.lang)} reading edition (translation where available, otherwise "
-        f"the {escape(report.fallback)} fallback).</p>"
+        '<p class="columns-legend">Left column: original text. Right column: '
+        f"{escape(report.lang)} reading edition. {_LEGEND_FALLBACK[report.fallback]}</p>"
         if bilingual
         else ""
     )

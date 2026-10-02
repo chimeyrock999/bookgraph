@@ -675,9 +675,10 @@ is written beside the export:
   to compare against (always `0` in `translated` mode).
 - `assets_embedded` / `assets_missing` count the mixed rendering;
   `original_assets_embedded` / `original_assets_missing` count the `bilingual` left
-  column (`null` in `translated` mode). The top-level `assets_missing` is every
-  *Missing asset* placeholder on the page. A missing original asset shown in both
-  columns of an untranslated row is counted twice there but warned about once.
+  column (`null` in `translated` mode). The top-level `assets_missing` counts the
+  asset references that could not be embedded, per column. A missing original asset
+  shown in both columns of an untranslated row is counted twice there but warned
+  about once.
 - `freshness` is the translation's registry status (`fresh`, `stale`, or
   `untracked`) for a `translated` section, `null` otherwise.
 - `generated_at` follows `SOURCE_DATE_EPOCH` when it is set. With unchanged inputs and

@@ -1038,7 +1038,8 @@ Requires `llm-wiki-compiler` >= 1.4.0 for `--compile` (see
   and no `llmwiki/.llmwiki/config.json` yet), it writes
   `{"version": 1, "sources": {"recursive": true}}` to `.llmwiki/config.json` and
   stages `llmwiki/sources/<doc_id>/<section_id>.md`, so the viewer's Sources
-  screen groups sections by book. An existing `config.json` is never rewritten;
+  screen lists each section as `<doc_id>/<section_id>.md` and a book's sections
+  sort together. An existing `config.json` is never rewritten;
   sources are nested only if it already sets `sources.recursive: true`. A project
   staged flat (`llmwiki/sources/<section_id>.md`) before this layout keeps the flat
   layout, so re-running the bridge never leaves a second copy of every section for
@@ -1116,7 +1117,7 @@ bookgraph llmwiki serve /path/to/workspace --print
 Opens the workspace's compiled llmwiki project in llmwiki's local, read-only web
 viewer (`llmwiki view`, `llm-wiki-compiler` >= 1.4.0). This is BookGraph's wiki
 UI: compiled concept pages with citation chips back to source line ranges,
-sources grouped by book, the concept graph, health/citation checks, the
+sources listed as `<doc_id>/<section_id>.md`, the concept graph, health/citation checks, the
 `--review` queue and full-text search. The reading loop stays in BookGraph MCP.
 See `docs/mcp/llmwiki-integration.md`.
 

@@ -120,7 +120,7 @@ def test_llmwiki_bridge_stages_sections_with_provenance(tmp_path: Path) -> None:
     assert "staged: 2" in result.output
     assert "unchanged: 0" in result.output
 
-    # A new project groups sources by book: sources/<doc_id>/<section_id>.md.
+    # A new project stages sources nested per book: sources/<doc_id>/<section_id>.md.
     intro = tmp_path / "llmwiki" / "sources" / "deep-work" / "deep-work.intro.md"
     assert intro.is_file()
     text = intro.read_text()

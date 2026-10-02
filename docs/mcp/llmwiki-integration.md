@@ -79,7 +79,7 @@ Properties of the bridge:
 
 - **No full-book truncation** — one bounded source file per section.
 - **Idempotent** — an unchanged section is left untouched on disk, so llmwiki's own incremental compile skips it and a daily batch is added without reprocessing the whole book.
-- **Grouped by book** — when the bridge creates the llmwiki project it writes `.llmwiki/config.json` with `{"version": 1, "sources": {"recursive": true}}` and stages under `sources/<doc_id>/`, so the viewer's Sources screen lists each book as one folder. It never rewrites an existing `config.json`, and a project staged flat before this layout stays flat (otherwise every section would be compiled twice). Staged files are regular files; llmwiki >= 1.3 does not compile symlinked sources.
+- **Grouped by book** — when the bridge creates the llmwiki project it writes `.llmwiki/config.json` with `{"version": 1, "sources": {"recursive": true}}` and stages under `sources/<doc_id>/`, so the viewer's Sources screen lists each section as `<doc_id>/<section_id>.md` and a book's sections sort together. It never rewrites an existing `config.json`, and a project staged flat before this layout stays flat (otherwise every section would be compiled twice). Staged files are regular files; llmwiki >= 1.3 does not compile symlinked sources.
 - **Provenance preserved** — each staged file's frontmatter records `bookgraph_doc_id` and `bookgraph_section_id`.
 - **Canonical state untouched** — the bridge only *writes* derived files into the isolated `llmwiki/` subtree; it never mutates BookGraph's canonical inputs and never touches BookGraph's own `wiki/` or `sources/` trees.
 
@@ -103,7 +103,7 @@ bookgraph llmwiki view /path/to/workspace --print    # just print `cd … && llm
 
 - a dashboard, the compiled concept pages (`#/concepts`, with a freshness filter) and full-text search;
 - per-paragraph citation chips linking back to source line ranges, which point at the staged BookGraph sections;
-- `#/sources`, grouped by book thanks to the `sources/<doc_id>/` layout;
+- `#/sources`, which lists each section as `<doc_id>/<section_id>.md`, so a book's sections sort together;
 - `#/graph`, the force-directed concept graph;
 - `#/health` (lint, freshness, citation traceability) and `#/reviews`, the queue filled by `bridge --compile --review`.
 

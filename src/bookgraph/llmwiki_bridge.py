@@ -2,7 +2,8 @@
 
 BookGraph's canonical reading graph lives in ``sources/sections/<doc_id>/`` and
 ``indexes/bookgraph.db``. The standalone ``llm-wiki-compiler`` tool has its own
-project lifecycle: it ingests ``sources/**/*.md`` files, runs
+project lifecycle: it ingests top-level ``sources/*.md`` files (or
+``sources/**`` when ``.llmwiki/config.json`` sets ``sources.recursive``), runs
 ``llmwiki compile`` (incrementally, tracked in ``.llmwiki/state.json``), and
 writes compiled pages under ``wiki/``.
 
@@ -15,7 +16,8 @@ or more BookGraph sections as individual llmwiki source files so that:
   file's frontmatter, so compiled pages can trace back to the reading graph;
 - a new project groups sources by book (``sources/<doc_id>/<section_id>.md``,
   with ``sources.recursive`` enabled in ``.llmwiki/config.json``), so the
-  llmwiki viewer's Sources screen lists each book as one folder;
+  llmwiki viewer's Sources screen lists each section as
+  ``<doc_id>/<section_id>.md`` and a book's sections sort together;
 - re-running the bridge is idempotent — an unchanged section is left untouched on
   disk (stable mtime), so llmwiki's own incremental compile skips it and a daily
   batch is added without reprocessing the whole book.

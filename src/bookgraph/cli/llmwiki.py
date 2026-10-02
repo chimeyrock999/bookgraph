@@ -129,8 +129,8 @@ def llmwiki_view(
     Runs ``llmwiki view`` (``llm-wiki-compiler`` >= 1.4) inside
     ``<workspace>/llmwiki``: ``view`` has no ``--root`` option and serves the
     current directory. The viewer is read-only and binds to loopback only; it
-    shows the compiled concept pages, sources grouped by book, the concept graph,
-    health/citation checks and the ``compile --review`` queue.
+    shows the compiled concept pages, the sources (``<doc_id>/<section_id>.md``),
+    the concept graph, health/citation checks and the ``compile --review`` queue.
 
     It is BookGraph's wiki UI, not a reading surface: the reading loop stays in
     BookGraph MCP. See ``docs/mcp/llmwiki-integration.md``.

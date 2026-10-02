@@ -94,7 +94,7 @@ def test_llmwiki_serve_print_emits_root_contract(tmp_path: Path) -> None:
 
     assert result.exit_code == 0, result.output
     project = (tmp_path / "llmwiki").resolve()
-    # Real llm-wiki-compiler v1.1 contract: `serve --root <project>`, where the
+    # Real llm-wiki-compiler contract: `serve --root <project>`, where the
     # project is the isolated llmwiki/ subtree, not the workspace root or wiki/.
     assert result.output.strip() == f"llmwiki serve --root {project}"
 

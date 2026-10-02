@@ -1056,7 +1056,9 @@ bookgraph llmwiki serve /path/to/workspace --print
 ### Behavior
 
 - Runs `llmwiki serve --root <workspace>/llmwiki` — the real `llm-wiki-compiler`
-  v1.1 contract (`--root <project>`, no positional root) — forwarding its exit code.
+  contract (`--root <project>`, no positional root) — forwarding its exit code.
+  `serve` is the only llmwiki command that takes `--root`; `compile` and `status`
+  work on the current directory (see `llmwiki bridge --compile`).
 - With `--print`, emits the command with shell-safe quoting instead of running it.
 
 ### Must not do

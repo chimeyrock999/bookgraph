@@ -63,8 +63,9 @@ def llmwiki_serve(
     """Launch the optional llmwiki MCP server over the workspace's llmwiki project.
 
     Convenience wrapper that runs ``llmwiki serve --root <workspace>/llmwiki`` —
-    the real ``llm-wiki-compiler`` v1.1 contract, which takes ``--root <project>``
-    and has no positional root argument. The llmwiki project lives in its own
+    the real ``llm-wiki-compiler`` contract, which takes ``--root <project>``
+    and has no positional root argument (``serve`` is the only llmwiki command
+    with ``--root``). The llmwiki project lives in its own
     ``llmwiki/`` subtree (isolated from BookGraph's ``wiki/`` and ``sources/``);
     the compiler ingests the sources staged by ``bookgraph llmwiki bridge`` and
     serves its compiled pages.

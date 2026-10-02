@@ -48,6 +48,15 @@ from bookgraph.reading_plans import (
     write_reading_plan,
 )
 from bookgraph.sections import count_sections, read_sections
+from bookgraph.translations import (
+    TranslationState,
+    TranslationStatus,
+    iter_translation_keys,
+    section_content_hash,
+    translation_state,
+    validate_lang,
+    write_translation,
+)
 from bookgraph.utils import ID_PATTERN, validate_slug_id
 from bookgraph.workspace import WorkspacePaths
 
@@ -457,6 +466,15 @@ def _load_doc_sections(workspace: WorkspacePaths, doc_id: str) -> list[Section]:
         raise SectionsNotFoundError(f"Invalid sections manifest: {manifest}: {exc}") from exc
 
 
+def _find_section(workspace: WorkspacePaths, doc_id: str, section_id: str) -> Section:
+    """Look up a section by membership (rejects unknown and traversal ids)."""
+
+    for section in _load_doc_sections(workspace, doc_id):
+        if section.id == section_id:
+            return section
+    raise SectionNotFoundError(f"Section '{section_id}' not found in document '{doc_id}'.")
+
+
 def _load_plan(workspace: WorkspacePaths, plan_id: str) -> tuple[Path, ReadingPlan]:
     _validate_id(plan_id, "plan_id")
     path = workspace.reading_plans_root / f"{plan_id}.json"
@@ -519,10 +537,8 @@ def get_section(
     to grep the parsed ``document.json`` to find them.
     """
 
-    for section in _load_doc_sections(workspace, doc_id):
-        if section.id == section_id:
-            return _section_view(workspace, section, include_assets=include_assets)
-    raise SectionNotFoundError(f"Section '{section_id}' not found in document '{doc_id}'.")
+    section = _find_section(workspace, doc_id, section_id)
+    return _section_view(workspace, section, include_assets=include_assets)
 
 
 def mark_read(
@@ -881,6 +897,205 @@ def annotate_section(
         concept_count=len(annotation.concepts or []),
         path=str(path),
     )
+
+
+# --- Section artifact registry (translations) ------------------------------------
+#
+# A reading job that translates sections caches each result under
+# ``translations/<lang>/<doc_id>/<section_id>.md`` with a registry sidecar recording the
+# section content hash it was made from, so a workflow can tell a reusable translation
+# from a stale one without re-deriving it from path conventions. Pure storage logic
+# lives in :mod:`bookgraph.translations`.
+
+
+class SectionArtifactView(BaseModel):
+    """A section translation's registry entry and freshness against the live section.
+
+    ``status`` is ``fresh`` (reusable as-is), ``stale`` (the section changed since it was
+    translated), ``untracked`` (a body with no registry sidecar — freshness unknown),
+    ``missing`` (no translation), or ``orphaned`` (its section no longer exists; listing
+    only). ``current_section_hash`` is the section's live content hash — pass it back as
+    ``source_section_hash`` to ``write_section_translation`` to pin the write to the
+    content you translated. ``section_has_assets`` together with ``includes_assets``
+    tells whether a translation is complete: one that left out the section's
+    figures/tables (``includes_assets=False`` on an asset section) is prose-only.
+    ``content`` is the translation body when requested and present.
+    """
+
+    type: str = "translation"
+    lang: str
+    doc_id: str
+    section_id: str
+    status: TranslationStatus
+    path: str | None = None
+    metadata_path: str | None = None
+    source_section_hash: str | None = None
+    current_section_hash: str | None = None
+    includes_assets: bool | None = None
+    section_has_assets: bool = False
+    model: str | None = None
+    created_at: str | None = None
+    content: str | None = None
+
+
+class SectionArtifactList(BaseModel):
+    """Registered section artifacts, each with its freshness status."""
+
+    artifacts: list[SectionArtifactView] = Field(default_factory=list)
+
+
+def _section_has_assets(workspace: WorkspacePaths, section: Section) -> bool:
+    """Whether the section owns any figure/table asset block (staged or not)."""
+
+    _, summaries = _section_assets(workspace, section, _load_doc_blocks(workspace, section.doc_id))
+    return bool(summaries)
+
+
+def _artifact_view(
+    workspace: WorkspacePaths,
+    state: TranslationState,
+    section: Section | None,
+    *,
+    include_content: bool,
+) -> SectionArtifactView:
+    artifact = state.artifact
+    body_exists = state.status != "missing"
+    content: str | None = None
+    if include_content and body_exists:
+        try:
+            content = state.paths.body.read_text(encoding="utf-8")
+        except OSError:
+            content = None
+    return SectionArtifactView(
+        lang=state.lang,
+        doc_id=state.doc_id,
+        section_id=state.section_id,
+        status=state.status,
+        path=str(state.paths.body) if body_exists else None,
+        metadata_path=str(state.paths.metadata) if artifact is not None else None,
+        source_section_hash=artifact.source_section_hash if artifact else None,
+        current_section_hash=state.current_section_hash,
+        includes_assets=artifact.includes_assets if artifact else None,
+        section_has_assets=_section_has_assets(workspace, section) if section else False,
+        model=artifact.model if artifact else None,
+        created_at=artifact.created_at if artifact else None,
+        content=content,
+    )
+
+
+def _validate_lang(lang: str) -> str:
+    try:
+        return validate_lang(lang)
+    except ValueError as exc:
+        raise InvalidIdError(str(exc)) from exc
+
+
+def get_section_translation(
+    workspace: WorkspacePaths,
+    doc_id: str,
+    section_id: str,
+    lang: str,
+    include_content: bool = True,
+) -> SectionArtifactView:
+    """Return a section's cached translation and whether it is still fresh.
+
+    Never raises for a missing translation — ``status="missing"`` is the normal "go
+    translate it" answer, and it still carries ``current_section_hash`` so the caller
+    can pin its later write.
+    """
+
+    resolved_doc_id = _validate_id(doc_id, "doc_id")
+    resolved_lang = _validate_lang(lang)
+    section = _find_section(workspace, resolved_doc_id, section_id)
+    state = translation_state(
+        workspace, resolved_lang, resolved_doc_id, section.id, section_content_hash(section)
+    )
+    return _artifact_view(workspace, state, section, include_content=include_content)
+
+
+def write_section_translation(
+    workspace: WorkspacePaths,
+    doc_id: str,
+    section_id: str,
+    lang: str,
+    content: str,
+    includes_assets: bool = False,
+    model: str | None = None,
+    source_section_hash: str | None = None,
+) -> SectionArtifactView:
+    """Cache a section translation and register it against the section's content.
+
+    ``source_section_hash`` (optional) is the ``current_section_hash`` the caller saw
+    when it fetched the section to translate; if the section has changed since, the
+    write is refused so a translation of old content is never registered as fresh.
+    ``includes_assets`` declares whether the section's figures/tables were carried into
+    the translation.
+    """
+
+    resolved_doc_id = _validate_id(doc_id, "doc_id")
+    resolved_lang = _validate_lang(lang)
+    if not content.strip():
+        raise ReadingServiceError("translation content must not be empty")
+    section = _find_section(workspace, resolved_doc_id, section_id)
+    current_hash = section_content_hash(section)
+    if source_section_hash is not None and source_section_hash != current_hash:
+        raise ReadingServiceError(
+            f"section '{section.id}' changed since it was translated "
+            f"(translated {source_section_hash}, current {current_hash}); "
+            "re-fetch it with get_section and translate the current content"
+        )
+    write_translation(
+        workspace,
+        section,
+        resolved_lang,
+        content,
+        includes_assets=includes_assets,
+        model=model,
+        created_at=datetime.now(UTC).isoformat(),
+    )
+    state = translation_state(workspace, resolved_lang, resolved_doc_id, section.id, current_hash)
+    return _artifact_view(workspace, state, section, include_content=False)
+
+
+def list_section_artifacts(
+    workspace: WorkspacePaths,
+    doc_id: str | None = None,
+    lang: str | None = None,
+    type: str = "translation",
+) -> SectionArtifactList:
+    """List cached section artifacts with their freshness (no bodies).
+
+    Each entry is checked against the document's current sections, so a reading job can
+    find stale translations to redo — and ``orphaned`` ones whose section is gone —
+    in one call. Only ``type="translation"`` exists today.
+    """
+
+    if type != "translation":
+        raise ReadingServiceError(f"unknown artifact type {type!r}; supported: 'translation'")
+    resolved_doc_id = _validate_id(doc_id, "doc_id") if doc_id is not None else None
+    resolved_lang = _validate_lang(lang) if lang is not None else None
+
+    sections_by_doc: dict[str, dict[str, Section]] = {}
+    artifacts: list[SectionArtifactView] = []
+    for key_lang, key_doc, key_section in iter_translation_keys(
+        workspace, doc_id=resolved_doc_id, lang=resolved_lang
+    ):
+        if key_doc not in sections_by_doc:
+            try:
+                loaded = _load_doc_sections(workspace, key_doc)
+            except ReadingServiceError:
+                loaded = []  # document no longer segmented → its translations are orphaned
+            sections_by_doc[key_doc] = {section.id: section for section in loaded}
+        section = sections_by_doc[key_doc].get(key_section)
+        state = translation_state(
+            workspace,
+            key_lang,
+            key_doc,
+            key_section,
+            section_content_hash(section) if section else None,
+        )
+        artifacts.append(_artifact_view(workspace, state, section, include_content=False))
+    return SectionArtifactList(artifacts=artifacts)
 
 
 # --- Workspace orientation & reading-plan management -----------------------------

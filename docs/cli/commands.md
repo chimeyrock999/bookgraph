@@ -566,8 +566,8 @@ bookgraph index concepts /path/to/workspace
 
 Serve a workspace over MCP (stdio transport) so a reading client/agent can query
 sections and drive a reading plan. All tools are read-mostly; only `mark_read` and
-`create_plan` write reading-plan state, and `annotate_section` writes a Tier-2
-annotation artifact.
+`create_plan` write reading-plan state, `annotate_section` writes a Tier-2
+annotation artifact, and `write_section_translation` writes a cached translation.
 
 ```bash
 uv sync --extra mcp
@@ -636,6 +636,24 @@ telling the user to `uv sync --extra mcp`.
   via `get_context` immediately; the concept edges (and their prune of Tier-1 false
   positives) take effect on the next `bookgraph index build <doc_id>`. Returns the
   written `doc_id`, `section_id`, `concept_count`, and `path`.
+- `get_section_translation(doc_id, section_id, lang, include_content=True)` → the
+  section's cached translation and its freshness: `status` (`fresh` / `stale` /
+  `untracked` / `missing`, see `artifacts.md`), `path`, `metadata_path`,
+  `source_section_hash`, `current_section_hash`, `includes_assets`,
+  `section_has_assets` (whether the section owns any figure/table block), `model`,
+  `created_at`, and `content` (the body, unless `include_content=False`). A missing
+  translation is a normal result, not an error.
+- `write_section_translation(doc_id, section_id, lang, content, includes_assets=False,
+  model=None, source_section_hash=None)` → write
+  `translations/<lang>/<doc_id>/<section_id>.md` and its registry sidecar,
+  replacing any previous translation; returns the entry (status `fresh`, no
+  `content`). Empty `content` is rejected. When `source_section_hash` is given and
+  differs from the section's current hash the write is refused, so a translation of
+  outdated content is never registered as fresh.
+- `list_section_artifacts(doc_id=None, lang=None, type="translation")` → every
+  cached translation (filtered by `doc_id` / `lang`) with its status, including
+  `orphaned` ones whose section no longer exists; no bodies. Only
+  `type="translation"` exists.
 - `list_documents()` → the workspace's segmented documents, each with `doc_id`,
   `title` (from the parsed `document.json`, falling back to `doc_id`), and
   `section_count`. Lets an agent discover what there is to read before picking a
@@ -664,8 +682,9 @@ CLI step (see `docs/mcp/reading-agent.md`).
   back from `quality.json`).
 - `mark_read` and `create_plan` write `reading_plans/<plan_id>.json` (same
   contracts as `bookgraph reading-plan mark-read` / `create`); `annotate_section`
-  writes `annotations/<doc_id>/<section_id>.json` (see `annotations.md`). No other
-  tool writes.
+  writes `annotations/<doc_id>/<section_id>.json` (see `annotations.md`);
+  `write_section_translation` writes `translations/<lang>/<doc_id>/<section_id>.md`
+  + `.json` (see `artifacts.md`). No other tool writes.
 
 MCP tool inputs are client-controlled, so `plan_id` and `doc_id` are validated as
 filesystem-safe slugs before they are used as path components; a traversal value

@@ -28,6 +28,8 @@ from bookgraph.mcp.service import (
     ReadingServiceError,
     RelatedSections,
     SearchResult,
+    SectionArtifactList,
+    SectionArtifactView,
     SectionContext,
     SectionView,
 )
@@ -165,6 +167,75 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
             return service.annotate_section(
                 workspace, doc_id, section_id, concepts, summary, model
             )
+        except ReadingServiceError as exc:
+            raise ToolError(str(exc)) from exc
+
+    @mcp.tool
+    def get_section_translation(
+        doc_id: str, section_id: str, lang: str, include_content: bool = True
+    ) -> SectionArtifactView:
+        """Return a section's cached translation (e.g. lang='vi') and its freshness.
+
+        Check this before translating a section. ``status`` is 'fresh' (reuse
+        ``content`` as-is), 'stale' (the section changed since — retranslate),
+        'untracked' (a cached file with no registry record — freshness unknown), or
+        'missing' (translate it). ``includes_assets`` vs ``section_has_assets`` tells
+        whether the cached translation carried the section's figures/tables. Pass
+        ``current_section_hash`` back to write_section_translation to pin your write.
+        """
+
+        try:
+            return service.get_section_translation(
+                workspace, doc_id, section_id, lang, include_content
+            )
+        except ReadingServiceError as exc:
+            raise ToolError(str(exc)) from exc
+
+    @mcp.tool
+    def write_section_translation(
+        doc_id: str,
+        section_id: str,
+        lang: str,
+        content: str,
+        includes_assets: bool = False,
+        model: str | None = None,
+        source_section_hash: str | None = None,
+    ) -> SectionArtifactView:
+        """Cache a section translation (Markdown) and register it as fresh.
+
+        Writes translations/<lang>/<doc_id>/<section_id>.md plus a registry record of
+        the section content it was made from, replacing any earlier translation. Set
+        includes_assets=True when the translation carries the section's figures/
+        tables. Pass source_section_hash (the current_section_hash you saw) to refuse
+        the write if the section changed while you were translating.
+        """
+
+        try:
+            return service.write_section_translation(
+                workspace,
+                doc_id,
+                section_id,
+                lang,
+                content,
+                includes_assets,
+                model,
+                source_section_hash,
+            )
+        except ReadingServiceError as exc:
+            raise ToolError(str(exc)) from exc
+
+    @mcp.tool
+    def list_section_artifacts(
+        doc_id: str | None = None, lang: str | None = None, type: str = "translation"
+    ) -> SectionArtifactList:
+        """List cached section translations with their freshness (no bodies).
+
+        Filter by doc_id and/or lang. Use it to find 'stale' translations to redo, or
+        'orphaned' ones whose section no longer exists after re-segmenting.
+        """
+
+        try:
+            return service.list_section_artifacts(workspace, doc_id, lang, type)
         except ReadingServiceError as exc:
             raise ToolError(str(exc)) from exc
 

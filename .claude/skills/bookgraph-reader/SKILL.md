@@ -71,6 +71,21 @@ Operational details live in `docs/cli/parse-book-large-pdfs.md`.
 - `get_concept(concept)` — the cross-book "where else is this discussed" view. Use it
   whenever a concept recurs, to build the user's mental graph across books.
 
+## Translating sections
+
+When the user wants sections translated (e.g. read in Vietnamese, or delivered to a
+chat), reuse the cache instead of retranslating:
+
+1. `get_section_translation(doc_id, section_id, lang)` — if `status` is `fresh`,
+   use its `content` as-is. If `includes_assets` is false but `section_has_assets`
+   is true, the cached text left out figures/tables; mention that or redo it.
+2. Otherwise (`missing`, `stale`, or `untracked` you don't trust) translate the
+   section's real text, then `write_section_translation(doc_id, section_id, lang,
+   content, includes_assets=..., source_section_hash=<current_section_hash>)` so
+   the next run reuses it.
+3. `list_section_artifacts(doc_id, lang)` shows every cached translation and which
+   are `stale` after a re-segment.
+
 ## Behavior
 
 - **Follow the plan, but stay flexible** — if the user asks about something ahead,
@@ -85,8 +100,8 @@ Operational details live in `docs/cli/parse-book-large-pdfs.md`.
 
 ## Notes
 
-- Only `create_plan` and `mark_read` change state (the reading plan); everything
-  else is read-only.
+- Only `create_plan` and `mark_read` (the reading plan), `annotate_section`, and
+  `write_section_translation` change state; everything else is read-only.
 - Concepts require `bookgraph index build`; `search` and the graph tools also work
   before indexing (live scan), just with rougher ranking.
 - Full tool reference: `docs/cli/commands.md`; setup + client config:

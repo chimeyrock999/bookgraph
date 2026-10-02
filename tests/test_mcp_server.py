@@ -56,10 +56,13 @@ def test_build_server_registers_the_reading_and_query_tools(tmp_path: Path) -> N
         "get_outline",
         "get_related",
         "get_section",
+        "get_section_translation",
         "list_documents",
         "list_plans",
+        "list_section_artifacts",
         "mark_read",
         "search",
+        "write_section_translation",
     ]
 
 
@@ -94,3 +97,27 @@ def test_get_context_tool_returns_section_with_neighbourhood(tmp_path: Path) -> 
     assert payload["section"]["text"] == "hello world"
     assert payload["related"]["section_id"] == "deep-work.a"
     assert payload["related"]["parent"] is None
+
+
+def test_translation_tools_round_trip_through_the_cache(tmp_path: Path) -> None:
+    server = build_server(_workspace(tmp_path))
+    key = {"doc_id": "deep-work", "section_id": "deep-work.a", "lang": "vi"}
+
+    missing = asyncio.run(server.call_tool("get_section_translation", key)).structured_content
+    asyncio.run(
+        server.call_tool(
+            "write_section_translation",
+            {
+                **key,
+                "content": "xin chào thế giới",
+                "source_section_hash": missing["current_section_hash"],
+            },
+        )
+    )
+    cached = asyncio.run(server.call_tool("get_section_translation", key)).structured_content
+    listing = asyncio.run(server.call_tool("list_section_artifacts", {})).structured_content
+
+    assert missing["status"] == "missing"
+    assert cached["status"] == "fresh"
+    assert cached["content"] == "xin chào thế giới"
+    assert [a["status"] for a in listing["artifacts"]] == ["fresh"]

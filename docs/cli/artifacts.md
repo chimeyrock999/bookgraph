@@ -483,6 +483,57 @@ The concept edges here are the authoritative set for that section and, on the ne
 prunes that section's mentions). See **`annotations.md`** for the field rules, the
 presence-based merge rule, and the `markdown-graph` non-goal.
 
+## `translations/<lang>/<doc_id>/<section_id>.md` + `.json`
+
+Owner: the MCP `write_section_translation` tool (`bookgraph.mcp.service` /
+`bookgraph.translations`). Read by `get_section_translation` and
+`list_section_artifacts`.
+
+A **cache of generated per-section translations** plus its registry. The `.md` body
+is the translation itself and keeps the path convention reading jobs already used;
+the `.json` sidecar beside it is the registry record, mirroring
+`bookgraph.models.SectionArtifact`:
+
+```json
+{
+  "type": "translation",
+  "lang": "vi",
+  "doc_id": "iceberg",
+  "section_id": "iceberg.table-format",
+  "path": "translations/vi/iceberg/iceberg.table-format.md",
+  "source_section_hash": "sha256:9f2c...",
+  "includes_assets": true,
+  "model": "claude-...",
+  "created_at": "2026-10-02T00:00:00+00:00"
+}
+```
+
+- `lang`: a lowercase hyphenated tag (`vi`, `pt-br`); input is lowercased, so
+  `pt-BR` and `pt-br` name the same cache.
+- `path`: the body, relative to the workspace root.
+- `source_section_hash`: `sha256:` over the section's `title` + `text` (canonical
+  JSON) at write time. Ids, page spans, and block ids are excluded, so a re-segment
+  that keeps the words keeps the translation fresh.
+- `includes_assets`: whether the writer carried the section's figures/tables into
+  the translation (declared by the writer, not inferred).
+
+Freshness is **derived, never stored**: each read recomputes the section's current
+hash and compares it with the sidecar.
+
+| `status` | Meaning |
+| --- | --- |
+| `fresh` | Body + matching sidecar; reuse as-is. |
+| `stale` | Body + sidecar, but the section's content changed since. |
+| `untracked` | Body with no valid sidecar (e.g. cached before the registry, or a corrupt/misplaced sidecar); freshness unknown. |
+| `missing` | No body (a sidecar without a body is ignored). |
+| `orphaned` | Body whose section (or whole document) no longer exists; reported by listing. |
+
+Write order is body first, sidecar last, each via temp file + rename, so a crash
+never leaves a sidecar vouching for a missing or partial body. A sidecar whose
+`lang`/`doc_id`/`section_id` disagrees with its location is ignored. Like
+annotations, the cache is **not** rebuildable from sources (regenerating it costs
+model calls), so `index build`, `segment`, and `wiki` never delete it.
+
 ## Future artifacts
 
 Do not implement these without updating this file.

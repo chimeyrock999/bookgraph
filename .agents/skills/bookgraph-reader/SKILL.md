@@ -55,6 +55,17 @@ Optional navigation tools:
 - `get_related(doc_id, section_id)` — show parent/prev/next/children neighbours.
 - `get_concept(concept)` — show cross-book mentions for a concept.
 
+Optional translation cache tools (when the user wants sections translated):
+
+- `get_section_translation(doc_id, section_id, lang)` — reuse `content` when
+  `status` is `fresh`; `stale`/`missing` means translate again. Compare
+  `includes_assets` with `section_has_assets` to spot translations that left out
+  figures/tables.
+- `write_section_translation(doc_id, section_id, lang, content, includes_assets=...,
+  source_section_hash=<current_section_hash>)` — cache a new translation.
+- `list_section_artifacts(doc_id=None, lang=None)` — list cached translations and
+  their freshness.
+
 ## Reading loop
 
 1. **Orient**
@@ -96,8 +107,8 @@ Optional navigation tools:
 - Treat auto-extracted concepts as hints, not authoritative labels.
 - Prefer deterministic BookGraph tools over web/general knowledge for book
   content questions.
-- Only `create_plan` and `mark_read` write state. Treat all other tools as
-  read-only.
+- Only `create_plan`, `mark_read`, `annotate_section`, and
+  `write_section_translation` write state. Treat all other tools as read-only.
 
 ## Client-specific packaging
 

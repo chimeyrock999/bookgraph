@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import re
-from pathlib import Path
 
 import pytest
 
+from bookgraph.documents import write_document
 from bookgraph.exports.models import ASSET_MISSING, FallbackPolicy
 from bookgraph.exports.renderers import RenderError, default_renderer_registry
 from bookgraph.exports.translated import (
@@ -14,37 +15,46 @@ from bookgraph.exports.translated import (
     build_translated_export,
     write_translated_export,
 )
+from bookgraph.models import Document
+from bookgraph.sections import write_sections
+from bookgraph.segmenters.heading import HeadingSegmenter
 from bookgraph.workspace import WorkspacePaths
-from export_fixtures import (
+from translated_export_support import (
     DOC,
     GENERATED_AT,
     PNG_URI,
-    codes,
-    make_workspace,
-    register,
-    section_ids,
-    tiny_blocks,
-    write_tiny_book,
+    _blocks,
+    _codes,
+    _register,
+    _section_ids,
 )
 
 
-@pytest.fixture
-def workspace(tmp_path: Path) -> WorkspacePaths:
-    return make_workspace(tmp_path)
+def _rewrite_blocks(paths: WorkspacePaths, texts: dict[str, str]) -> None:
+    """Replace some original blocks' text and re-segment the document."""
+
+    blocks = [b.model_copy(update={"text": texts.get(b.id, b.text)}) for b in _blocks()]
+    document = Document(doc_id=DOC, title="Tiny Book", blocks=blocks)
+    write_document(document, paths.sources_parsed / DOC)
+    write_sections(HeadingSegmenter(target_level=2).segment(document), paths.sources_sections / DOC)
 
 
 def _section_body(html: str, section_id: str) -> str:
-    pattern = rf'<section [^>]*id="{re.escape(section_id)}"[^>]*>(.*?)</section>'
+    """A section's own HTML: up to its first nested child ``<section>`` or its close."""
+
+    pattern = rf'<section [^>]*id="{re.escape(section_id)}"[^>]*>(.*?)(?=<section |</section>)'
     match = re.search(pattern, html, re.S)
     assert match is not None, section_id
     return match.group(1)
 
 
 def _columns(html: str, section_id: str) -> tuple[str, str]:
+    # A row ends with ``</td></tr></table>``; tables inside a cell end with newlines
+    # between their closing tags, so the non-greedy cells stop at the row's own end.
     match = re.fullmatch(
         r'<table class="bilingual"><tr>'
-        r'<td class="column column-original" data-column="original" lang="und">(.*)</td>'
-        r'<td class="column column-mixed" data-column="mixed" lang="vi">(.*)</td>'
+        r'<td class="column column-original" data-column="original" lang="und">(.*?)</td>'
+        r'<td class="column column-mixed" data-column="mixed" lang="vi">(.*?)</td>'
         r"</tr></table>",
         _section_body(html, section_id),
         re.S,
@@ -60,8 +70,8 @@ _CHAPTER_VI = (
 
 
 def test_translated_mode_is_the_default_and_counts_fallbacks(workspace: WorkspacePaths) -> None:
-    chapter, _, _ = section_ids(workspace)
-    register(workspace, chapter, _CHAPTER_VI)
+    chapter, _, _ = _section_ids(workspace)
+    _register(workspace, chapter, _CHAPTER_VI)
 
     export = build_translated_export(workspace, DOC, lang="vi", generated_at=GENERATED_AT)
     report = export.report
@@ -78,8 +88,8 @@ def test_translated_mode_is_the_default_and_counts_fallbacks(workspace: Workspac
 def test_bilingual_pairs_each_original_section_with_the_mixed_rendering(
     workspace: WorkspacePaths,
 ) -> None:
-    chapter, second, third = section_ids(workspace)
-    register(workspace, chapter, _CHAPTER_VI)
+    chapter, second, third = _section_ids(workspace)
+    _register(workspace, chapter, _CHAPTER_VI)
 
     mixed = build_translated_export(workspace, DOC, lang="vi", generated_at=GENERATED_AT)
     export = build_translated_export(
@@ -137,8 +147,8 @@ def test_bilingual_pairs_each_original_section_with_the_mixed_rendering(
 def test_bilingual_original_column_reports_assets_of_translated_sections(
     workspace: WorkspacePaths,
 ) -> None:
-    _, second, _ = section_ids(workspace)
-    register(workspace, second, "# Phần Hai\n\nĐã dịch.\n", includes_assets=False)
+    _, second, _ = _section_ids(workspace)
+    _register(workspace, second, "# Phần Hai\n\nĐã dịch.\n", includes_assets=False)
 
     translated = build_translated_export(workspace, DOC, lang="vi", generated_at=GENERATED_AT)
     bilingual = build_translated_export(
@@ -147,8 +157,8 @@ def test_bilingual_original_column_reports_assets_of_translated_sections(
 
     # Translated mode never shows section two's original, so its lost table is not missing
     # there; the bilingual left column shows it, so the placeholder is reported.
-    assert ASSET_MISSING not in codes(translated.report, second)
-    assert ASSET_MISSING in codes(bilingual.report, second)
+    assert ASSET_MISSING not in _codes(translated.report, second)
+    assert ASSET_MISSING in _codes(bilingual.report, second)
     left, right = _columns(bilingual.html, second)
     assert "Table 1. Lost table." in left and "Missing asset" not in left  # caption stays
     assert "Đã dịch." in right
@@ -157,7 +167,7 @@ def test_bilingual_original_column_reports_assets_of_translated_sections(
 def test_bilingual_skip_fallback_keeps_the_original_beside_the_placeholder(
     workspace: WorkspacePaths,
 ) -> None:
-    _, second, _ = section_ids(workspace)
+    _, second, _ = _section_ids(workspace)
 
     export = build_translated_export(
         workspace, DOC, lang="vi", mode="bilingual", fallback="skip", generated_at=GENERATED_AT
@@ -179,8 +189,8 @@ def test_bilingual_fail_fallback_lists_untranslated_sections(workspace: Workspac
 
 
 def test_bilingual_export_is_deterministic(workspace: WorkspacePaths) -> None:
-    chapter, _, _ = section_ids(workspace)
-    register(workspace, chapter, _CHAPTER_VI)
+    chapter, _, _ = _section_ids(workspace)
+    _register(workspace, chapter, _CHAPTER_VI)
 
     first = build_translated_export(
         workspace, DOC, lang="vi", mode="bilingual", generated_at=GENERATED_AT
@@ -198,8 +208,8 @@ def test_real_pdf_backend_renders_bilingual(workspace: WorkspacePaths, backend: 
     renderer = default_renderer_registry().get(backend)
     if not renderer.available():
         pytest.skip(f"{backend} not installed")
-    chapter, _, _ = section_ids(workspace)
-    register(workspace, chapter, _CHAPTER_VI + "\n" + "Đoạn văn dài. " * 800 + "\n")
+    chapter, _, _ = _section_ids(workspace)
+    _register(workspace, chapter, _CHAPTER_VI + "\n" + "Đoạn văn dài. " * 800 + "\n")
     export = build_translated_export(
         workspace, DOC, lang="vi", mode="bilingual", generated_at=GENERATED_AT
     )
@@ -216,15 +226,15 @@ def test_real_pdf_backend_renders_bilingual(workspace: WorkspacePaths, backend: 
 def test_bilingual_html_ids_are_unique_and_anchors_land_in_the_mixed_column(
     workspace: WorkspacePaths,
 ) -> None:
-    texts = {
-        "b1": 'Footnote <a id="fn1"></a> [see](#fn1)',
-        "b5": 'Second section <a name="note2"></a> text.',
-    }
-    write_tiny_book(
-        workspace, [b.model_copy(update={"text": texts.get(b.id, b.text)}) for b in tiny_blocks()]
+    _rewrite_blocks(
+        workspace,
+        {
+            "b1": 'Footnote <a id="fn1"></a> [see](#fn1)',
+            "b5": 'Second section <a name="note2"></a> text.',
+        },
     )
-    chapter, second, _ = section_ids(workspace)
-    register(workspace, chapter, '# Chương Một\n\nChú thích <a id="fn1"></a> [xem](#fn1)\n')
+    chapter, second, _ = _section_ids(workspace)
+    _register(workspace, chapter, '# Chương Một\n\nChú thích <a id="fn1"></a> [xem](#fn1)\n')
 
     mixed = build_translated_export(workspace, DOC, lang="vi", generated_at=GENERATED_AT)
     export = build_translated_export(
@@ -269,7 +279,7 @@ def test_bilingual_columns_are_styled_for_pdf_outline_images_and_language(
 def test_bilingual_legend_names_columns_and_status_waits_for_show_status(
     workspace: WorkspacePaths, fallback: FallbackPolicy, wording: str, note: str
 ) -> None:
-    _, second, _ = section_ids(workspace)
+    _, second, _ = _section_ids(workspace)
 
     def export(show_status: bool) -> str:
         return build_translated_export(
@@ -296,8 +306,8 @@ def test_bilingual_legend_names_columns_and_status_waits_for_show_status(
 def test_bilingual_strict_also_covers_original_assets_of_translated_sections(
     workspace: WorkspacePaths,
 ) -> None:
-    _, second, _ = section_ids(workspace)
-    register(workspace, second, "# Phần Hai\n\nĐã dịch.\n")
+    _, second, _ = _section_ids(workspace)
+    _register(workspace, second, "# Phần Hai\n\nĐã dịch.\n")
 
     translated = build_translated_export(workspace, DOC, lang="vi", generated_at=GENERATED_AT)
     bilingual = build_translated_export(
@@ -308,3 +318,43 @@ def test_bilingual_strict_also_covers_original_assets_of_translated_sections(
     assert [(w.code, w.section_id) for w in bilingual.report.strict_warnings] == [
         (ASSET_MISSING, second)
     ]
+
+
+def test_bilingual_rows_follow_the_outline_depth_in_both_columns(
+    workspace: WorkspacePaths,
+) -> None:
+    chapter, second, third = _section_ids(workspace)
+    outline = workspace.sources_inbox / DOC / "book.json"
+    outline.parent.mkdir(parents=True, exist_ok=True)
+    bookmarks = [("Chapter One", 0, 1), ("Section Two", 1, 2), ("Section Three", 2, 3)]
+    outline.write_text(
+        json.dumps(
+            {
+                "pdf": {
+                    "bookmarks": [
+                        {"title": t, "page_index": p, "level": lv} for t, p, lv in bookmarks
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    _register(workspace, third, "# Phần Ba\n\nĐã dịch.\n")
+
+    export = build_translated_export(
+        workspace, DOC, lang="vi", mode="bilingual", generated_at=GENERATED_AT
+    )
+
+    # The manifest says level 2; the outline puts Section Three under Section Two.
+    assert [(e.depth, e.parent_id) for e in export.report.sections] == [
+        (1, None),
+        (2, chapter),
+        (3, second),
+    ]
+    left, right = _columns(export.html, third)
+    assert left.startswith("<h3>Section Three</h3>")
+    assert right.startswith("<h3>Phần Ba</h3>")
+    # The row is nested inside its parent's <section>, after the parent's own row.
+    second_open = export.html.index(f'id="{second}"')
+    third_open = export.html.index(f'id="{third}"')
+    assert second_open < third_open < export.html.index("</section>", second_open)

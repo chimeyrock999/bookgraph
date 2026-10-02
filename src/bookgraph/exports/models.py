@@ -71,18 +71,23 @@ class ExportWarning(BaseModel):
 
 
 class ExportSection(BaseModel):
-    """Where one section's content came from in the export.
+    """Where one section's content came from in the export, and where it sits.
 
     ``freshness`` is the translation's registry status when ``source`` is
-    ``translated``, ``None`` otherwise. ``assets_*`` count the mixed rendering (the
-    whole section in ``translated`` mode, the right column in ``bilingual`` mode);
-    ``original_assets_*`` count the bilingual left column and stay ``None`` in
-    ``translated`` mode.
+    ``translated``, ``None`` otherwise. ``level`` is the manifest's ``Section.level``;
+    ``depth`` (heading level in the export) and ``parent_id`` (the section it renders
+    inside, ``None`` for a top-level one) are its place in the book's structure, which
+    follows the source PDF outline when there is one. ``assets_*`` count the mixed
+    rendering (the whole section in ``translated`` mode, the right column in
+    ``bilingual`` mode); ``original_assets_*`` count the bilingual left column and stay
+    ``None`` in ``translated`` mode.
     """
 
     section_id: str
     title: str
     level: int
+    depth: int = 1
+    parent_id: str | None = None
     source: SectionSource
     artifact: str | None = None
     freshness: TranslationFreshness | None = None
@@ -93,7 +98,7 @@ class ExportSection(BaseModel):
 
 
 class ExportReport(BaseModel):
-    """Coverage + QA report for one translated export, in reading order.
+    """Coverage + QA report for one translated export, in the export's reading order.
 
     ``coverage`` is ``translated_sections / total_sections`` (``0.0`` for an empty
     document). ``original_sections`` / ``skipped_sections`` count the sections that

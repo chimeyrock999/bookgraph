@@ -243,6 +243,8 @@ src/bookgraph/
   assets.py                 # one asset-reference resolver (shared by MCP + quality)
   exports/
     translated.py           # partially translated reading edition (HTML assembly + report)
+    outline.py              # export structure from the PDF outline (depth, order, chapters)
+    render.py               # page shell, title page, TOC, nested sections
     bilingual.py            # bilingual (original | translated) row layout and styles
     images.py               # image embedding (data: URIs) + asset warnings for exports
     html_attrs.py           # attribute-aware HTML tag scanning shared by exports

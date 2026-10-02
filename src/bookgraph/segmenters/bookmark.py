@@ -3,17 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from bookgraph.models import CanonicalBlock, Document, Section
+from bookgraph.pdf_metadata import PdfBookmark
 from bookgraph.ports import DocumentSegmenter
 from bookgraph.segmenters.heading import HeadingSegmenter
 from bookgraph.segmenters.pages import clamp_page_end
 from bookgraph.utils import unique_slug
 
-
-@dataclass(frozen=True)
-class PdfBookmark:
-    title: str
-    page_index: int | None
-    level: int
+__all__ = ["BookmarkSegmenter", "PdfBookmark", "bookmark_heading_paths"]
 
 
 @dataclass
@@ -32,28 +28,46 @@ class BookmarkSegmenter(DocumentSegmenter):
     name: str = "bookmark"
 
     def segment(self, document: Document) -> list[Section]:
+        paths = bookmark_heading_paths(self.bookmarks)
         usable = [
-            bookmark
-            for bookmark in self.bookmarks
+            (bookmark, path)
+            for bookmark, path in zip(self.bookmarks, paths, strict=True)
             if bookmark.page_index is not None and bookmark.level <= self.split_level
         ]
-        usable.sort(key=lambda bookmark: (bookmark.page_index or 0, bookmark.level, bookmark.title))
+        # Page order, with outline (TOC) order kept for bookmarks on the same page: the
+        # sort is stable. A title tie-break would put same-page siblings in alphabetical
+        # order (issue #58: a Preface's "Feedback" before "Conventions").
+        usable.sort(key=lambda item: item[0].page_index or 0)
         if not usable:
             return (self.fallback or HeadingSegmenter()).segment(document)
 
         sections: list[Section] = []
         used_slugs: set[str] = set()
-        for index, bookmark in enumerate(usable):
+        for index, (bookmark, path) in enumerate(usable):
             start_page = bookmark.page_index
-            next_page = usable[index + 1].page_index if index + 1 < len(usable) else None
+            next_page = usable[index + 1][0].page_index if index + 1 < len(usable) else None
             blocks = _blocks_in_range(document.blocks, start_page, next_page)
             section_slug = unique_slug(bookmark.title, used_slugs)
-            sections.append(_to_section(document.doc_id, bookmark, blocks, next_page, section_slug))
+            sections.append(
+                _to_section(document.doc_id, bookmark, path, blocks, next_page, section_slug)
+            )
 
         for index, section in enumerate(sections):
             section.prev_id = sections[index - 1].id if index > 0 else None
             section.next_id = sections[index + 1].id if index + 1 < len(sections) else None
         return sections
+
+
+def bookmark_heading_paths(bookmarks: list[PdfBookmark]) -> list[list[str]]:
+    """Each bookmark's outline ancestry, root first and ending with its own title."""
+
+    stack: list[PdfBookmark] = []
+    paths: list[list[str]] = []
+    for bookmark in bookmarks:
+        stack = [ancestor for ancestor in stack if ancestor.level < bookmark.level]
+        stack.append(bookmark)
+        paths.append([entry.title for entry in stack])
+    return paths
 
 
 def _blocks_in_range(
@@ -76,6 +90,7 @@ def _blocks_in_range(
 def _to_section(
     doc_id: str,
     bookmark: PdfBookmark,
+    heading_path: list[str],
     blocks: list[CanonicalBlock],
     next_page: int | None,
     section_slug: str,
@@ -97,7 +112,7 @@ def _to_section(
         doc_id=doc_id,
         title=bookmark.title,
         level=bookmark.level,
-        heading_path=[bookmark.title],
+        heading_path=heading_path,
         page_start=page_start,
         page_end=page_end,
         text="\n\n".join(text_parts),

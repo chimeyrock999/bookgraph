@@ -664,7 +664,8 @@ then reads as `untracked`), or re-register it with `write_section_translation`.
 - Optional leading `---` frontmatter. Only flat `key: value` lines are read. `title`
   is the translated section title used in the table of contents.
 - If the body starts with a heading, that heading is the translated title. Artifact
-  headings are shifted so the top one sits at the section's `level`. A body with no
+  headings are shifted so the top one sits at the section's `depth` in the export
+  (see the report below). A body with no
   heading gets the frontmatter `title`, or the original title.
 - Image links (`![caption](images/fig1.png)`) may point at workspace files, for
   example the parsed assets under `sources/parsed/<doc_id>/images/`. They may also be
@@ -695,9 +696,10 @@ is written beside the export:
   "assets_missing": 1,
   "coverage": 0.3333,
   "sections": [
-    {"section_id": "ddia.chapter-1", "title": "Chương 1", "level": 1,
-     "source": "translated", "artifact": "translations/vi/ddia/ddia.chapter-1.md",
-     "freshness": "fresh", "assets_embedded": 1, "assets_missing": 0,
+    {"section_id": "ddia.chapter-1", "title": "Chương 1", "level": 1, "depth": 1,
+     "parent_id": null, "source": "translated",
+     "artifact": "translations/vi/ddia/ddia.chapter-1.md", "freshness": "fresh",
+     "assets_embedded": 1, "assets_missing": 0,
      "original_assets_embedded": null, "original_assets_missing": null}
   ],
   "warnings": [
@@ -712,6 +714,11 @@ is written beside the export:
 ```
 
 - `mode` is `translated` or `bilingual` (`--mode`).
+- `sections` are in the export's reading order: the source PDF outline's order when
+  `book.json` has one, else `sections.jsonl` order (see `commands.md`).
+- `level` is the manifest's `Section.level`. `depth` is the heading level the section
+  renders at, and `parent_id` is the section it renders inside (`null` at the top
+  level). In `bilingual` mode both columns use `depth`.
 - `source` is `translated`, `original`, or `skipped`: how the section's mixed
   rendering was filled (the right column in `bilingual` mode).
 - `original_sections` / `skipped_sections` count the sections that took the

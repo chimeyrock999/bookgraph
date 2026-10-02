@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from bookgraph.graph import build_section_graph
+from bookgraph.graph import build_section_graph, resolve_chapter
 from bookgraph.models import Section
 
 
@@ -79,3 +79,15 @@ def test_dangling_sequence_links_are_dropped() -> None:
     node = graph.nodes[0]
     assert node.prev_id is None
     assert node.next_id is None
+
+
+def test_resolve_chapter_works_on_graph_nodes() -> None:
+    sections = [
+        Section(id=i, doc_id="d", title=i, level=lvl, heading_path=[i], text="")
+        for i, lvl in [("book", 1), ("ch1", 2), ("ch1-a", 3), ("ch2", 2)]
+    ]
+    nodes = build_section_graph("d", sections).nodes
+
+    assert resolve_chapter(nodes, "ch1-a").id == "ch1"
+    assert resolve_chapter(nodes, "ch1-a", chapter_level=3).id == "ch1-a"
+    assert resolve_chapter(nodes, "book").id == "book"

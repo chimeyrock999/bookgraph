@@ -142,7 +142,10 @@ def reading_plan_progress(
         int | None,
         typer.Option(
             "--chapter-level",
-            help="Heading level of the chapter scope; defaults to the outermost ancestor.",
+            help=(
+                "Heading level of the chapter scope; defaults to the top-level ancestor, "
+                "skipping a lone book-title root."
+            ),
         ),
     ] = None,
 ) -> None:

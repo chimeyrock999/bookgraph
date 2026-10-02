@@ -24,7 +24,7 @@ from bookgraph.annotations import (
 )
 from bookgraph.assets import asset_reference, resolve_asset_path
 from bookgraph.documents import read_document
-from bookgraph.graph import SectionGraph, build_section_graph
+from bookgraph.graph import SectionGraph, SectionNode, build_section_graph
 from bookgraph.index import default_index_backend, tokenize
 from bookgraph.models import (
     ASSET_BLOCK_TYPES,
@@ -533,7 +533,7 @@ def _chapter_view(
     )
 
 
-def _section_ref(section: Section) -> SectionRef:
+def _section_ref(section: Section | SectionNode) -> SectionRef:
     return SectionRef(id=section.id, title=section.title, level=section.level)
 
 
@@ -552,7 +552,7 @@ def get_next_section(
     The result carries ``chapter`` progress (see :func:`get_plan_progress`); with
     ``stop_at_boundary`` the batch is clipped at the end of that chapter, so a tick never
     spills into the next one. ``chapter_level`` picks the heading level of the chapter
-    scope (default: the outermost ancestor).
+    scope (default: the top-level ancestor, skipping a lone book-title root).
     """
 
     _, plan = _load_plan(workspace, plan_id)
@@ -591,8 +591,8 @@ def get_plan_progress(
 
     Answers "how many sections until the end of this chapter" without fetching section
     bodies or the full outline: the chapter is the scope ancestor of the next unread
-    section (``chapter_level`` picks its heading level; default the outermost
-    ancestor), counts are by membership so resets and skipped/out-of-order reads stay
+    section (resolved by :func:`~bookgraph.graph.resolve_chapter`; ``chapter_level`` picks
+    its heading level), counts are by membership so resets and skipped/out-of-order reads stay
     correct, and ``next_sections`` is the next ``daily_sections`` batch clipped at the
     chapter boundary.
     """

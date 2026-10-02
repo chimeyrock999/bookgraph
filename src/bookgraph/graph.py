@@ -86,3 +86,35 @@ def build_section_graph(doc_id: str, sections: list[Section]) -> SectionGraph:
             node.next_id = None
 
     return SectionGraph(doc_id=doc_id, nodes=nodes)
+
+
+def resolve_chapter(
+    nodes: list[SectionNode], section_id: str, *, chapter_level: int | None = None
+) -> SectionNode:
+    """Return the "chapter" (scope ancestor-or-self) that contains ``section_id``.
+
+    With ``chapter_level`` it is the nearest ancestor-or-self whose heading ``level`` is
+    at most ``chapter_level`` (falling back to the outermost ancestor). Without it, it is
+    the outermost ancestor — except that a **lone** top-level root (one ``# Book Title``
+    heading above every chapter, common for Markdown/EPUB ingestion) is skipped one level
+    down the path, so the scope is the chapter rather than the whole book. The root
+    itself stays the scope while it is the section being read.
+
+    Shared by every API that needs "the chapter the reader is in", so they never
+    disagree. ``nodes`` come from :func:`build_section_graph` or the persisted index.
+    """
+
+    by_id = {node.id: node for node in nodes}
+    if section_id not in by_id:
+        raise ValueError(f"section '{section_id}' is not in the graph")
+
+    path = [by_id[section_id]]  # ancestor-or-self chain, innermost first
+    while path[-1].parent_id is not None and path[-1].parent_id in by_id:
+        path.append(by_id[path[-1].parent_id])
+
+    if chapter_level is not None:
+        return next((node for node in path if node.level <= chapter_level), path[-1])
+
+    root = path[-1]
+    lone_root = sum(1 for node in nodes if node.parent_id is None) == 1
+    return path[-2] if lone_root and len(path) > 1 else root

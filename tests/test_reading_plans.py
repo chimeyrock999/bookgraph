@@ -285,3 +285,46 @@ def test_chapter_progress_rejects_a_plan_section_missing_from_the_document() -> 
 def test_chapter_progress_rejects_a_non_positive_chapter_level() -> None:
     with pytest.raises(ValueError, match="chapter_level"):
         chapter_progress(_book_plan(), _BOOK, chapter_level=0)
+
+
+# a single "# Book" root above "##" chapters (common for Markdown/EPUB ingestion)
+_ROOTED_BOOK = [
+    _node("book", 1),
+    _node("ch1", 2),
+    _node("ch1-a", 3),
+    _node("ch2", 2),
+]
+
+
+def _rooted_plan(*, completed: list[str] | None = None) -> ReadingPlan:
+    return ReadingPlan(
+        plan_id="iceberg",
+        doc_id="iceberg",
+        daily_sections=5,
+        section_ids=[section.id for section in _ROOTED_BOOK],
+        completed=completed or [],
+    )
+
+
+def test_chapter_progress_skips_a_lone_book_root() -> None:
+    progress = chapter_progress(_rooted_plan(completed=["book", "ch1"]), _ROOTED_BOOK)
+
+    assert progress.chapter_id == "ch1"
+    assert progress.remaining_in_chapter == 1
+    assert progress.next_boundary_id == "ch2"
+    assert progress.next_section_ids == ["ch1-a"]
+
+
+def test_chapter_progress_keeps_the_lone_root_while_reading_it() -> None:
+    progress = chapter_progress(_rooted_plan(), _ROOTED_BOOK)
+
+    assert progress.chapter_id == "book"
+
+
+def test_chapter_progress_explicit_level_does_not_skip_the_root() -> None:
+    progress = chapter_progress(
+        _rooted_plan(completed=["book", "ch1"]), _ROOTED_BOOK, chapter_level=1
+    )
+
+    assert progress.chapter_id == "book"
+    assert progress.next_boundary_id is None

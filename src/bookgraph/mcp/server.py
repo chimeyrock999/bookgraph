@@ -56,7 +56,8 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
         ``chapter`` reports progress within the chapter holding the next unread section
         (as ``get_plan_progress``). Pass ``stop_at_boundary=True`` to clip the batch at
         the end of that chapter; ``chapter_level`` picks the chapter's heading level
-        (default: the outermost ancestor, e.g. a Part; use 2 for chapters under parts).
+        (default: the top-level ancestor, skipping a lone book-title root; pass e.g. 2
+        when chapters sit under level-1 parts).
         """
 
         try:
@@ -80,7 +81,8 @@ def build_server(workspace: WorkspacePaths) -> FastMCP:
         ``next_boundary`` section that starts after it, and ``next_sections`` — the next
         ``daily_sections`` batch clipped at that boundary. Counts are by membership, so
         reset plans and skipped or out-of-order reads stay correct. ``chapter_level``
-        picks the chapter's heading level (default: the outermost ancestor).
+        picks the chapter's heading level (default: the top-level ancestor, skipping a
+        lone book-title root; pass e.g. 2 when chapters sit under level-1 parts).
         """
 
         try:

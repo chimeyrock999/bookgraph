@@ -62,7 +62,8 @@ Operational details live in `docs/cli/parse-book-large-pdfs.md`.
 5. **Report** — when the user pauses, `list_plans()` to show `completed/total`.
    For "how many sections until the end of this chapter?", use
    `get_plan_progress(plan_id)` (or the `chapter` field of `get_next_section`) —
-   don't pull the whole outline. Pass `chapter_level=2` when chapters sit under parts.
+   don't pull the whole outline. Pass `chapter_level=2` when chapters sit under parts (a lone `# Book Title`
+   root is skipped automatically).
 
 ## Navigating and connecting
 

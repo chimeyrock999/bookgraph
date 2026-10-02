@@ -404,8 +404,11 @@ bookgraph reading-plan progress /path/to/workspace <plan_id> --chapter-level 2
 - `plan_id`: existing reading plan id (fails if the plan file is missing).
 - `--chapter-level`: heading level of the chapter scope. The chapter is the nearest
   ancestor-or-self of the next unread section whose `level` is at most this value
-  (e.g. `2` for chapters nested under level-1 parts). Defaults to the outermost
-  ancestor. Must be at least `1`.
+  (e.g. `2` for chapters nested under level-1 parts). Must be at least `1`.
+  Defaults to the top-level ancestor; when the document has a single top-level
+  heading (a `# Book Title` above every chapter, common for Markdown/EPUB), that
+  lone root is skipped one level down so the scope is the chapter, not the whole
+  book. Pass `--chapter-level` explicitly for part/chapter books or deeper wrappers.
 
 #### Writes
 
@@ -639,8 +642,9 @@ telling the user to `uv sync --extra mcp`.
   next_boundary}`, where `section` and `next_boundary` are id/title/level refs and
   `next_boundary` is `null` at the end of the document; `chapter` is `null` when the
   plan is done), and `next_sections` — the next `daily_sections` batch as refs,
-  clipped at the boundary. The chapter is the outermost ancestor of the next unread
-  section by default, or the nearest ancestor-or-self with `level <= chapter_level`.
+  clipped at the boundary. The chapter is the top-level ancestor of the next unread
+  section by default (a lone book-title root is skipped one level down), or the
+  nearest ancestor-or-self with `level <= chapter_level`.
   Counts are by membership, so plan resets, skipped front matter, and out-of-order
   `mark_read` calls stay correct (same semantics as `bookgraph reading-plan progress`).
 - `get_section(doc_id, section_id, include_assets=True)` → one section's full

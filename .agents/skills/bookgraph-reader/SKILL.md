@@ -55,7 +55,9 @@ Optional navigation tools:
 - `get_related(doc_id, section_id)` — show parent/prev/next/children neighbours.
 - `get_concept(concept)` — show cross-book mentions for a concept.
 - `get_plan_progress(plan_id, chapter_level=None)` — current chapter, sections
-  left in it, and the next chapter boundary, without section text.
+  left in it, and the next chapter boundary, without section text. A lone
+  `# Book Title` root is skipped automatically; pass `chapter_level=2` when
+  chapters sit under level-1 parts.
 
 ## Reading loop
 

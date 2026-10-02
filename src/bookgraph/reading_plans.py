@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from bookgraph.graph import build_section_graph
+from bookgraph.graph import build_section_graph, resolve_chapter
 from bookgraph.models import ReadingPlan, Section
 from bookgraph.utils import validate_slug_id
 
@@ -105,10 +105,10 @@ def chapter_progress(
 
     ``sections`` is the document's manifest in reading order; the heading hierarchy is
     derived from it with :func:`~bookgraph.graph.build_section_graph`, so this matches
-    ``get_outline``. The scope is the outermost ancestor-or-self of the next unread
-    section by default; with ``chapter_level`` it is the nearest ancestor-or-self whose
-    heading ``level`` is at most ``chapter_level`` (e.g. ``2`` for chapters nested
-    under level-1 parts), falling back to the outermost ancestor.
+    ``get_outline``. The scope is resolved by :func:`~bookgraph.graph.resolve_chapter`:
+    the outermost ancestor of the next unread section (skipping a lone book-title root)
+    by default, or the nearest ancestor-or-self whose heading ``level`` is at most
+    ``chapter_level`` (e.g. ``2`` for chapters nested under level-1 parts).
     """
 
     if chapter_level is not None and chapter_level < 1:
@@ -144,11 +144,7 @@ def chapter_progress(
             f"in document '{plan.doc_id}'"
         )
 
-    chapter = nodes[position[current_id]]
-    while chapter.parent_id is not None and (
-        chapter_level is None or chapter.level > chapter_level
-    ):
-        chapter = nodes[position[chapter.parent_id]]
+    chapter = resolve_chapter(nodes, current_id, chapter_level=chapter_level)
 
     # The chapter's subtree is the contiguous run after it of strictly deeper sections,
     # mirroring how build_section_graph assigns parents; the first section past it is

@@ -57,12 +57,17 @@ class ExportWarning(BaseModel):
 
     ``reference`` is the raw asset reference (a Markdown image link or a parsed
     block's asset path) for an asset-scoped warning, ``None`` otherwise.
+    ``source_path`` is the workspace-relative file that carries that reference — the
+    translation artifact, or the parsed ``document.json`` for an original section —
+    and ``block_id`` the parsed block when the reference came from one.
     """
 
     code: str
     message: str
     section_id: str | None = None
     reference: str | None = None
+    source_path: str | None = None
+    block_id: str | None = None
 
 
 class ExportSection(BaseModel):
@@ -96,6 +101,8 @@ class ExportReport(BaseModel):
     translation to compare against (``0`` in ``translated`` mode), and
     ``assets_missing`` the asset references that could not be embedded, per column.
     ``output``/``renderer`` stay ``None`` for a preflight-only run.
+    ``show_status`` records whether status/debug metadata was also printed on the
+    reading pages (``--show-status``); by default it lives only in this report.
     """
 
     doc_id: str
@@ -115,6 +122,7 @@ class ExportReport(BaseModel):
     warnings: list[ExportWarning] = Field(default_factory=list)
     renderer: str | None = None
     output: str | None = None
+    show_status: bool = False
 
     @classmethod
     def from_sections(
@@ -128,6 +136,7 @@ class ExportReport(BaseModel):
         fallback: FallbackPolicy,
         generated_at: str,
         warnings: list[ExportWarning],
+        show_status: bool = False,
     ) -> ExportReport:
         """A report for ``sections`` with its coverage and fallback counts filled in."""
 
@@ -151,6 +160,7 @@ class ExportReport(BaseModel):
             fallback=fallback,
             generated_at=generated_at,
             warnings=warnings,
+            show_status=show_status,
         )
 
     @property

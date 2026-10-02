@@ -6,6 +6,7 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from bookgraph.cli import app
+from bookgraph.exports.translated import report_path_for
 from bookgraph.models import Section
 from bookgraph.sections import write_sections
 from bookgraph.workspace import WorkspacePaths
@@ -211,3 +212,24 @@ def test_export_rejects_unknown_mode(tmp_path: Path) -> None:
 
     assert result.exit_code == 2
     assert "--mode must be one of: translated, bilingual" in result.output
+
+
+def test_export_show_status_prints_status_on_the_pages(tmp_path: Path) -> None:
+    paths = _workspace(tmp_path)
+    output = paths.exports_root / f"{DOC}.vi-progress.html"
+    command = ["export", "translated-pdf", str(tmp_path), DOC, "--renderer", "html"]
+
+    result = CliRunner().invoke(app, command)
+    assert result.exit_code == 0, result.output
+    clean = output.read_text(encoding="utf-8")
+    for label in ("Missing asset", "Untranslated", "(original)", "not tracked", "coverage"):
+        assert label not in clean
+    assert json.loads(report_path_for(output).read_text())["show_status"] is False
+
+    result = CliRunner().invoke(app, [*command, "--show-status"])
+    assert result.exit_code == 0, result.output
+    debug = output.read_text(encoding="utf-8")
+    assert "Missing asset: images/gone.png" in debug
+    assert "Untranslated — original text" in debug
+    assert "(not tracked)" in debug
+    assert json.loads(report_path_for(output).read_text())["show_status"] is True

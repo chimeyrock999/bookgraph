@@ -75,13 +75,18 @@ def page_style(report: ExportReport) -> str:
 
 
 def columns_legend(report: ExportReport) -> str:
-    """The frontmatter line that says which column is which (``bilingual`` only)."""
+    """The frontmatter line that says which column is which (``bilingual`` only).
+
+    How untranslated rows read is status metadata, so it is added only with
+    ``show_status``.
+    """
 
     if report.mode != "bilingual":
         return ""
+    fallback = f" {_LEGEND_FALLBACK[report.fallback]}" if report.show_status else ""
     return (
         '<p class="columns-legend">Left column: original text. Right column: '
-        f"{escape(report.lang)} reading edition. {_LEGEND_FALLBACK[report.fallback]}</p>"
+        f"{escape(report.lang)} reading edition.{fallback}</p>"
     )
 
 

@@ -112,7 +112,7 @@ def test_bilingual_pairs_each_original_section_with_the_mixed_rendering(
 
     left, right = _columns(html, third)
     assert '<div class="equation">E = mc^2</div>' in left
-    assert "Untranslated — original text" in right and "Untranslated" not in left
+    assert right == left  # a fallback row shows the same original twice, no status label
 
     report = export.report
     assert report.mode == "bilingual"
@@ -131,7 +131,7 @@ def test_bilingual_pairs_each_original_section_with_the_mixed_rendering(
     for code in (ASSET_MISSING, "unpaired", "translation_"):
         assert code not in html
     assert "@page { size: A4 landscape" in html
-    assert "<dt>mode</dt><dd>bilingual</dd>" in html
+    assert "<dt>mode</dt>" not in html  # status metadata, shown only with show_status
 
 
 def test_bilingual_original_column_reports_assets_of_translated_sections(
@@ -150,7 +150,7 @@ def test_bilingual_original_column_reports_assets_of_translated_sections(
     assert ASSET_MISSING not in codes(translated.report, second)
     assert ASSET_MISSING in codes(bilingual.report, second)
     left, right = _columns(bilingual.html, second)
-    assert "Missing asset: missing-table.png" in left
+    assert "Table 1. Lost table." in left and "Missing asset" not in left  # caption stays
     assert "Đã dịch." in right
 
 
@@ -165,7 +165,7 @@ def test_bilingual_skip_fallback_keeps_the_original_beside_the_placeholder(
 
     left, right = _columns(export.html, second)
     assert "Second section English text." in left
-    assert "Not translated yet" in right and "Second section English text." not in right
+    assert right == "<h2>Section Two</h2>"  # title only; the placeholder needs show_status
     assert export.report.skipped_sections == 3
     assert export.report.unpaired_sections == 3
 
@@ -260,22 +260,37 @@ def test_bilingual_columns_are_styled_for_pdf_outline_images_and_language(
 
 
 @pytest.mark.parametrize(
-    ("fallback", "wording"),
+    ("fallback", "wording", "note"),
     [
-        ("original", "Untranslated sections repeat the original text."),
-        ("skip", "Untranslated sections are left out."),
+        ("original", "Untranslated sections repeat the original text.", "Untranslated —"),
+        ("skip", "Untranslated sections are left out.", "Not translated yet"),
     ],
 )
-def test_bilingual_legend_describes_the_fallback_in_reader_terms(
-    workspace: WorkspacePaths, fallback: FallbackPolicy, wording: str
+def test_bilingual_legend_names_columns_and_status_waits_for_show_status(
+    workspace: WorkspacePaths, fallback: FallbackPolicy, wording: str, note: str
 ) -> None:
-    html = build_translated_export(
-        workspace, DOC, lang="vi", mode="bilingual", fallback=fallback, generated_at=GENERATED_AT
-    ).html
+    _, second, _ = section_ids(workspace)
 
-    assert "Left column: original text. Right column: vi reading edition." in html
-    assert wording in html
-    assert f"{fallback} fallback" not in html
+    def export(show_status: bool) -> str:
+        return build_translated_export(
+            workspace,
+            DOC,
+            lang="vi",
+            mode="bilingual",
+            fallback=fallback,
+            generated_at=GENERATED_AT,
+            show_status=show_status,
+        ).html
+
+    clean, debug = export(False), export(True)
+
+    legend = "Left column: original text. Right column: vi reading edition."
+    assert legend in clean and legend in debug
+    assert wording not in clean and note not in _columns(clean, second)[1]
+    assert wording in debug and note in _columns(debug, second)[1]
+    assert "<dt>mode</dt><dd>bilingual</dd>" in debug
+    assert "<dt>mode</dt>" not in clean
+    assert f"{fallback} fallback" not in debug
 
 
 def test_bilingual_strict_also_covers_original_assets_of_translated_sections(

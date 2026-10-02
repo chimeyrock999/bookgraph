@@ -107,10 +107,47 @@ chat), reuse the cache instead of retranslating:
    section that has assets left out figures/tables; mention that or redo it.
 2. Otherwise (`missing`, `stale`, or `untracked` you don't trust) translate the
    section's real text, then `write_section_translation(doc_id, section_id, lang,
-   content, includes_assets=..., source_section_hash=<current_section_hash>)` so
-   the next run reuses it.
+   content, includes_assets=..., source_section_hash=<current_section_hash>,
+   notes=...)` so the next run reuses it.
 3. `list_section_artifacts(doc_id, lang)` shows every cached translation and which
    are `stale` after a re-segment.
+
+### Three channels — never mix them
+
+A cached translation is reused by later runs and printed in the reading PDF, so it
+must hold **book content only**. Everything else has its own place:
+
+| What | Where it goes |
+| --- | --- |
+| The translated section: headings, prose, tables, figures | `content` of `write_section_translation` |
+| QA/checker results, terminology decisions, "kept X untranslated", doubts about the source | `notes` of `write_section_translation` (stored beside the translation, returned by `get_section_translation`, never exported) |
+| `MEDIA:/path` delivery markers, "Đã lưu cache/enrich và mark read: …", progress, job status | your **final chat reply** only |
+| Coverage, freshness, missing assets of an export | the export's `.report.json` / CLI output — read it, don't copy it into a translation |
+
+Rules:
+
+- Write translations **only** through `write_section_translation` — it is the only
+  translation store. Never write translation files yourself: not under
+  `translations/`, and not in any directory of your own (a `translation_cache/`, a
+  scratch folder). Nothing reads them, so the section stays untranslated in the
+  export and in batch completion. Never paste your chat reply (or a part of it)
+  into `content`.
+- Link each figure/table by its `AssetRef.link` (relative, e.g.
+  `![Hình 1-1](images/fig1-1.png)`), never by `AssetRef.path` (absolute — it is for
+  opening the file). `MEDIA:` belongs to the chat reply, not to `content`.
+- Don't translate export output back into the cache: labels such as `(original)`,
+  `(untracked)`, *Translation status unknown* or *Missing asset: …* are BookGraph
+  status, not book text.
+- Annotation summaries and glosses follow the same rule: book explanation only.
+- After translating, advance with `complete_reading_batch(plan_id,
+  translation_lang=..., ...)`, not plain `mark_read`, and **always pass
+  `translation_lang`** in a translation job: only then does it verify the cached
+  translation exists and is fresh before marking the batch read. Without it the
+  batch completes with nothing saved. A **translation-only** job (no annotating, no
+  index build) also passes `require_annotation=False` and `index="ignore"` (or
+  `"deferred"`), and lists the block ids of the figures it opened in
+  `inspected_assets` — the defaults require an annotation and a fresh index, which
+  such a job never produces.
 
 ## Behavior
 

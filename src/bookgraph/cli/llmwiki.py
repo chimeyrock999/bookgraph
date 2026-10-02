@@ -10,7 +10,7 @@ import typer
 
 from bookgraph.cli._app import llmwiki_app
 from bookgraph.cli._shared import _validate_id
-from bookgraph.llmwiki_bridge import stage_sections
+from bookgraph.llmwiki_bridge import ensure_project_config, stage_sections
 from bookgraph.reading_plans import read_reading_plan
 from bookgraph.sections import read_sections
 from bookgraph.workspace import WorkspacePaths
@@ -49,6 +49,21 @@ def _shell_command_in(cwd: Path, command: list[str]) -> str:
     return f"cd {shlex.quote(str(cwd))} && {shlex.join(command)}"
 
 
+def _require_compiled(paths: WorkspacePaths) -> None:
+    """Fail unless the llmwiki project has been compiled at least once.
+
+    Staging alone is not enough: llmwiki serves and shows an empty project until a
+    compile has run, so ``serve`` and ``view`` require the compile-state marker.
+    """
+
+    if not paths.llmwiki_state.is_file():
+        raise typer.BadParameter(
+            f"No compiled llmwiki project at {paths.llmwiki_root} "
+            f"({paths.llmwiki_state} missing). Bridge and compile a book first, e.g. "
+            "'bookgraph llmwiki bridge <workspace> <doc_id> --compile'."
+        )
+
+
 @llmwiki_app.command("serve")
 def llmwiki_serve(
     workspace_path: Annotated[Path, typer.Argument(help="BookGraph workspace/output root path.")],
@@ -84,16 +99,56 @@ def llmwiki_serve(
         typer.echo(shlex.join(command))
         return
 
-    # Staging alone is not enough — llmwiki serves an empty project until a compile
-    # has run, so require the compile-state marker before launching.
-    if not paths.llmwiki_state.is_file():
-        raise typer.BadParameter(
-            f"No compiled llmwiki project at {paths.llmwiki_root} "
-            f"({paths.llmwiki_state} missing). Bridge and compile a book first, e.g. "
-            "'bookgraph llmwiki bridge <workspace> <doc_id> --compile'."
-        )
-
+    _require_compiled(paths)
     _run_llmwiki(command)
+
+
+@llmwiki_app.command("view")
+def llmwiki_view(
+    workspace_path: Annotated[Path, typer.Argument(help="BookGraph workspace/output root path.")],
+    open_browser: Annotated[
+        bool,
+        typer.Option("--open", help="Open the viewer in the default browser after startup."),
+    ] = False,
+    port: Annotated[
+        int | None,
+        typer.Option(
+            "--port", min=1, max=65535, help="Port to bind (default: an OS-assigned port)."
+        ),
+    ] = None,
+    print_command: Annotated[
+        bool,
+        typer.Option(
+            "--print",
+            help="Print the resolved llmwiki view command instead of launching it.",
+        ),
+    ] = False,
+) -> None:
+    """Browse the compiled llmwiki project in llmwiki's local web viewer.
+
+    Runs ``llmwiki view`` (``llm-wiki-compiler`` >= 1.4) inside
+    ``<workspace>/llmwiki``: ``view`` has no ``--root`` option and serves the
+    current directory. The viewer is read-only and binds to loopback only; it
+    shows the compiled concept pages, the sources (``<doc_id>/<section_id>.md``),
+    the concept graph, health/citation checks and the ``compile --review`` queue.
+
+    It is BookGraph's wiki UI, not a reading surface: the reading loop stays in
+    BookGraph MCP. See ``docs/mcp/llmwiki-integration.md``.
+    """
+
+    paths = _resolve_workspace(workspace_path)
+    command = ["llmwiki", "view"]
+    if port is not None:
+        command += ["--port", str(port)]
+    if open_browser:
+        command.append("--open")
+
+    if print_command:
+        typer.echo(_shell_command_in(paths.llmwiki_root, command))
+        return
+
+    _require_compiled(paths)
+    _run_llmwiki(command, cwd=paths.llmwiki_root)
 
 
 @llmwiki_app.command("bridge")
@@ -125,23 +180,73 @@ def llmwiki_bridge(
             help="With --compile, print the llmwiki compile command instead of running it.",
         ),
     ] = False,
+    review: Annotated[
+        bool,
+        typer.Option(
+            "--review",
+            help=(
+                "With --compile, write generated pages as review candidates "
+                "('llmwiki review approve'; shown in the viewer's Reviews screen)."
+            ),
+        ),
+    ] = False,
+    lang: Annotated[
+        str | None,
+        typer.Option(
+            "--lang",
+            help="With --compile, target language for generated wiki pages (e.g. vi, ja).",
+        ),
+    ] = None,
+    instructions: Annotated[
+        Path | None,
+        typer.Option(
+            "--instructions",
+            help="With --compile, a UTF-8 editorial instructions file (max 64 KiB).",
+        ),
+    ] = None,
+    concurrency: Annotated[
+        int | None,
+        typer.Option("--concurrency", min=1, help="With --compile, max concurrent LLM calls."),
+    ] = None,
 ) -> None:
     """Stage BookGraph sections into the workspace's llmwiki ``sources/`` project.
 
-    Each section becomes its own bounded ``sources/<section_id>.md`` file carrying
+    Each section becomes its own bounded ``<section_id>.md`` source file carrying
     BookGraph provenance, so a large book is never routed through one truncating
     full-book ingest. Staging is idempotent: unchanged sections are left untouched
     so llmwiki's incremental compile adds only a daily batch without reprocessing
     the whole book. BookGraph's canonical inputs are only read, never mutated.
 
+    A new llmwiki project groups sources by book (``sources/<doc_id>/``) and gets
+    a ``.llmwiki/config.json`` enabling recursive sources; a project staged flat
+    before that stays flat (see :func:`bookgraph.llmwiki_bridge.ensure_project_config`).
+
     ``llmwiki compile`` has no ``--root`` option (only ``serve`` does), so
     ``--compile`` runs it with the llmwiki project root as working directory.
+    ``--review``, ``--lang``, ``--instructions`` and ``--concurrency`` are passed
+    through to it (``llm-wiki-compiler`` >= 1.4).
     """
 
-    # --print only has meaning for the compile step; reject it early rather than
-    # silently dropping the flag when the user forgot --compile.
+    # --print and the compile options only have meaning for the compile step;
+    # reject them early rather than silently dropping them without --compile.
     if print_command and not compile_wiki:
         raise typer.BadParameter("--print applies to the compile step; pass --compile as well.")
+    compile_options = {
+        "--review": review,
+        "--lang": lang is not None,
+        "--instructions": instructions is not None,
+        "--concurrency": concurrency is not None,
+    }
+    given = [name for name, is_set in compile_options.items() if is_set]
+    if given and not compile_wiki:
+        raise typer.BadParameter(f"{given[0]} applies to the compile step; pass --compile.")
+    # Compile runs inside llmwiki/, so a relative instructions path must be made
+    # absolute against the caller's cwd before handing it over.
+    instructions_path = None
+    if instructions is not None:
+        instructions_path = instructions.expanduser().resolve()
+        if not instructions_path.is_file():
+            raise typer.BadParameter(f"Instructions file not found: {instructions_path}")
 
     paths = _resolve_workspace(workspace_path)
     resolved_doc_id = _validate_id(doc_id, "doc_id")
@@ -179,9 +284,11 @@ def llmwiki_bridge(
             typer.echo(f"No sections read yet in plan '{resolved_plan_id}'; nothing to stage.")
             return
 
-    result = stage_sections(sections, paths.llmwiki_sources)
+    nested = ensure_project_config(paths.llmwiki_root)
+    result = stage_sections(sections, paths.llmwiki_sources, nested=nested)
     typer.echo(f"doc_id: {resolved_doc_id}")
     typer.echo(f"sources: {result.sources_dir}")
+    typer.echo(f"layout: {'sources/<doc_id>/' if nested else 'sources/ (flat)'}")
     typer.echo(f"staged: {len(result.staged)}")
     typer.echo(f"unchanged: {len(result.unchanged)}")
 
@@ -189,6 +296,14 @@ def llmwiki_bridge(
         return
 
     compile_command = ["llmwiki", "compile"]
+    if review:
+        compile_command.append("--review")
+    if lang is not None:
+        compile_command += ["--lang", lang]
+    if instructions_path is not None:
+        compile_command += ["--instructions", str(instructions_path)]
+    if concurrency is not None:
+        compile_command += ["--concurrency", str(concurrency)]
     if print_command:
         typer.echo(_shell_command_in(paths.llmwiki_root, compile_command))
         return

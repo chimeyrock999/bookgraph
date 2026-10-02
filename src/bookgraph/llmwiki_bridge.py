@@ -2,7 +2,8 @@
 
 BookGraph's canonical reading graph lives in ``sources/sections/<doc_id>/`` and
 ``indexes/bookgraph.db``. The standalone ``llm-wiki-compiler`` tool has its own
-project lifecycle: it ingests top-level ``sources/*.md`` files, runs
+project lifecycle: it ingests top-level ``sources/*.md`` files (or
+``sources/**`` when ``.llmwiki/config.json`` sets ``sources.recursive``), runs
 ``llmwiki compile`` (incrementally, tracked in ``.llmwiki/state.json``), and
 writes compiled pages under ``wiki/``.
 
@@ -13,6 +14,10 @@ or more BookGraph sections as individual llmwiki source files so that:
   section is its own bounded source file;
 - BookGraph provenance (``doc_id`` / ``section_id``) is preserved in each staged
   file's frontmatter, so compiled pages can trace back to the reading graph;
+- a new project groups sources by book (``sources/<doc_id>/<section_id>.md``,
+  with ``sources.recursive`` enabled in ``.llmwiki/config.json``), so the
+  llmwiki viewer's Sources screen lists each section as
+  ``<doc_id>/<section_id>.md`` and a book's sections sort together;
 - re-running the bridge is idempotent — an unchanged section is left untouched on
   disk (stable mtime), so llmwiki's own incremental compile skips it and a daily
   batch is added without reprocessing the whole book.
@@ -28,6 +33,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from bookgraph.models import Section
+
+PROJECT_CONFIG = {"version": 1, "sources": {"recursive": True}}
+"""``.llmwiki/config.json`` the bridge writes when it creates the llmwiki project."""
 
 
 @dataclass(frozen=True)
@@ -77,8 +85,43 @@ def render_llmwiki_source(section: Section) -> str:
     return "\n".join(lines) + "\n\n" + body + "\n"
 
 
-def stage_sections(sections: list[Section], sources_dir: Path) -> BridgeResult:
+def ensure_project_config(llmwiki_root: Path) -> bool:
+    """Decide the staging layout, writing the project config for a new project.
+
+    Returns ``True`` when sources are staged nested per document
+    (``sources/<doc_id>/``), which needs llmwiki's opt-in ``sources.recursive``.
+
+    - New project (no ``sources/`` and no ``.llmwiki/config.json``): write
+      :data:`PROJECT_CONFIG` and stage nested.
+    - Existing config: never rewritten; nested only if it already sets
+      ``sources.recursive: true``.
+    - Existing flat ``sources/`` without a config: stay flat. Nesting it now
+      would leave the old flat copies in place and compile every section twice.
+    """
+
+    config_path = llmwiki_root / ".llmwiki" / "config.json"
+    if config_path.is_file():
+        try:
+            config = json.loads(config_path.read_text())
+        except (OSError, ValueError):
+            return False
+        sources = config.get("sources") if isinstance(config, dict) else None
+        return isinstance(sources, dict) and sources.get("recursive") is True
+    if (llmwiki_root / "sources").exists():
+        return False
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(json.dumps(PROJECT_CONFIG, indent=2) + "\n")
+    return True
+
+
+def stage_sections(
+    sections: list[Section], sources_dir: Path, *, nested: bool = False
+) -> BridgeResult:
     """Stage ``sections`` as individual llmwiki source files, idempotently.
+
+    With ``nested``, each file goes under ``sources_dir/<doc_id>/``; otherwise
+    directly under ``sources_dir``. Files are always regular files: llmwiki
+    (>= 1.3) does not compile symlinked sources.
 
     A section whose staged file already exists with identical content is left
     untouched (reported as ``unchanged``) so its mtime stays stable and llmwiki's
@@ -89,7 +132,9 @@ def stage_sections(sections: list[Section], sources_dir: Path) -> BridgeResult:
     staged: list[Path] = []
     unchanged: list[Path] = []
     for section in sections:
-        path = sources_dir / staged_source_name(section)
+        directory = sources_dir / section.doc_id if nested else sources_dir
+        directory.mkdir(exist_ok=True)
+        path = directory / staged_source_name(section)
         content = render_llmwiki_source(section)
         if path.is_file() and path.read_text() == content:
             unchanged.append(path)

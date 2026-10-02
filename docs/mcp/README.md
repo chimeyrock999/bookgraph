@@ -12,4 +12,5 @@ Current guides:
   mcp`, configure clients, and run the reading loop.
 - [`llmwiki-integration.md`](llmwiki-integration.md) — run the optional `llmwiki`
   MCP server alongside BookGraph MCP for compiled-wiki search/query/context-pack
-  workflows, and why BookGraph MCP stays the primary reading server.
+  workflows, browse the compiled wiki in llmwiki's web viewer, and why BookGraph
+  MCP stays the primary reading server.

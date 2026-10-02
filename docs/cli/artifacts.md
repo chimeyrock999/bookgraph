@@ -825,9 +825,11 @@ is written beside the export:
   - `translation_missing_assets`: a translation left out a figure/table of its
     section. Per staged asset the body does not link: `reference` is the asset's
     `AssetRef.link` (what to add), `block_id` its parsed block, `source_path` the
-    parsed `document.json`. A registered prose-only translation
-    (`includes_assets: false`) of a section whose assets were never staged gets one
-    warning with no `reference`. `--strict` refuses it.
+    parsed `document.json` (where the block lives), and `origin` is `translation`.
+    A registered prose-only translation (`includes_assets: false`) of a section
+    whose assets were never staged gets one warning with no `reference`. Both are
+    `column: mixed`: the bilingual original column still shows the figure.
+    `--strict` refuses it.
   - `translation_untracked`: no valid registry record, or the body was edited after
     registration. Rendered (with a note under `--show-status`); never refused.
   - `translation_structure_changed`: the rendered translation dropped, added, or

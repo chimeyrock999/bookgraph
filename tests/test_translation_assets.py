@@ -61,10 +61,41 @@ def test_misleading_sidecar_does_not_hide_a_missing_figure(
     assert warning.reference == "images/fig1.png"
     assert warning.block_id == "b2"
     assert warning.source_path == f"sources/parsed/{DOC}/document.json"
+    assert (warning.origin, warning.column) == ("translation", "mixed")
     assert f"translations/vi/{DOC}/{chapter}.md" in warning.message
     with pytest.raises(ExportError, match="strict mode"):
         write_translated_export(export, tmp_path / "out.html", HtmlRenderer(), strict=True)
     assert not (tmp_path / "out.html").exists()
+
+
+def test_bilingual_missing_figure_is_a_mixed_column_translation_warning(
+    workspace: WorkspacePaths,
+) -> None:
+    chapter, _, _ = _section_ids(workspace)
+    _register(workspace, chapter, "# Chương Một\n\nChỉ có chữ.\n", includes_assets=True)
+
+    export = build_translated_export(
+        workspace, DOC, lang="vi", fallback="skip", mode="bilingual", generated_at=GENERATED_AT
+    )
+
+    # The original column embeds the figure; only the translated side lacks it.
+    assert export.report.sections[0].original_assets_embedded == 1
+    [warning] = [w for w in export.report.warnings if w.section_id == chapter]
+    assert (warning.code, warning.column, warning.origin) == (
+        TRANSLATION_MISSING_ASSETS,
+        "mixed",
+        "translation",
+    )
+
+
+def test_prose_only_claim_warning_is_tagged_translation(workspace: WorkspacePaths) -> None:
+    _, second, _ = _section_ids(workspace)  # its table file was never staged
+    _register(workspace, second, "# Phần Hai\n", includes_assets=False)
+
+    [warning] = [w for w in _export(workspace).report.warnings if w.section_id == second]
+
+    assert (warning.code, warning.reference) == (TRANSLATION_MISSING_ASSETS, None)
+    assert (warning.origin, warning.column) == ("translation", "mixed")
 
 
 @pytest.mark.parametrize(

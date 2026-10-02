@@ -128,3 +128,35 @@ def test_normalize_tables_pads_trailing_and_wide_rowspans() -> None:
         "<tr><td>c</td><td>d</td><td>e</td><td></td></tr>"
         "</table>"
     )
+
+
+def test_docx_image_in_nested_table_is_kept_and_staged(tmp_path: Path) -> None:
+    from bookgraph.parsers.markitdown import MarkItDownParser
+
+    inner = table([[cell("in"), cell(image_paragraph("rIdImg1", "NestedFig"))]])
+    body = table([[cell("Outer"), cell(inner)]])
+    source = write_docx(tmp_path / "nested.docx", body, {"rIdImg1": PNG_1X1})
+    output_dir = tmp_path / "parsed" / "nested"
+
+    with pytest.warns(UserWarning, match="1 nested table"):
+        MarkItDownParser().parse(source, output_dir)
+
+    staged_md = (output_dir / "nested.md").read_text()
+    assert "| Outer | in / ![NestedFig](images/image-" in staged_md
+    assert [path.read_bytes() for path in (output_dir / "images").iterdir()] == [PNG_1X1]
+
+
+def test_flatten_keeps_images_and_text_order() -> None:
+    from bookgraph.parsers.markitdown_docx import normalize_tables
+
+    html = (
+        "<table><tr><td>A</td><td><table>"
+        '<tr><td>x <img alt="f" src="f.png"/> y</td><td>z</td></tr>'
+        "<tr><td>w</td><td></td></tr>"
+        "</table></td></tr></table>"
+    )
+
+    normalized, flattened = normalize_tables(html)
+
+    assert flattened == 1
+    assert '<td>x <img alt="f" src="f.png"/> y / z; w</td>' in normalized

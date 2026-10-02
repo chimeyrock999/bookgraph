@@ -11,14 +11,17 @@ happen on that path, and both are fixed here before markdownify sees the HTML:
 
 Rowspans are padded with empty cells so columns stay aligned. A nested table cannot be
 expressed in a Markdown table cell, so it is flattened into the cell as text (cells joined by
-``" / "``, rows by ``"; "``) and counted, letting the parser warn that the structure changed.
+``" / "``, rows by ``"; "``, images kept) and counted, letting the parser warn that the
+structure changed.
 """
 
 from __future__ import annotations
 
+import copy
 from typing import Any
 
 from bs4 import BeautifulSoup, Tag
+from bs4.element import Comment, NavigableString
 from markitdown import MarkItDown
 from markitdown.converters import DocxConverter, HtmlConverter
 
@@ -103,7 +106,7 @@ def normalize_tables(html: str) -> tuple[str, int]:
     # Innermost first: a nested table is flattened into its cell before its parent is padded.
     for table in reversed(tables):
         if table.find_parent("table") is not None:
-            table.replace_with(_flatten_table(table))
+            table.replace_with(*_flatten_table(table))
             flattened += 1
         else:
             _pad_rowspans(soup, table)
@@ -168,10 +171,42 @@ def _fill(
     return col
 
 
-def _flatten_table(table: Tag) -> str:
-    rows = []
+def _flatten_table(table: Tag) -> list[str | Tag]:
+    """The nested table's content as inline nodes: its text, plus each ``<img>`` kept as is.
+
+    Keeping the image elements lets markdownify emit ``![alt](src)`` inside the outer cell, so
+    a picture in a nested table is still staged rather than silently dropped with the markup.
+    """
+
+    rows: list[list[str | Tag]] = []
     for row in _rows(table):
-        texts = [" ".join(cell.get_text(" ").split()) for cell in _cells(row)]
-        if any(texts):
-            rows.append(NESTED_CELL_SEPARATOR.join(texts))
-    return NESTED_ROW_SEPARATOR.join(rows)
+        cells = [content for content in map(_inline_content, _cells(row)) if content]
+        if cells:
+            rows.append(_joined(cells, NESTED_CELL_SEPARATOR))
+    return _joined(rows, NESTED_ROW_SEPARATOR)
+
+
+def _inline_content(cell: Tag) -> list[str | Tag]:
+    nodes: list[str | Tag] = []
+    words: list[str] = []
+    for node in cell.descendants:
+        if isinstance(node, Tag):
+            if node.name == "img":
+                if words:
+                    nodes.append(" ".join(words) + " ")
+                    words = []
+                nodes.append(copy.copy(node))
+        elif isinstance(node, NavigableString) and not isinstance(node, Comment):
+            words.extend(node.split())
+    if words:
+        nodes.append((" " if nodes else "") + " ".join(words))
+    return nodes
+
+
+def _joined(groups: list[list[str | Tag]], separator: str) -> list[str | Tag]:
+    out: list[str | Tag] = []
+    for index, group in enumerate(groups):
+        if index:
+            out.append(separator)
+        out.extend(group)
+    return out

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import base64
+import time
 import zipfile
 from pathlib import Path
+from urllib.parse import quote
 
 import pytest
 
@@ -132,6 +134,64 @@ def test_unbalanced_backtick_in_alt_keeps_the_code_span(tmp_path: Path) -> None:
     MarkItDownParser(converter=_FakeConverter(markdown)).parse(source, output_dir)
 
     assert (output_dir / "book.md").read_text() == markdown
+
+
+def test_lone_backtick_in_alt_still_stages_the_image(tmp_path: Path) -> None:
+    source = tmp_path / "book.epub"
+    with zipfile.ZipFile(source, "w") as archive:
+        archive.writestr("OEBPS/a.png", b"png")
+    output_dir = tmp_path / "parsed" / "book"
+    # No closing backtick anywhere: CommonMark reads it as literal text, so this is an image.
+    markdown = "![a `b](a.png)\n"
+
+    document = MarkItDownParser(converter=_FakeConverter(markdown)).parse(source, output_dir)
+
+    assert (output_dir / "book.md").read_text() == "![a `b](images/a.png)\n"
+    assert "unresolved_image_count" not in document.metadata
+
+
+def test_many_images_on_one_line_are_rewritten_in_linear_time(tmp_path: Path) -> None:
+    source = tmp_path / "deck.pptx"
+    source.write_bytes(b"pptx")
+    output_dir = tmp_path / "parsed" / "deck"
+    pictures = [_data_uri(PNG_1X1 + index.to_bytes(4, "big") * 2000) for index in range(300)]
+    markdown = " ".join(f"![p{index}]({uri})" for index, uri in enumerate(pictures)) + "\n"
+
+    started = time.perf_counter()
+    MarkItDownParser(converter=_FakeConverter(markdown)).parse(source, output_dir)
+    elapsed = time.perf_counter() - started
+
+    assert "data:" not in (output_dir / "deck.md").read_text()
+    assert len(list((output_dir / "images").iterdir())) == 300
+    # Rescanning the rest of the line per image took several seconds here; one pass is far less.
+    assert elapsed < 2.0
+
+
+def test_percent_encoded_data_uri_is_staged(tmp_path: Path) -> None:
+    source = tmp_path / "page.html"
+    source.write_text("<html/>")
+    output_dir = tmp_path / "parsed" / "page"
+    svg = "<svg xmlns='http://www.w3.org/2000/svg'/>"
+    markdown = f"![icon](data:image/svg+xml,{quote(svg, safe='')})\n"
+
+    document = MarkItDownParser(converter=_FakeConverter(markdown)).parse(source, output_dir)
+
+    [image] = _image_blocks(document)
+    assert str(image.metadata["src"]).endswith(".svg")
+    assert (output_dir / str(image.metadata["src"])).read_text() == svg
+    assert "unresolved_image_count" not in document.metadata
+
+
+def test_distinct_broken_data_uris_count_separately(tmp_path: Path) -> None:
+    source = tmp_path / "report.docx"
+    source.write_bytes(b"docx")
+    output_dir = tmp_path / "parsed" / "report"
+    markdown = "![a](data:image/png;base64,!!!a)\n\n![b](data:image/png;base64,!!!b)\n"
+
+    with pytest.warns(UserWarning, match="2 image reference"):
+        document = MarkItDownParser(converter=_FakeConverter(markdown)).parse(source, output_dir)
+
+    assert document.metadata["unresolved_image_count"] == 2
 
 
 def test_flattened_nested_tables_are_reported(tmp_path: Path) -> None:

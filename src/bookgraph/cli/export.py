@@ -12,11 +12,13 @@ from bookgraph.exports.models import (
     FALLBACK_POLICIES,
     ExportMode,
     ExportReport,
+    ExportWarning,
     FallbackPolicy,
 )
 from bookgraph.exports.renderers import (
     AUTO_RENDERER,
     RenderError,
+    bilingual_layout_for,
     check_output_suffix,
     default_renderer_registry,
     select_renderer,
@@ -41,7 +43,11 @@ def _print_report(report: ExportReport) -> None:
         f"coverage: {report.translated_sections}/{report.total_sections} "
         f"({report.coverage * 100:.1f}%)"
     )
-    for warning in report.warnings:
+    _print_warnings(report.warnings)
+
+
+def _print_warnings(warnings: list[ExportWarning]) -> None:
+    for warning in warnings:
         line = f"warning: {warning.code}: {warning.section_id}: {warning.describe()}"
         if warning.source_path:
             line += f" (in {warning.source_path})"
@@ -55,12 +61,20 @@ def export_translated_pdf(
     lang: Annotated[
         str, typer.Option("--lang", help="Translation language code, e.g. 'vi'.")
     ] = "vi",
+    source_lang: Annotated[
+        str | None,
+        typer.Option(
+            "--source-lang",
+            help="Language of the original text, e.g. 'en', used to tag original-language "
+            "content for readers (else 'und').",
+        ),
+    ] = None,
     mode: Annotated[
         str,
         typer.Option(
             "--mode",
             help="'translated' (translation where available, else the fallback) or "
-            "'bilingual' (original | translated side by side).",
+            "'bilingual' (original | translated side by side; one after the other in EPUB).",
         ),
     ] = "translated",
     fallback: Annotated[
@@ -77,15 +91,15 @@ def export_translated_pdf(
             "--out",
             help="Output file; relative paths are under the workspace. "
             "Defaults to exports/<doc_id>.<lang>-progress.pdf, or <lang>-bilingual.pdf "
-            "with --mode bilingual (.html for --renderer html).",
+            "with --mode bilingual (.html for --renderer html, .epub for --renderer epub).",
         ),
     ] = None,
     renderer_name: Annotated[
         str,
         typer.Option(
             "--renderer",
-            help="auto | weasyprint | playwright | html. 'auto' picks HTML for a .html "
-            "output, else the first installed PDF backend.",
+            help="auto | weasyprint | playwright | html | epub. 'auto' picks HTML for a "
+            ".html output, EPUB for a .epub output, else the first installed PDF backend.",
         ),
     ] = AUTO_RENDERER,
     strict: Annotated[
@@ -113,7 +127,8 @@ def export_translated_pdf(
         typer.Option("--check", help="Preflight only: print coverage and warnings, write nothing."),
     ] = False,
 ) -> None:
-    """Export a partially translated book as one reading PDF, monolingual or bilingual."""
+    """Export a partially translated book as one reading PDF, HTML page or EPUB,
+    monolingual or bilingual."""
 
     workspace = WorkspacePaths(workspace_path.expanduser().resolve())
     resolved_doc_id = _validate_id(doc_id, "doc_id")
@@ -121,6 +136,10 @@ def export_translated_pdf(
         resolved_lang = validate_lang(lang)
     except ValueError as exc:
         raise typer.BadParameter(str(exc), param_hint="--lang") from exc
+    try:
+        resolved_source_lang = validate_lang(source_lang) if source_lang is not None else None
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc), param_hint="--source-lang") from exc
     if fallback not in FALLBACK_POLICIES:
         raise typer.BadParameter(
             f"--fallback must be one of: {', '.join(FALLBACK_POLICIES)}", param_hint="--fallback"
@@ -139,7 +158,7 @@ def export_translated_pdf(
             f"{AUTO_RENDERER}, {', '.join(registry.names())}",
             param_hint="--renderer",
         )
-    suffix = ".html" if renderer_name == "html" else ".pdf"
+    suffix = {"html": ".html", "epub": ".epub"}.get(renderer_name, ".pdf")
     variant = "bilingual" if export_mode == "bilingual" else "progress"
     output = out or Path("exports") / f"{resolved_doc_id}.{resolved_lang}-{variant}{suffix}"
     if not output.is_absolute():
@@ -157,6 +176,8 @@ def export_translated_pdf(
             fallback=policy,
             mode=export_mode,
             show_status=show_status,
+            bilingual_layout=bilingual_layout_for(registry, renderer_name, output),
+            source_lang=resolved_source_lang,
         )
     except UntranslatedSectionsError as exc:
         _print_report(exc.report)
@@ -181,6 +202,8 @@ def export_translated_pdf(
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
+    # Problems found while writing (EPUB's XHTML repairs), after the ones printed above.
+    _print_warnings(report.warnings[len(export.report.warnings) :])
     typer.echo(f"renderer: {report.renderer}")
     typer.echo(f"export: {output}")
     typer.echo(f"report: {report_path_for(output)}")

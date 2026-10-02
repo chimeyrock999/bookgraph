@@ -22,6 +22,12 @@ FALLBACK_POLICIES: tuple[str, ...] = ("original", "skip", "fail")
 ExportMode = Literal["translated", "bilingual"]
 EXPORT_MODES: tuple[str, ...] = ("translated", "bilingual")
 
+# How ``bilingual`` mode pairs a row's original with its reading edition, decided by the
+# output format: ``columns`` sets them side by side in a two-column table (paged PDF and
+# HTML); ``interleaved`` puts the original first and the translation after it, which is
+# what reflowable screens (EPUB) need.
+BilingualLayout = Literal["columns", "interleaved"]
+
 # How one section ended up in the export: its translation artifact, the original
 # source text (``--fallback original``), or a placeholder (``--fallback skip``).
 SectionSource = Literal["translated", "original", "skipped"]
@@ -52,6 +58,7 @@ TRANSLATION_STALE = "translation_stale"
 TRANSLATION_STRUCTURE_CHANGED = "translation_structure_changed"
 TRANSLATION_UNREADABLE = "translation_unreadable"
 TRANSLATION_UNTRACKED = "translation_untracked"
+XHTML_REPAIRED = "xhtml_repaired"
 
 # Warning codes that mean "an asset the reader should see is not in the export".
 ASSET_WARNING_CODES: frozenset[str] = frozenset({ASSET_MISSING, ASSET_REMOTE, ASSET_UNSUPPORTED})
@@ -141,11 +148,14 @@ class ExportReport(BaseModel):
     ``output``/``renderer`` stay ``None`` for a preflight-only run.
     ``show_status`` records whether status/debug metadata was also printed on the
     reading pages (``--show-status``); by default it lives only in this report.
+    ``source_lang`` is the original text's language (``--source-lang``), ``None`` when
+    unknown: original-language content is then tagged ``und``.
     """
 
     doc_id: str
     title: str
     lang: str
+    source_lang: str | None = None
     mode: ExportMode = "translated"
     fallback: FallbackPolicy
     generated_at: str
@@ -175,6 +185,7 @@ class ExportReport(BaseModel):
         generated_at: str,
         warnings: list[ExportWarning],
         show_status: bool = False,
+        source_lang: str | None = None,
     ) -> ExportReport:
         """A report for ``sections`` with its coverage and fallback counts filled in."""
 
@@ -195,11 +206,18 @@ class ExportReport(BaseModel):
             doc_id=doc_id,
             title=title,
             lang=lang,
+            source_lang=source_lang,
             fallback=fallback,
             generated_at=generated_at,
             warnings=warnings,
             show_status=show_status,
         )
+
+    @property
+    def original_lang(self) -> str:
+        """The ``lang`` value of original-language content: ``und`` when unknown."""
+
+        return self.source_lang or "und"
 
     @property
     def untranslated(self) -> list[str]:

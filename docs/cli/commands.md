@@ -1219,7 +1219,8 @@ bookgraph llmwiki view /path/to/workspace --print         # print the command on
 
 **Status:** Implemented.
 
-Assemble a partially translated book into one reading edition. A section with a
+Assemble a partially translated book into one reading edition: a PDF, a
+self-contained HTML page, or an EPUB 3 book (see *EPUB output* below). A section with a
 translation artifact for `--lang` renders that artifact; any other section follows
 `--fallback`. This produces a clean reading edition. It does not reproduce the
 publisher's page layout.
@@ -1301,6 +1302,8 @@ bookgraph export translated-pdf /path/to/workspace ddia --lang vi --fallback ski
 bookgraph export translated-pdf /path/to/workspace ddia --lang vi --mode bilingual \
   --out exports/ddia.en-vi.pdf
 bookgraph export translated-pdf /path/to/workspace ddia --renderer html   # no PDF extra needed
+bookgraph export translated-pdf /path/to/workspace ddia --lang vi --mode bilingual \
+  --source-lang en --out exports/ddia.en-vi.epub                           # EPUB, no extra needed
 bookgraph export translated-pdf /path/to/workspace ddia --check           # coverage + QA only
 ```
 
@@ -1334,8 +1337,9 @@ bookgraph export translated-pdf /path/to/workspace ddia --check           # cove
     shows the original in both columns. HTML anchors (`id`, and `name` on `<a>`) are
     kept only in the right column, so every id on the page is unique and in-page links
     from either column land in the reading edition. The left column is tagged
-    `lang="und"` (no source language is stored), and only right-column headings feed
-    the PDF outline.
+    with `--source-lang`, else `lang="und"` (no source language is stored), and only
+    right-column headings feed the PDF outline. EPUB output lays these rows out
+    one after the other instead (see *EPUB output*).
 - `--fallback original|skip|fail` (default `original`). This controls what happens to
   a section that has no translation (in `bilingual` mode, to its right column):
   - `original` renders the original section;
@@ -1343,13 +1347,19 @@ bookgraph export translated-pdf /path/to/workspace ddia --check           # cove
   - `fail` exits `1` and lists every untranslated section. Nothing is written. A
     `stale` or `untracked` translation counts as translated (use `--strict` to refuse
     stale ones).
+- `--source-lang`: the language of the original text, e.g. `en` (normalised like
+  `--lang`). It is only used to tag original-language content for readers (fonts,
+  hyphenation, text-to-speech): the `bilingual` original column and, in EPUB output,
+  untranslated sections. Without it that content is tagged `lang="und"`
+  (undetermined), as before. It is recorded as `source_lang` in the report.
 - `--out`: output file. A relative path is resolved under the workspace. The default
   is `exports/<doc_id>.<lang>-progress.pdf` (`exports/<doc_id>.<lang>-bilingual.pdf`
-  with `--mode bilingual`), or `.html` with `--renderer html`.
-- `--renderer auto|weasyprint|playwright|html` (default `auto`). `auto` writes HTML
-  for a `.html`/`.htm` output. For any other output it uses the first installed PDF
-  backend, trying `weasyprint` first and then `playwright`. Naming a backend that is
-  not installed is an error.
+  with `--mode bilingual`), or `.html` with `--renderer html` and `.epub` with
+  `--renderer epub`.
+- `--renderer auto|weasyprint|playwright|html|epub` (default `auto`). `auto` writes
+  HTML for a `.html`/`.htm` output and EPUB for a `.epub` output. For any other output
+  it uses the first installed PDF backend, trying `weasyprint` first and then
+  `playwright`. Naming a backend that is not installed is an error.
 - `--strict`: exit `1` without writing anything if any asset is missing, remote, or
   unsupported, a translation is `stale` (`translation_stale`), or a registered
   translation left out its section's figures/tables (`translation_missing_assets`,
@@ -1373,8 +1383,8 @@ bookgraph export translated-pdf /path/to/workspace ddia --check           # cove
 - `--check`: preflight only. Prints coverage and warnings and writes nothing. With
   `--strict`, it exits `1` whenever the real export would be refused.
 - The `--out` suffix must match the renderer: `.pdf` for `weasyprint`/`playwright`,
-  `.html`/`.htm` for `html`. A mismatch, or a suffix that `auto` cannot map to a
-  format, exits `2`.
+  `.html`/`.htm` for `html`, `.epub` for `epub`. A mismatch, or a suffix that `auto`
+  cannot map to a format, exits `2`.
 
 ### Reads
 
@@ -1443,6 +1453,71 @@ All images are embedded as `data:` URIs, so the output is self-contained.
   asset problems or stale / prose-only translations (also under `--check`), or a
   missing or failing renderer → exit 1, with nothing written.
 
+### EPUB output
+
+`--renderer epub` (or `auto` with a `.epub` output) writes an EPUB 3 book with the
+standard library only, so it needs no extra. It is built from the same assembled
+sections as the PDF/HTML page (same structure, fallback, links, assets and report),
+laid out for reflowable screens:
+
+- **Container.** A zip whose first entry is `mimetype` (`application/epub+zip`,
+  stored uncompressed), then `META-INF/container.xml`, `OEBPS/content.opf` (Dublin
+  Core title, `dc:language` = `--lang` plus `--source-lang` in `bilingual` mode, a
+  `urn:uuid` identifier derived from `doc_id`, `lang` and `mode`, and
+  `dcterms:modified` = the report's `generated_at`), `OEBPS/nav.xhtml`,
+  `OEBPS/style.css`, `OEBPS/title.xhtml`, one XHTML file per chapter and the images.
+  Entries carry the `generated_at` timestamp, so unchanged inputs with a pinned
+  `SOURCE_DATE_EPOCH` give a byte-identical file.
+- **Files.** Each *chapter* of the export structure (every top-level section, and each
+  child of a part; the sections that start a new page in the PDF) is one
+  `OEBPS/chapter-NNN.xhtml` file, in reading order. Its child sections stay inside it.
+  The spine reads the title page, the contents page (`nav.xhtml`), then the chapters.
+- **Navigation.** `nav.xhtml` holds the `epub:type="toc"` table of contents: every
+  section of the outline, nested the same way, in reading order, linking
+  `chapter-NNN.xhtml#<section_id>`. `--show-status` TOC markers are not added to it.
+- **Images.** Every embedded image (`data:` URI) is written once as
+  `OEBPS/images/<sha256 prefix>.<ext>`, content-addressed, and the `<img src>` points
+  at it. Images the export left out stay out, as in the PDF.
+- **Links.** Internal links are resolved as above, then pointed at the file that holds
+  their anchor (`chapter-003.xhtml#tiny.section-two`); a link inside its own file
+  stays `#anchor`. External URLs stay. A link to nothing in the book (an unresolved
+  internal link, still reported as `internal_link_unresolved`, or a relative link to a
+  file the book does not carry) keeps its text but loses its `href`: no reading
+  system can follow it, and epubcheck rejects it.
+- **XHTML.** Every section body is re-serialised as well-formed XHTML: void elements
+  self-closed, text and attributes escaped, implied end tags (`p`, `li`, `td`, …)
+  added, and tags balanced (each side of a `bilingual` pair on its own). Quotes in text
+  are escaped too. What changes the content is reported as `xhtml_repaired` (once per
+  section and side, naming the file the markup came from): a stray end tag dropped, an element left open
+  closed, a `script`/`style`/`iframe`/`object`/`embed` element dropped with its
+  content, a document wrapper or obsolete presentational tag (`body`, `center`,
+  `font`, …) dropped with its content kept, an attribute name XML cannot carry or an
+  event handler (`onclick`) dropped, or an element HTML does not define kept as
+  escaped text. The last is raw XML in a parsed book (an RDF or Avro schema example)
+  that the Markdown renderer read as tags: as text, the reader still sees the example.
+  Comments are dropped.
+- **Languages.** The root element of every file carries `lang`/`xml:lang` = `--lang`.
+  Original-language content carries `--source-lang` (else `und`): untranslated
+  sections in `translated` mode, and the original side in `bilingual` mode.
+- **Bilingual layout.** Readers reflow text, so the two-column table is not used:
+  - an aligned translation is interleaved by unit, the source blocks first, then the
+    translation: `<div class="bilingual-unit"><div class="original" lang="en">…</div>
+    <div class="translation" lang="vi">…</div></div>`, the translation styled apart;
+    source blocks no unit translates get an original `div` alone;
+  - an unaligned translation stacks the original section before the translated one
+    (`<div class="bilingual-section">`), and a `@media (min-width: 48em)` rule sets
+    them side by side on wide screens;
+  - an untranslated section shows the original once (not twice, as the PDF's two
+    columns do).
+  There is no in-book language toggle (readers cannot run scripts reliably):
+  `--mode translated` and `--mode bilingual` stay separate books.
+- **Report.** `renderer` is `epub`. `xhtml_repaired` warnings are found while the
+  book is written, so they are in the written report and printed after the export,
+  but not in a `--check` run.
+
+To validate a written book, run [epubcheck](https://github.com/w3c/epubcheck)
+locally (`epubcheck exports/ddia.en-vi.epub`); it is not part of the test suite.
+
 ### PDF backends (optional extras)
 
 | Renderer | Install |
@@ -1450,6 +1525,7 @@ All images are embedded as `data:` URIs, so the output is self-contained.
 | `weasyprint` | `uv sync --extra pdf` (also needs the Pango system library, e.g. `brew install pango`) |
 | `playwright` | `uv sync --extra pdf-chromium && uv run playwright install chromium` |
 | `html` | built in |
+| `epub` | built in |
 
 ## `bookgraph assets repair`
 

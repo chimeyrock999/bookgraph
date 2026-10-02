@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import os
 import stat
+import subprocess
+import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -12,6 +15,7 @@ from bookgraph.reading_plans import (
     create_reading_plan,
     mark_section_read,
     next_sections,
+    plan_lock,
     read_reading_plan,
     write_reading_plan,
 )
@@ -170,3 +174,60 @@ def test_write_reading_plan_uses_umask_mode_and_keeps_existing_mode(tmp_path: Pa
     path.chmod(0o640)
     write_reading_plan(_a_plan(), path)
     assert stat.S_IMODE(path.stat().st_mode) == 0o640
+
+
+_HOLD_LOCK = """
+import sys
+from pathlib import Path
+from bookgraph.reading_plans import plan_lock
+
+with plan_lock(Path(sys.argv[1])):
+    print("locked", flush=True)
+    sys.stdin.readline()
+"""
+
+
+@pytest.mark.skipif(os.name != "posix", reason="flock is POSIX-only")
+def test_plan_lock_blocks_writers_in_another_process(tmp_path: Path) -> None:
+    path = tmp_path / "daily.json"
+    holder = subprocess.Popen(
+        [sys.executable, "-c", _HOLD_LOCK, str(path)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        assert holder.stdout is not None and holder.stdout.readline().strip() == "locked"
+        acquired = threading.Event()
+
+        def take_lock() -> None:
+            with plan_lock(path):
+                acquired.set()
+
+        waiter = threading.Thread(target=take_lock)
+        waiter.start()
+        assert not acquired.wait(0.3)  # the other process's flock holds us off
+
+        assert holder.stdin is not None
+        holder.stdin.write("\n")
+        holder.stdin.flush()
+        assert acquired.wait(5)
+        waiter.join(5)
+    finally:
+        holder.kill()
+        holder.wait()
+
+
+@pytest.mark.skipif(
+    os.name != "posix" or os.geteuid() == 0, reason="POSIX permissions, non-root"
+)
+def test_plan_lock_works_with_a_read_only_lock_file(tmp_path: Path) -> None:
+    path = tmp_path / "daily.json"
+    lock = tmp_path / ".daily.json.lock"
+    lock.touch()
+    lock.chmod(0o444)  # e.g. created by another user under umask 022
+
+    with plan_lock(path):
+        write_reading_plan(_a_plan(), path)
+
+    assert read_reading_plan(path) == _a_plan()

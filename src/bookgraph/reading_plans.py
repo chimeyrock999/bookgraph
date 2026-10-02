@@ -124,12 +124,17 @@ def plan_lock(path: Path) -> Iterator[None]:
             yield
             return
         path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path.with_name(f".{path.name}.lock"), "a") as handle:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        # Read-only is enough for flock, so a lock file created by another user (0644
+        # under the usual umask) never stops a writer who can still replace the plan.
+        fd = os.open(path.with_name(f".{path.name}.lock"), os.O_RDONLY | os.O_CREAT, 0o666)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
             try:
                 yield
             finally:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
 
 
 def write_reading_plan(plan: ReadingPlan, path: Path) -> Path:

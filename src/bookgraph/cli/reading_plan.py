@@ -98,7 +98,10 @@ def reading_plan_create(
     if dry_run:
         typer.echo("reading_plan: (dry run, not written)")
         return
-    path = write_reading_plan(plan, _plan_path(workspace, resolved_plan_id))
+    # Locked so a concurrent mark-read cannot write its stale plan over this new one.
+    plan_path = _plan_path(workspace, resolved_plan_id)
+    with plan_lock(plan_path):
+        path = write_reading_plan(plan, plan_path)
     typer.echo(f"reading_plan: {path}")
 
 

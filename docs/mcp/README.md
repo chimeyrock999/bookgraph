@@ -1,16 +1,35 @@
 # BookGraph MCP docs
 
-This directory contains user-facing setup and operating guides for connecting MCP
-clients or reading agents to a BookGraph workspace.
+BookGraph MCP serves one prepared workspace over stdio so an AI agent can read long
+books and documents section by section, search the graph, inspect outlines, follow
+concepts, write annotations/translations, and persist reading progress.
 
-Design notes and implementation contracts belong under `docs/design/`; CLI and
-artifact contracts belong under `docs/cli/`.
+The MCP server reads canonical BookGraph artifacts:
 
-Current guides:
+```text
+sources/sections/      # section text + provenance + quality warnings
+indexes/bookgraph.db   # search, graph, concepts
+reading_plans/         # progress state
+annotations/           # agent-authored summaries/concepts
+translations/          # cached section translations
+```
 
-- [`reading-agent.md`](reading-agent.md) — prepare a workspace, start `bookgraph
-  mcp`, configure clients, and run the reading loop.
-- [`llmwiki-integration.md`](llmwiki-integration.md) — run the optional `llmwiki`
-  MCP server alongside BookGraph MCP for compiled-wiki search/query/context-pack
-  workflows, browse the compiled wiki in llmwiki's web viewer, and why BookGraph
-  MCP stays the primary reading server.
+It does **not** read the generated wiki as its source of truth. The wiki and MCP tools
+are parallel projections from the same sections and indexes.
+
+## Guides
+
+- [`reading-agent.md`](reading-agent.md) — prepare a workspace, start `bookgraph mcp`,
+  configure an MCP client, and run the reading loop.
+- [`llmwiki-integration.md`](llmwiki-integration.md) — optional llm-wiki-compiler MCP
+  server alongside BookGraph for compiled-wiki search/query/context-pack workflows and
+  local wiki browsing.
+
+## Minimal server command
+
+```bash
+uv run --extra mcp bookgraph mcp /path/to/workspace
+```
+
+Tool arguments do not take a workspace path; the server is bound to the workspace used
+at launch.

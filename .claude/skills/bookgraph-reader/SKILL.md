@@ -122,6 +122,11 @@ chat), reuse the cache instead of retranslating:
    are refused; `alignment_issues` lists text blocks you left untranslated and units
    that do not start a Markdown block of their own (start each unit with a new
    paragraph, list, heading or fence — not a list-item continuation).
+   When adding translator-only H3/H4 structure, either keep using block-aligned
+   `units` so the heading is paired with the source block it introduces, or place the
+   heading immediately before the paragraph/block it summarizes. Do not cluster new
+   H3/H4 headings at the top of an unaligned artifact unless they correspond to real
+   source child headings.
 3. Translate content, preserve structural Markdown: translate prose, captions, and
    link labels, but keep link destinations and fragment ids
    (`(ch03.html#sec_x)`, `(#fig_y)`), image and file paths, reference-style

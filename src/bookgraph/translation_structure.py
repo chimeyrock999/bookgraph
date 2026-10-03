@@ -229,7 +229,9 @@ def check_translation_structure(
     by one that does — normalising a known broken asset path is the one permitted
     rewrite. Added targets that the source's code blocks and spans yield when parsed as
     Markdown are not reported (up to their count): that is sample code the translation
-    left unfenced. Missing
+    left unfenced. Suspicious translator-only H3/H4 headings clustered before the first
+    translated paragraph are reported too: unaligned bilingual exports render artifact
+    order exactly, so those headings float away from the prose they introduce. Missing
     targets are listed first, in source order, then added ones in translation order.
     """
 
@@ -253,7 +255,54 @@ def check_translation_structure(
         TranslationStructureIssue(kind=kind, target=target, change="added", count=count)
         for (kind, target), count in added.items()
     )
+    issues.extend(_suspicious_translation_heading_issues(source, translated))
     return issues
+
+
+def _suspicious_translation_heading_issues(
+    source: str, translated: str
+) -> list[TranslationStructureIssue]:
+    source_heading_count = len(_heading_texts_before_first_paragraph(source, levels={3, 4}))
+    translated_headings = _heading_texts_before_first_paragraph(translated, levels={3, 4})
+    if len(translated_headings) < 2 or len(translated_headings) <= source_heading_count:
+        return []
+    suspicious = translated_headings[source_heading_count:]
+    return [
+        TranslationStructureIssue(kind="heading", target=heading, change="added")
+        for heading in suspicious
+    ]
+
+
+def _heading_texts_before_first_paragraph(markdown: str, *, levels: set[int]) -> list[str]:
+    headings: list[str] = []
+    tokens = _MD.parse(markdown)
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if token.type == "heading_open" and int(token.tag[1]) in levels:
+            if index + 1 < len(tokens) and tokens[index + 1].type == "inline":
+                text = _plain_inline_text(tokens[index + 1]).strip()
+                if text:
+                    headings.append(text)
+            index += 3
+            continue
+        if token.type == "paragraph_open" and _paragraph_has_text(tokens, index):
+            break
+        index += 1
+    return headings
+
+
+def _paragraph_has_text(tokens: list[Token], index: int) -> bool:
+    return index + 1 < len(tokens) and tokens[index + 1].type == "inline" and bool(
+        _plain_inline_text(tokens[index + 1]).strip()
+    )
+
+
+def _plain_inline_text(token: Token) -> str:
+    children = token.children or []
+    if not children:
+        return token.content
+    return "".join(child.content for child in children if child.type in {"text", "code_inline"})
 
 
 def _forgive_fixed_images(

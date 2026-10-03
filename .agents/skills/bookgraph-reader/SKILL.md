@@ -85,6 +85,11 @@ Optional translation cache tools (when the user wants sections translated):
   by paragraph. Foreign ids or units out of order are refused; `alignment_issues`
   lists text blocks left untranslated and units that do not start a Markdown block of
   their own (start each unit with a new paragraph, list, heading or fence).
+  When adding translator-only H3/H4 structure, either use block-aligned `units` so the
+  heading is paired with the source block it introduces, or place the heading
+  immediately before the paragraph/block it summarizes. Do not cluster new H3/H4
+  headings at the top of an unaligned artifact unless they correspond to real source
+  child headings.
   Translate content, preserve structural Markdown: translate prose, captions, and
   link labels, but keep link destinations and fragment ids, image and file paths,
   reference-style identifiers, HTML `id`/`name` anchors, and `{#id}` heading ids

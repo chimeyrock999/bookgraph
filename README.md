@@ -1,73 +1,109 @@
 # BookGraph
 
-> A source-grounded **book-to-graph pipeline for AI reading** — parse long books and
-> documents into a durable knowledge graph an agent reads one section at a time.
+> Source-grounded book and document intelligence for AI agents: parse long PDFs,
+> Markdown, Office documents, and MinerU output into a durable graph of sections,
+> concepts, reading plans, wiki pages, and MCP tools.
 
 ![Python](https://img.shields.io/badge/python-3.11%2B-blue)
 ![Interface](https://img.shields.io/badge/interface-MCP-6E56CF)
 ![Packaging](https://img.shields.io/badge/packaging-uv-DE5FE9)
 
-BookGraph takes long books and documents, parses them into a durable knowledge graph,
-and lets an AI agent read that graph one section at a time. The agent keeps its place,
-follows the book's outline, jumps to related sections, and connects recurring concepts
-across many books without losing source provenance.
+BookGraph turns long-form sources into an inspectable workspace an AI agent can read
+without losing order, context, or provenance. It is built for books, manuals,
+research reports, technical PDFs, and document collections where a generic RAG
+chunk store is not enough.
 
-A BookGraph **workspace** is the source of truth. It stores inspectable artifacts for
-every stage: parsed blocks, human-sized sections, linked wiki pages, search/graph
-indexes, cross-book concept backlinks, and resumable reading plans served over MCP.
+A BookGraph workspace stores every stage as files you can inspect: source manifests,
+parsed blocks, human-sized sections, graph/search indexes, linked wiki pages,
+concept backlinks, translations, exports, and resumable reading plans. Agents use the
+same artifacts through the optional MCP server, so answers stay grounded in source
+sections rather than hidden prompts.
 
-## Why BookGraph
+## What BookGraph does
 
-BookGraph is **not just another RAG chunker**. It is built for studying and navigating
-long-form sources, where provenance, reading order, outlines, and cross-book concepts
-matter as much as keyword retrieval.
+- **Parses documents into canonical evidence** — Markdown, MinerU middle JSON, and
+  optional MarkItDown/MinerU adapters produce `document.json` with stable block IDs,
+  page spans, headings, captions, and asset references.
+- **Segments by reading structure** — sections prefer headings, PDF bookmarks/TOCs,
+  page boundaries, then token/page fallback. The unit is something a person or agent
+  can read and discuss, not an arbitrary embedding chunk.
+- **Builds a document knowledge graph** — SQLite/FTS5 indexes preserve outline order,
+  prev/next links, related sections, concepts, and cross-book backlinks.
+- **Serves AI reading workflows over MCP** — agents can list documents, follow reading
+  plans, fetch the next section, mark progress, search, inspect outlines, retrieve
+  related context, and validate reading batches.
+- **Compiles a linked markdown wiki** — book pages and concept pages are generated from
+  the same sections/indexes the MCP server reads.
+- **Exports translated reading editions** — partially translated sections can be
+  assembled into translated or bilingual PDFs/HTML, with asset checks and coverage
+  reports.
+- **Keeps heavy tools optional** — MinerU, MarkItDown, FastMCP, llm-wiki-compiler,
+  WeasyPrint, and Playwright are adapters behind ports, not mandatory runtime
+  dependencies.
 
-- **Artifact-first, not prompt-first** — every stage writes canonical files under
-  the workspace (`document.json`, `sections.jsonl`, `indexes/bookgraph.db`,
-  `reading_plans/*.json`, `wiki/`). The system is debuggable without rerunning an
-  LLM call.
-- **Human reading units, not arbitrary chunks** — segmentation prefers headings,
-  PDF bookmarks/TOCs, page boundaries, and only then token fallback. Sections are
-  meant to be read, discussed, and resumed.
-- **Source-grounded by construction** — downstream notes, wiki pages, MCP answers,
-  and reading plans preserve section/block provenance back to parser outputs.
-- **Graph + reading plan, not only vector search** — BookGraph keeps outline
-  structure, prev/next reading order, related sections, and cross-book concept
-  backlinks alongside search.
-- **Wiki and MCP are parallel projections** — the wiki is the human/external-LLM
-  rendering; MCP serves agents from the canonical sections and indexes. Neither
-  is the hidden source of truth.
-- **Pluggable ports** — parsers, segmenters, wiki backends, index backends, and
-  MCP serving are replaceable behind small interfaces, so heavy tools like
-  MinerU, MarkItDown, llm-wiki-compiler, and FastMCP stay optional adapters.
+## Why not just RAG?
 
-## Installation
+Most retrieval pipelines flatten books into chunks and hope search reconstructs the
+argument later. BookGraph keeps the structure first:
 
-BookGraph needs **Python ≥ 3.11**. The recommended toolchain is
-[uv](https://docs.astral.sh/uv/); heavy integrations (MinerU, MarkItDown, FastMCP)
-are optional extras you add only when needed.
+| Need | BookGraph behavior |
+| --- | --- |
+| Long-book reading | Stable reading plans with next/previous progress |
+| Source grounding | Every section traces back to parser blocks and source pages |
+| Navigation | Outlines, chapter trees, section order, related sections |
+| Cross-book study | Deterministic concept extraction and concept pages |
+| Agent use | MCP tools over canonical artifacts, not ad-hoc prompt state |
+| Debuggability | Files and SQLite indexes on disk at every stage |
+
+## Install
+
+BookGraph requires **Python 3.11+**. The recommended toolchain is
+[`uv`](https://docs.astral.sh/uv/), but normal `pip` installs work too.
+
+Install the latest release wheel:
 
 ```bash
-# Install the latest release wheel (no clone required):
 gh release download --repo chimeyrock999/bookgraph --pattern '*.whl'
-python -m pip install "$(ls bookgraph-*.whl)[mcp]"
+python -m pip install ./bookgraph-*.whl
+```
 
-# …or run from a clone with uv:
-git clone https://github.com/chimeyrock999/bookgraph.git && cd bookgraph
+Install with common extras:
+
+```bash
+WHEEL=$(ls bookgraph-*.whl)
+
+# MCP server for AI agents
+python -m pip install "${WHEEL}[mcp]"
+
+# Raw PDF parsing with MinerU 4
+python -m pip install "${WHEEL}[mineru]"
+
+# Development from a clone
+git clone https://github.com/chimeyrock999/bookgraph.git
+cd bookgraph
 uv run bookgraph --help
 ```
 
-Extras: `parsers` (Office/HTML/simple-PDF), `mineru` / `mineru-torch` (raw-PDF parsing with MinerU 4),
-`mcp` (FastMCP server), `dev` (pytest/ruff/mypy). The full guide — release, source,
-pip/pipx, and the MinerU model download — is in
-[`docs/installation.md`](docs/installation.md).
+Optional extras:
+
+| Extra | Enables |
+| --- | --- |
+| `parsers` | MarkItDown + pypdf adapters for Office/HTML/simple-PDF inputs |
+| `mineru` | MinerU 4 raw-PDF parsing via `bookgraph parse-book` |
+| `mineru-torch` | MinerU Torch stack for GPU-backed model setups |
+| `mcp` | FastMCP server exposed by `bookgraph mcp` |
+| `pdf` | WeasyPrint renderer for translated PDF export |
+| `pdf-chromium` | Playwright/Chromium renderer for translated PDF export |
+| `dev` | pytest, ruff, mypy, and contributor tooling |
+
+Full install notes: [`docs/installation.md`](docs/installation.md).
 
 ## Quickstart
 
-Create a workspace (the canonical output directory) and inspect its paths:
+Create a workspace:
 
 ```bash
-bookgraph init /path/to/workspace       # or: bookgraph init --output /path/to/workspace
+bookgraph init /path/to/workspace
 bookgraph paths /path/to/workspace
 ```
 
@@ -80,154 +116,122 @@ MarkItDown without registration:
 bookgraph add-book /path/to/workspace /path/to/book.pdf
 ```
 
-Parse a source into canonical blocks — the parser is picked by file type, or forced
-with `--parser`:
+Parse a source into canonical blocks:
 
 ```bash
-bookgraph parsers                                    # list parser plugins
-bookgraph parse notes.md -o /path/to/workspace       # parser picked by file type
-bookgraph parse book_middle.json -o /path/to/workspace
-bookgraph parse report.docx -o /path/to/workspace    # needs: uv sync --extra parsers
+bookgraph parsers
+bookgraph parse notes.md -o /path/to/workspace
+bookgraph parse report.docx -o /path/to/workspace        # needs the parsers extra
+bookgraph parse book_middle.json -o /path/to/workspace   # MinerU middle JSON
 bookgraph parse odd.bin -o /path/to/workspace --parser markdown
-bookgraph parse-book /path/to/workspace <book_id> --tier basic  # needs: uv sync --extra mineru
-# Large raw PDFs print a runs/parse-book/*.log path; see docs/cli/parse-book-large-pdfs.md
 ```
 
-Output lands in `sources/parsed/<doc_id>/document.json`. `<doc_id>` comes from the
-neighbouring `book.json` when the source sits in a registered book directory, from
-`--doc-id`, or from the filename. `bookgraph parse-book` invokes MinerU 4
-(`mineru-kit parse`, tier `flash | basic | standard | advanced`) on a registered raw
-PDF, stages the generated middle JSON under `sources/parsed/<book_id>/`,
-then writes `document.json` via the `mineru-middle-json` parser. Direct `bookgraph
-parse` on a raw PDF still needs an explicit parser choice (e.g. `--parser markitdown`
-for simple text PDFs).
+Parse a registered raw PDF with MinerU 4:
 
-A workspace holds these canonical paths:
+```bash
+bookgraph parse-book /path/to/workspace <book_id> --tier basic
+```
+
+Segment the parsed document into reading sections:
+
+```bash
+bookgraph segment /path/to/workspace <doc_id> --segmenter heading
+bookgraph segment /path/to/workspace <doc_id> --segmenter bookmark
+bookgraph segment /path/to/workspace <doc_id> --segmenter token-page --max-tokens 800
+```
+
+Build indexes and wiki output:
+
+```bash
+bookgraph index build /path/to/workspace <doc_id>
+bookgraph index concepts /path/to/workspace
+bookgraph wiki compile /path/to/workspace <doc_id>
+```
+
+Create and use a reading plan:
+
+```bash
+bookgraph reading-plan create /path/to/workspace <doc_id> --plan-id main
+bookgraph mcp /path/to/workspace                         # needs the mcp extra
+```
+
+Export translated reading editions when translations exist:
+
+```bash
+bookgraph export translated-pdf /path/to/workspace <doc_id> --lang vi
+bookgraph export translated-pdf /path/to/workspace <doc_id> --lang vi --mode bilingual
+bookgraph export translated-pdf /path/to/workspace <doc_id> --lang vi --out exports/book.vi.epub
+bookgraph export translated-pdf /path/to/workspace <doc_id> --lang vi --check
+bookgraph assets repair /path/to/workspace <doc_id> --dry-run
+```
+
+## Workspace layout
+
+A workspace is the durable source of truth:
 
 ```text
-sources/inbox/       # original incoming files and per-book registration manifests
-sources/parsed/      # parser outputs: .md, middle.json, structured content, images
-sources/sections/    # section markdown generated by segmenters
+sources/inbox/       # original incoming files and per-book book.json manifests
+sources/parsed/      # parser outputs: document.json, staged markdown, MinerU artifacts
+sources/sections/    # section manifests and section markdown files
 wiki/                # compiled linked markdown wiki
-indexes/             # graph/search indexes
-reading_plans/       # daily reading progression state
-runs/                # run logs/artifacts
-translations/        # optional per-language section translations (read by export)
-exports/             # reader-facing exports (e.g. translated reading PDFs)
-bookgraph.toml       # workspace config
+indexes/             # SQLite graph/search/concept indexes
+annotations/         # agent/user reading annotations
+reading_plans/       # resumable reading progress
+runs/                # long-running parse logs and artifacts
+translations/        # optional per-language section translations
+exports/             # reader-facing exports such as translated PDFs and EPUBs
+bookgraph.toml       # workspace configuration
 ```
 
-`bookgraph.toml` supplies workspace defaults for parser routing, MinerU runner
-settings, segmenter selection/heading target level, wiki backend, and reading-plan
-daily batch size. Explicit CLI flags still win over config defaults. Next, wire an
-agent to the workspace — see [`docs/mcp/reading-agent.md`](docs/mcp/reading-agent.md).
+`bookgraph.toml` can set parser routing, MinerU runner settings, segmenter defaults,
+wiki backend, and reading-plan batch size. Explicit CLI flags override config.
 
-When some sections have been translated, export the book as a single reading PDF.
-Sections that are not translated yet appear in the original language:
+## MCP tools for reading agents
+
+Install the MCP extra and point your MCP client at a workspace:
 
 ```bash
-bookgraph export translated-pdf /path/to/workspace <doc_id> --lang vi   # needs: --extra pdf or pdf-chromium
-bookgraph export translated-pdf /path/to/workspace <doc_id> --lang vi --mode bilingual   # original | translated side by side
-bookgraph export translated-pdf /path/to/workspace <doc_id> --lang vi --out exports/book.vi.epub   # EPUB 3, no extra needed
-bookgraph export translated-pdf /path/to/workspace <doc_id> --check     # coverage + missing-asset report
-bookgraph assets repair /path/to/workspace <doc_id> --dry-run           # recover figures the parser never staged
+uv run --extra mcp bookgraph mcp /path/to/workspace
 ```
 
-A figure whose file is missing is left out of the PDF (its caption stays) and listed
-in the export report. Pass `--show-status` to see a placeholder in its place instead.
+The server exposes reading and graph tools including:
 
-## External tools
+- `list_documents`, `list_plans`
+- `get_next_section`, `get_section`, `mark_read`
+- `validate_reading_batch`, `complete_reading_batch`
+- `search`, `get_outline`, `get_section_tree`, `get_chapter_outline`
+- `get_related`, `get_context`, `get_concept`
+- translation and asset-aware section helpers
 
-BookGraph keeps heavyweight integrations optional and wraps them behind local
-ports/adapters:
+Guide: [`docs/mcp/reading-agent.md`](docs/mcp/reading-agent.md).
 
-- [MinerU](https://github.com/opendatalab/MinerU) — raw PDF parsing/layout
-  extraction, staged as MinerU `*_middle.json` before conversion to `document.json`.
-- [MarkItDown](https://github.com/microsoft/markitdown) — optional Office/HTML/etc.
-  to Markdown conversion for the `markitdown` parser adapter.
-- [llm-wiki-compiler](https://github.com/atomicstrata/llm-wiki-compiler) — optional
-  wiki compiler target (>= 1.4.0); `bookgraph llmwiki bridge` stages sections for it
-  and `bookgraph llmwiki view` opens its local web viewer as BookGraph's wiki UI.
-- [FastMCP](https://github.com/jlowin/fastmcp) — optional MCP server framework used
-  by `bookgraph mcp` when the `mcp` extra is installed.
+BookGraph also ships a `bookgraph-reader` skill for agents that can load skill files:
+
+- `.claude/skills/bookgraph-reader/SKILL.md`
+- `.agents/skills/bookgraph-reader/SKILL.md`
 
 ## Architecture
 
-The pipeline is a chain of pluggable stages behind small ports. Each stage writes
-a canonical artifact the next stage reads, and the MCP server serves reading and
-graph/context tools straight off the segmented sections plus the indexes.
+BookGraph is a pipeline of small ports and adapters. Each stage writes an artifact the
+next stage reads; no stage has to trust hidden in-memory state.
 
 ```mermaid
 flowchart TD
-    docs["Input docs<br/>PDF · DOCX · HTML · Markdown · MinerU JSON"]
-
-    docs --> P
-
-    subgraph P["Parser plugins — bookgraph parse"]
-        direction LR
-        P1["mineru-middle-json"]
-        P2["markitdown<br/>(optional extra)"]
-        P3["markdown"]
-    end
-
-    P --> DOC["Canonical document<br/>sources/parsed/&lt;doc&gt;/document.json"]
-    DOC --> S
-
-    subgraph S["Segmenter plugins — bookgraph segment"]
-        direction LR
-        S1["heading"]
-        S2["bookmark"]
-        S3["token/page fallback"]
-    end
-
-    S --> SEC["Reading sections<br/>sources/sections/&lt;doc&gt;/*.jsonl + .md"]
-
-    SEC --> IDX
-    SEC --> RP["Reading plan<br/>reading_plans/&lt;plan&gt;.json"]
-    SEC --> W
-
-    subgraph IDX["Index stage — bookgraph index build"]
-        direction LR
-        IDX1["FTS5 search<br/>indexes/bookgraph.db"]
-        IDX2["section graph<br/>indexes/bookgraph.db"]
-        IDX3["concept graph<br/>indexes/bookgraph.db"]
-    end
-
-    subgraph W["Wiki backend plugins — bookgraph wiki compile"]
-        direction LR
-        W1["llmwiki staging"]
-        W2["markdown graph backend"]
-    end
-
-    W --> WIKI["Linked wiki<br/>wiki/books/ + wikilinks"]
-    IDX --> WIKIC["Concept pages<br/>wiki/concepts/<br/>(bookgraph index concepts)"]
-
-    IDX --> MCP
-    SEC --> MCP
-    RP --> MCP
-
-    subgraph MCP["MCP server — bookgraph mcp"]
-        direction LR
-        MCP1["reading<br/>get_next_section · get_section · mark_read · complete_reading_batch"]
-        MCP2["search"]
-        MCP3["graph/context<br/>get_outline · get_section_tree · get_chapter_outline<br/>get_related · get_context"]
-        MCP4["concepts<br/>get_concept"]
-    end
-
+    A[Sources: PDF, Markdown, DOCX, HTML, MinerU JSON] --> B[Parser plugins]
+    B --> C[Canonical document.json]
+    C --> D[Segmenter plugins]
+    D --> E[Reading sections]
+    E --> F[SQLite graph/search index]
+    E --> G[Reading plans]
+    E --> H[Wiki compiler]
+    F --> I[MCP reading and query tools]
+    G --> I
+    H --> J[Linked markdown wiki]
+    F --> K[Concept pages and backlinks]
+    E --> L[Translated and bilingual exports]
 ```
 
-File type routing picks the parser adapter, and `--parser` overrides it.
-
-The **wiki output** (`wiki/`) and the **MCP server** are two independent, parallel
-consumers of the same upstream — the sections manifest and the index — not a chain.
-MCP serves reading/query programmatically straight from `sources/sections/`,
-`indexes/bookgraph.db`, and `reading_plans/`; it never reads the wiki files. The
-wiki is the human / external-LLM-facing rendering (book pages via `wiki compile`,
-cross-book concept pages via `index concepts`). The two stay consistent because
-both derive concepts from the same shared extractor (`bookgraph.concepts`), not
-because one reads the other.
-
-## Module layout
+Core modules:
 
 ```text
 src/bookgraph/
@@ -286,28 +290,26 @@ src/bookgraph/
     server.py               # FastMCP server wrapper (optional `mcp` extra)
 ```
 
+## External integrations
+
+BookGraph wraps external tools instead of making them global assumptions:
+
+- [MinerU](https://github.com/opendatalab/MinerU) for raw PDF layout/OCR parsing.
+- [MarkItDown](https://github.com/microsoft/markitdown) for Office/HTML/simple-PDF
+  conversion into Markdown.
+- [llm-wiki-compiler](https://github.com/atomicstrata/llm-wiki-compiler) for an
+  optional compiled-wiki workflow and local viewer.
+- [FastMCP](https://github.com/jlowin/fastmcp) for the optional MCP server.
+- WeasyPrint, Playwright/Chromium, or the built-in EPUB writer for translated exports.
+
 ## Documentation
 
-Public docs live in `docs/`:
-
-- [`docs/installation.md`](docs/installation.md) — install BookGraph and its extras.
-- [`docs/cli/`](docs/cli/) — user-facing CLI guides plus filesystem/command contracts.
-- [`docs/mcp/`](docs/mcp/) — user-facing agent/MCP setup guides.
-- [`docs/design/`](docs/design/) — maintainer-facing design notes, invariants, and
-  runtime contracts.
-
-Update the relevant doc on `main` before implementing or changing CLI/artifact
-behavior so other agents can coordinate safely.
-
-## Agent skills
-
-BookGraph ships a `bookgraph-reader` skill in two forms:
-
-- `.claude/skills/bookgraph-reader/SKILL.md` for Claude agents.
-- `.agents/skills/bookgraph-reader/SKILL.md` as an agent-neutral procedure for
-  Hermes/custom MCP clients or any agent runtime that can load `SKILL.md`.
-
-Both describe the MCP reading loop over a prepared workspace.
+- [`docs/installation.md`](docs/installation.md) — install BookGraph and extras.
+- [`docs/cli/`](docs/cli/) — command contracts, artifacts, workspace layout.
+- [`docs/cli/parse-book-large-pdfs.md`](docs/cli/parse-book-large-pdfs.md) — long
+  MinerU runs, logs, model caches, and diagnosis.
+- [`docs/mcp/`](docs/mcp/) — MCP client setup and agent reading workflows.
+- [`docs/design/`](docs/design/) — maintainer contracts and design notes.
 
 ## Development
 
@@ -325,8 +327,8 @@ uv build
 uvx twine check dist/*
 ```
 
-GitHub Actions builds release artifacts with `.github/workflows/release.yml`:
+GitHub Actions builds release artifacts with `.github/workflows/release.yml`: manual
+`workflow_dispatch` uploads the `bookgraph-dist` artifact, and pushing a `v*` tag
+attaches distributions to a GitHub Release.
 
-- `workflow_dispatch` builds and uploads the `bookgraph-dist` artifact.
-- pushing a `v*` tag builds the same artifacts and attaches them to a GitHub
-  Release with generated release notes.
+

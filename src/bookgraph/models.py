@@ -169,8 +169,9 @@ class SectionArtifact(BaseModel):
 
 # What a translation must carry over unchanged from its source section (see
 # ``bookgraph.translation_structure``): link and image destinations, reference-style
-# link definitions, HTML ``id``/``name`` anchors, and explicit heading ids (``{#id}``).
-StructuralTargetKind = Literal["link", "image", "reference", "html_id", "heading_id"]
+# link definitions, HTML ``id``/``name`` anchors, explicit heading ids (``{#id}``),
+# and suspicious translator-only headings whose placement can break bilingual exports.
+StructuralTargetKind = Literal["link", "image", "reference", "html_id", "heading_id", "heading"]
 
 
 class TranslationStructureIssue(BaseModel):

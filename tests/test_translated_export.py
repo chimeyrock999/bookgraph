@@ -12,6 +12,7 @@ from bookgraph.exports.models import (
     TRANSLATION_EMPTY,
     TRANSLATION_MISSING_ASSETS,
     TRANSLATION_STALE,
+    TRANSLATION_STRUCTURE_CHANGED,
     TRANSLATION_UNREADABLE,
     TRANSLATION_UNTRACKED,
 )
@@ -151,6 +152,28 @@ def test_original_pipe_table_block_renders_as_html_table(tmp_path: Path) -> None
     assert "<th>Property</th>" in html
     assert "<td>Main read pattern</td>" in html
 
+def test_translation_only_headings_clustered_before_prose_warn(workspace: WorkspacePaths) -> None:
+    chapter = _section_ids(workspace)[0]
+    _translate(
+        workspace,
+        chapter,
+        """# Chương Một
+
+### Từ data warehouse đến data lake
+
+### Vượt ra ngoài data lake
+
+Phần mở đầu tiếng Việt.
+""",
+    )
+
+    report = build_translated_export(workspace, DOC, lang="vi").report
+
+    warnings = [w for w in report.warnings if w.code == TRANSLATION_STRUCTURE_CHANGED]
+    assert len(warnings) == 1
+    assert warnings[0].section_id == chapter
+    assert "heading 'Từ data warehouse đến data lake' added" in warnings[0].message
+    assert "heading 'Vượt ra ngoài data lake' added" in warnings[0].message
 
 def test_translated_headings_are_relevelled_to_the_section_level(
     workspace: WorkspacePaths,

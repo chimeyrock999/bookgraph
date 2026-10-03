@@ -151,6 +151,103 @@ def test_added_image_that_does_not_resolve_is_reported() -> None:
     assert [(i.kind, i.change) for i in issues] == [("image", "added")]
 
 
+def test_translation_only_headings_clustered_before_prose_are_reported() -> None:
+    source = """# Data Warehousing
+
+Opening source paragraph.
+
+More source prose.
+"""
+    translated = """# Kho dữ liệu
+
+### Từ data warehouse đến data lake
+
+### Vượt ra ngoài data lake
+
+Ban đầu, cùng một database...
+"""
+
+    issues = check_translation_structure(source, translated)
+
+    assert [(issue.kind, issue.target, issue.change) for issue in issues] == [
+        ("heading", "Từ data warehouse đến data lake", "added"),
+        ("heading", "Vượt ra ngoài data lake", "added"),
+    ]
+
+
+def test_source_child_headings_allow_translated_headings_before_prose() -> None:
+    source = """# Data Warehousing
+
+### From data warehouse to data lake
+
+### Beyond the data lake
+
+Opening source paragraph.
+"""
+    translated = """# Kho dữ liệu
+
+### Từ data warehouse đến data lake
+
+### Vượt ra ngoài data lake
+
+Ban đầu, cùng một database...
+"""
+
+    assert check_translation_structure(source, translated) == []
+
+
+def test_extra_translation_only_headings_beyond_source_children_are_reported() -> None:
+    source = """# T
+
+### Real source child
+
+Source prose.
+"""
+    translated = """# T
+
+### Translated real child
+
+### Translator-only A
+
+### Translator-only B
+
+Translated prose.
+"""
+
+    issues = check_translation_structure(source, translated)
+
+    assert [(issue.kind, issue.target, issue.change) for issue in issues] == [
+        ("heading", "Translator-only A", "added"),
+        ("heading", "Translator-only B", "added"),
+    ]
+
+
+def test_source_headings_after_opening_prose_do_not_forgive_top_translation_headings() -> None:
+    source = """# T
+
+Opening source prose.
+
+### Real child later
+
+Child source prose.
+"""
+    translated = """# T
+
+### Translator-only top
+
+### Another top
+
+Translated opening prose.
+"""
+
+    issues = check_translation_structure(source, translated)
+
+    assert [(issue.kind, issue.target, issue.change) for issue in issues] == [
+        ("heading", "Translator-only top", "added"),
+        ("heading", "Another top", "added"),
+    ]
+
+
 def test_describe_structure_issues_is_short_and_actionable() -> None:
     issues = check_translation_structure("[a](x.html)\n", "[a](y.html)\n")
 

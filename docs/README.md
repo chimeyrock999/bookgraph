@@ -1,9 +1,12 @@
 # BookGraph documentation
 
-BookGraph turns long books and documents into source-grounded workspaces: parsed
-blocks, human reading sections, graph/search indexes, linked wiki pages, MCP reading
-tools, translations, and exports. These docs are split by task so users, agents, and
-maintainers can find the right contract without reading the whole repository.
+BookGraph is a daily reading memory system for AI agents. It turns long books and
+documents into source-grounded workspaces where an agent can read the next section
+each day, enrich the book with summaries and verified concepts, answer questions from
+accumulated memory, translate sections, and export translated or bilingual editions.
+
+These docs are split by task so users, agents, and maintainers can find the right
+contract without reading the whole repository.
 
 ## Start here
 
@@ -13,7 +16,7 @@ maintainers can find the right contract without reading the whole repository.
 | Run the document pipeline from the CLI | [`cli/`](cli/) |
 | Understand workspace files and JSON artifacts | [`cli/workspace.md`](cli/workspace.md), [`cli/artifacts.md`](cli/artifacts.md) |
 | Parse large raw PDFs with MinerU 4 | [`cli/parse-book-large-pdfs.md`](cli/parse-book-large-pdfs.md) |
-| Connect an AI reading agent over MCP | [`mcp/reading-agent.md`](mcp/reading-agent.md) |
+| Connect a co-reading AI agent over MCP | [`mcp/reading-agent.md`](mcp/reading-agent.md) |
 | Run llm-wiki-compiler alongside BookGraph | [`mcp/llmwiki-integration.md`](mcp/llmwiki-integration.md) |
 | Change internals or add adapters | [`design/`](design/) |
 
@@ -26,8 +29,8 @@ Use these when running BookGraph or preparing a workspace for an agent:
 - [`cli/`](cli/) — command groups, workspace layout, artifact schemas, index schema,
   concepts, annotations, exports, and operational guides.
 - [`mcp/reading-agent.md`](mcp/reading-agent.md) — prepare a workspace, start
-  `bookgraph mcp`, configure an MCP client, and run the section-by-section reading
-  loop.
+  `bookgraph mcp`, configure an MCP client, and run the daily read → annotate → recall
+  → translate/export loop.
 - [`mcp/llmwiki-integration.md`](mcp/llmwiki-integration.md) — optional compiled-wiki
   query/view workflows; BookGraph MCP remains the primary reading server.
 

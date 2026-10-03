@@ -1,59 +1,69 @@
 # BookGraph
 
-> Source-grounded book and document intelligence for AI agents: parse long PDFs,
-> Markdown, Office documents, and MinerU output into a durable graph of sections,
-> concepts, reading plans, wiki pages, and MCP tools.
+> Daily reading memory for AI agents: let an agent read long books with you over
+> time, enrich each section with source-grounded notes, answer concept questions
+> from what it has actually read, translate when needed, and export translated or
+> bilingual editions.
 
 ![Python](https://img.shields.io/badge/python-3.11%2B-blue)
 ![Interface](https://img.shields.io/badge/interface-MCP-6E56CF)
 ![Packaging](https://img.shields.io/badge/packaging-uv-DE5FE9)
 
-BookGraph turns long-form sources into an inspectable workspace an AI agent can read
-without losing order, context, or provenance. It is built for books, manuals,
-research reports, technical PDFs, and document collections where a generic RAG
-chunk store is not enough.
+BookGraph is for books, manuals, research reports, technical PDFs, and document
+collections that do not fit in one agent context. It turns a long source into an
+inspectable workspace of sections, reading plans, annotations, concept backlinks,
+translations, exports, and MCP tools.
 
-A BookGraph workspace stores every stage as files you can inspect: source manifests,
-parsed blocks, human-sized sections, graph/search indexes, linked wiki pages,
-concept backlinks, translations, exports, and resumable reading plans. Agents use the
-same artifacts through the optional MCP server, so answers stay grounded in source
-sections rather than hidden prompts.
+The product idea is simple: each day your agent reads the next part with you. It
+summarizes what it read, records verified concepts, answers questions from accumulated
+source-grounded memory, follows scattered concepts across the book, translates sections
+when you ask, and eventually exports a translated or bilingual reading edition.
+
+Whole-book indexing gives the agent a map. Daily reading and annotations turn that map
+into durable memory.
 
 ## What BookGraph does
 
-- **Parses documents into canonical evidence** — Markdown, MinerU middle JSON, and
-  optional MarkItDown/MinerU adapters produce `document.json` with stable block IDs,
-  page spans, headings, captions, and asset references.
-- **Segments by reading structure** — sections prefer headings, PDF bookmarks/TOCs,
-  page boundaries, then token/page fallback. The unit is something a person or agent
-  can read and discuss, not an arbitrary embedding chunk.
-- **Builds a document knowledge graph** — SQLite/FTS5 indexes preserve outline order,
-  prev/next links, related sections, concepts, and cross-book backlinks.
-- **Serves AI reading workflows over MCP** — agents can list documents, follow reading
-  plans, fetch the next section, mark progress, search, inspect outlines, retrieve
-  related context, and validate reading batches.
-- **Compiles a linked markdown wiki** — book pages and concept pages are generated from
-  the same sections/indexes the MCP server reads.
-- **Exports translated reading editions** — partially translated sections can be
-  assembled into translated or bilingual PDFs/HTML, with asset checks and coverage
-  reports.
+- **Plans daily reading** — a reading plan tracks the next unread sections, progress,
+  chapter boundaries, and batch completion so the agent can resume tomorrow exactly
+  where it stopped.
+- **Builds verified reading memory** — after reading a section, the agent can write a
+  summary and real concepts with provenance. Later answers can prefer what was actually
+  read over raw search hits.
+- **Finds concepts across the book** — SQLite/FTS5 search, section graph edges,
+  deterministic concept extraction, and agent annotations surface where a concept
+  appears, which mentions are verified, and which sections remain unread leads.
+- **Keeps source evidence inspectable** — parsers produce `document.json` with stable
+  block IDs, page spans, headings, captions, and asset references; segmenters turn that
+  evidence into human reading units.
+- **Serves co-reading workflows over MCP** — agents can list documents, fetch the next
+  section, inspect context, search, follow outlines, retrieve concepts, write
+  annotations/translations, and complete a reading batch safely.
+- **Translates and exports reading editions** — translated sections can be cached,
+  checked for missing/stale assets, and assembled into translated or bilingual PDF,
+  HTML, or EPUB output.
 - **Keeps heavy tools optional** — MinerU, MarkItDown, FastMCP, llm-wiki-compiler,
   WeasyPrint, and Playwright are adapters behind ports, not mandatory runtime
   dependencies.
 
-## Why not just RAG?
+## Why this is not just RAG
 
-Most retrieval pipelines flatten books into chunks and hope search reconstructs the
-argument later. BookGraph keeps the structure first:
+Most retrieval pipelines flatten books into chunks and answer from the top matches.
+BookGraph separates **map**, **memory**, and **answers**:
 
 | Need | BookGraph behavior |
 | --- | --- |
-| Long-book reading | Stable reading plans with next/previous progress |
-| Source grounding | Every section traces back to parser blocks and source pages |
-| Navigation | Outlines, chapter trees, section order, related sections |
-| Cross-book study | Deterministic concept extraction and concept pages |
-| Agent use | MCP tools over canonical artifacts, not ad-hoc prompt state |
-| Debuggability | Files and SQLite indexes on disk at every stage |
+| Long-book reading | Daily reading plans with durable progress and batch completion |
+| Honest memory | Agent-written summaries/concepts mark what has actually been read |
+| Concept recall | Concept pages/backlinks gather evidence scattered across chapters/books |
+| Partial knowledge | Indexed-but-unread sections can be surfaced as leads, not mixed with verified memory |
+| Source grounding | Every section traces back to parser blocks, source pages, and assets |
+| Translation workflow | Section translations stay cached, checked, and exportable as PDF/HTML/EPUB |
+| Agent integration | MCP tools operate on workspace artifacts instead of ad-hoc prompt state |
+
+The result is a long-running reading loop: the agent learns the book incrementally,
+answers from accumulated evidence, and can say when a concept likely needs more unread
+sections before giving a full-book answer.
 
 ## Install
 
@@ -165,6 +175,23 @@ bookgraph export translated-pdf /path/to/workspace <doc_id> --lang vi --check
 bookgraph assets repair /path/to/workspace <doc_id> --dry-run
 ```
 
+## Long-term vision
+
+BookGraph aims to be a local-first co-reading system for AI agents:
+
+1. **Read together every day** — the agent follows a plan, reads the next section,
+   discusses it with you, and persists progress.
+2. **Enrich the book over time** — each pass adds summaries, concept glosses,
+   annotations, translation units, and asset checks back into the workspace.
+3. **Answer from accumulated memory** — when you ask about a concept, the agent can
+   synthesize verified notes from multiple sections and point to unread leads when the
+   book has not been fully covered.
+4. **Produce durable outputs** — the same workspace can render a linked wiki, concept
+   pages, translated sections, bilingual editions, EPUBs, and PDFs.
+
+BookGraph does not try to hide the book inside a prompt. It gives the agent a durable
+workspace it can keep improving.
+
 ## Workspace layout
 
 A workspace is the durable source of truth:
@@ -186,7 +213,7 @@ bookgraph.toml       # workspace configuration
 `bookgraph.toml` can set parser routing, MinerU runner settings, segmenter defaults,
 wiki backend, and reading-plan batch size. Explicit CLI flags override config.
 
-## MCP tools for reading agents
+## MCP tools for co-reading agents
 
 Install the MCP extra and point your MCP client at a workspace:
 
@@ -194,14 +221,14 @@ Install the MCP extra and point your MCP client at a workspace:
 uv run --extra mcp bookgraph mcp /path/to/workspace
 ```
 
-The server exposes reading and graph tools including:
+The server exposes the daily reading loop and recall surface:
 
-- `list_documents`, `list_plans`
-- `get_next_section`, `get_section`, `mark_read`
-- `validate_reading_batch`, `complete_reading_batch`
-- `search`, `get_outline`, `get_section_tree`, `get_chapter_outline`
-- `get_related`, `get_context`, `get_concept`
-- translation and asset-aware section helpers
+- discover: `list_documents`, `list_plans`
+- read: `get_next_section`, `get_section`, `get_context`, `mark_read`
+- commit safely: `validate_reading_batch`, `complete_reading_batch`
+- recall: `search`, `get_outline`, `get_section_tree`, `get_chapter_outline`,
+  `get_related`, `get_concept`
+- enrich: annotation, translation, and asset-aware section helpers
 
 Guide: [`docs/mcp/reading-agent.md`](docs/mcp/reading-agent.md).
 

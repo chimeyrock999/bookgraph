@@ -39,6 +39,9 @@ Use these when running BookGraph or preparing a workspace for an agent:
 Use these when changing behavior or reviewing implementation contracts:
 
 - [`design/`](design/) — design notes, invariants, and runtime contracts.
+- [`design/daily-reading-memory.md`](design/daily-reading-memory.md) — product
+  planning for the agent co-reading loop, memory semantics, concept recall, and
+  translation/export workflow.
 - [`design/parse-book-runtime.md`](design/parse-book-runtime.md) — `parse-book`
   subprocess/logging contract and test seams.
 

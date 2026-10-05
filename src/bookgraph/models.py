@@ -33,6 +33,7 @@ class CanonicalBlock(BaseModel):
     asset_path: str | None = None
     source_path: str | None = None
     order: int | None = None
+    source_html: str | None = None
     metadata: dict[str, str | int | float | bool | None] = Field(default_factory=dict)
 
 

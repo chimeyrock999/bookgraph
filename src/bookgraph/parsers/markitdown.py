@@ -10,12 +10,16 @@ import warnings
 import zipfile
 from collections.abc import Callable
 from dataclasses import dataclass
+from html import unescape
+from html.parser import HTMLParser
 from pathlib import Path, PurePosixPath
 from typing import Protocol
 from urllib.parse import unquote, unquote_to_bytes
+from xml.etree import ElementTree
 
 from bookgraph.models import Document
 from bookgraph.parsers.markdown import document_from_markdown
+from bookgraph.parsers.mineru_source_map import _epub_spine
 from bookgraph.ports import DocumentParser
 from bookgraph.utils import doc_id_from_path, is_url
 
@@ -117,7 +121,7 @@ class MarkItDownParser(DocumentParser):
                 "table cell as text; their row/column structure is not kept",
                 stacklevel=2,
             )
-        return document_from_markdown(
+        document = document_from_markdown(
             markdown,
             doc_id=doc_id,
             fallback_title=source.stem,
@@ -128,6 +132,184 @@ class MarkItDownParser(DocumentParser):
             # not the binary original - is what proves each block.
             block_source_path=str(staged),
         )
+        _attach_source_html_fragments(source, document)
+        return document
+
+
+def _attach_source_html_fragments(source: Path, document: Document) -> None:
+    """Attach original HTML/XHTML body fragments to matching Markdown-derived blocks."""
+
+    fragments = _source_html_fragments(source)
+    if not fragments:
+        return
+    position = 0
+    for block in document.blocks:
+        if block.type == "image":
+            continue
+        needle = _visible_key(block.source_html or block.text)
+        if not needle:
+            continue
+        for index in range(position, len(fragments)):
+            fragment = fragments[index]
+            haystack = _visible_key(fragment)
+            if needle in haystack or haystack in needle:
+                if _contains_img(fragment):
+                    position = index + 1
+                    break
+                block.source_html = fragment
+                position = index + 1
+                break
+
+
+def _source_html_fragments(source: Path) -> list[str]:
+    suffix = source.suffix.lower()
+    if suffix == ".epub":
+        fragments: list[str] = []
+        try:
+            archive = zipfile.ZipFile(source)
+        except (OSError, zipfile.BadZipFile):
+            return []
+        with archive:
+            for member in _epub_html_members(archive):
+                try:
+                    html = archive.read(member).decode("utf-8", errors="replace")
+                except (KeyError, OSError):
+                    continue
+                fragments.extend(_body_fragments(html))
+        return fragments
+    if suffix in {".html", ".xhtml", ".htm"}:
+        return _body_fragments(source.read_text(encoding="utf-8", errors="replace"))
+    return []
+
+
+def _epub_html_members(archive: zipfile.ZipFile) -> list[str]:
+    try:
+        spine = [member for member in _epub_spine(archive) if member]
+    except (KeyError, OSError, zipfile.BadZipFile, ElementTree.ParseError):
+        spine = []
+    if spine:
+        return spine
+    return [
+        member
+        for member in archive.namelist()
+        if PurePosixPath(member).suffix.lower() in {".html", ".xhtml", ".htm"}
+    ]
+
+
+def _body_fragments(html: str) -> list[str]:
+    parser = _BodyFragmentParser()
+    parser.feed(html)
+    parser.close()
+    return parser.fragments
+
+def _contains_img(html: str) -> bool:
+    return re.search(r"<\s*img\b", html, flags=re.IGNORECASE) is not None
+
+
+def _visible_key(html: str) -> str:
+    parser = _VisibleTextParser()
+    parser.feed(html)
+    parser.close()
+    return re.sub(r"\s+", " ", unescape(" ".join(parser.parts))).strip().lower()
+
+
+class _BodyFragmentParser(HTMLParser):
+    _READING_TAGS = frozenset(
+        {
+            "blockquote",
+            "figure",
+            "h1",
+            "h2",
+            "h3",
+            "h4",
+            "h5",
+            "h6",
+            "ol",
+            "p",
+            "pre",
+            "table",
+            "ul",
+        }
+    )
+    _SKIP_TAGS = frozenset({"head", "script", "style", "nav"})
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=False)
+        self.fragments: list[str] = []
+        self._in_body = False
+        self._capture_tag: str | None = None
+        self._depth = 0
+        self._skip_depth = 0
+        self._current: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        tag = tag.lower()
+        if tag == "body":
+            self._in_body = True
+            return
+        if not self._in_body:
+            return
+        if tag in self._SKIP_TAGS:
+            self._skip_depth += 1
+            return
+        if self._skip_depth:
+            return
+        if self._capture_tag is None and tag in self._READING_TAGS:
+            self._capture_tag = tag
+        if self._capture_tag is not None:
+            self._push(self.get_starttag_text() or f"<{tag}>")
+            self._depth += 1
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if self._in_body and not self._skip_depth and self._capture_tag is not None:
+            self._push(self.get_starttag_text() or f"<{tag}/>")
+
+    def handle_endtag(self, tag: str) -> None:
+        tag = tag.lower()
+        if tag == "body":
+            self._flush()
+            self._in_body = False
+            return
+        if tag in self._SKIP_TAGS and self._skip_depth:
+            self._skip_depth -= 1
+            return
+        if not self._in_body or self._skip_depth or self._capture_tag is None:
+            return
+        self._push(f"</{tag}>")
+        self._depth = max(0, self._depth - 1)
+        if self._depth == 0:
+            self._flush()
+            self._capture_tag = None
+
+    def handle_data(self, data: str) -> None:
+        if self._capture_tag is not None and not self._skip_depth:
+            self._push(data)
+
+    def handle_entityref(self, name: str) -> None:
+        if self._capture_tag is not None and not self._skip_depth:
+            self._push(f"&{name};")
+
+    def handle_charref(self, name: str) -> None:
+        if self._capture_tag is not None and not self._skip_depth:
+            self._push(f"&#{name};")
+
+    def _push(self, text: str) -> None:
+        self._current.append(text)
+
+    def _flush(self) -> None:
+        fragment = "".join(self._current).strip()
+        if fragment:
+            self.fragments.append(fragment)
+        self._current = []
+
+
+class _VisibleTextParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+
+    def handle_data(self, data: str) -> None:
+        self.parts.append(data)
 
 
 def _stage_assets(source: Path, output_dir: Path, markdown: str) -> tuple[str, list[str]]:

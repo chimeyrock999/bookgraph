@@ -240,6 +240,34 @@ def test_inline_spans_join_verbatim(tmp_path: Path) -> None:
     (block,) = MinerUMiddleJsonParser().parse(source, tmp_path).blocks
 
     assert block.text == "See (`x[0]`, $a+b$) [[3](#ref%203)]."
+    assert block.source_html == '<p>See (<code>x[0]</code>, a+b) [<a href="#ref 3">3</a>].</p>'
+
+
+def test_code_blocks_carry_source_html(tmp_path: Path) -> None:
+    payload = {
+        "schema": "docvortex.middle",
+        "schema_version": "2.0",
+        "metadata": {"file_suffix": "epub"},
+        "pages": [
+            {
+                "page_idx": 0,
+                "blocks": [
+                    {
+                        "type": "code",
+                        "index": 0,
+                        "content": [_span("echo '<hi>'")],
+                    }
+                ],
+            }
+        ],
+    }
+    source = tmp_path / "b_middle.json"
+    source.write_text(json.dumps(payload))
+
+    (block,) = MinerUMiddleJsonParser().parse(source, tmp_path).blocks
+
+    assert block.text == "echo '<hi>'"
+    assert block.source_html == "<pre><code>echo &#x27;&lt;hi&gt;&#x27;</code></pre>"
 
 
 def test_unknown_schema_major_version_fails_loudly(tmp_path: Path) -> None:

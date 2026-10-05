@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -32,7 +33,7 @@ from bookgraph.exports.translated import (
     split_frontmatter,
     write_translated_export,
 )
-from bookgraph.models import Section
+from bookgraph.models import CanonicalBlock, Document, Section
 from bookgraph.plugins import PluginRegistry
 from bookgraph.sections import write_sections
 from bookgraph.workspace import WorkspacePaths
@@ -151,6 +152,128 @@ def test_original_pipe_table_block_renders_as_html_table(tmp_path: Path) -> None
     assert "<table>" in html
     assert "<th>Property</th>" in html
     assert "<td>Main read pattern</td>" in html
+
+
+
+def test_original_fallback_uses_safe_source_html_fragments(tmp_path: Path) -> None:
+    paths = WorkspacePaths(tmp_path)
+    from bookgraph.documents import write_document
+    from bookgraph.segmenters.heading import HeadingSegmenter
+
+    document = Document(
+        doc_id=DOC,
+        title="Styled EPUB",
+        blocks=[
+            CanonicalBlock(id="b0", type="title", text="Storage and Indexing", level=1),
+            CanonicalBlock(
+                id="b1",
+                type="text",
+                text="echo 'hello'",
+                source_html="<pre><code>echo 'hello'</code></pre>",
+            ),
+            CanonicalBlock(
+                id="b2",
+                type="text",
+                text="safe styled link",
+                source_html=(
+                    '<p><em>safe</em> <strong>styled</strong> '
+                    '<a href="javascript:alert(1)" onclick="evil()">link</a>'
+                    '<script>alert(1)</script></p>'
+                ),
+            ),
+        ],
+    )
+    write_document(document, paths.sources_parsed / DOC)
+    write_sections(HeadingSegmenter(target_level=2).segment(document), paths.sources_sections / DOC)
+
+    html = build_translated_export(paths, DOC, lang="vi", mode="bilingual").html
+
+    assert "<pre><code>echo &#x27;hello&#x27;</code></pre>" in html
+    assert "<em>safe</em> <strong>styled</strong>" in html
+    assert "javascript:alert" not in html
+    assert "onclick" not in html
+    assert "<script" not in html and "alert(1)" not in html
+
+
+def test_markdown_blocks_store_renderable_source_html() -> None:
+    from bookgraph.parsers.markdown import document_from_markdown
+
+    document = document_from_markdown(
+        "# Chapter\n\nUse `code` and *emphasis*.\n\n```sh\necho hi\n```\n",
+        doc_id=DOC,
+        fallback_title="Book",
+        source_path="book.epub",
+        parser_name="markitdown",
+    )
+
+    paragraph = document.blocks[1]
+    code = document.blocks[2]
+    assert paragraph.text == "Use `code` and *emphasis*."
+    assert paragraph.source_html == "<p>Use <code>code</code> and <em>emphasis</em>.</p>\n"
+    assert code.text == "echo hi"
+    assert code.source_html == '<pre><code class="language-sh">echo hi\n</code></pre>\n'
+
+
+class _FakeConversion:
+    def __init__(self, text_content: str) -> None:
+        self.text_content = text_content
+
+
+class _FakeConverter:
+    def __init__(self, text_content: str) -> None:
+        self._text_content = text_content
+
+    def convert(self, source: str) -> _FakeConversion:
+        return _FakeConversion(self._text_content)
+
+
+def test_epub_original_export_preserves_source_xhtml_fragments(tmp_path: Path) -> None:
+    from bookgraph.documents import write_document
+    from bookgraph.parsers.markitdown import MarkItDownParser
+    from bookgraph.segmenters.heading import HeadingSegmenter
+
+    source = tmp_path / "book.epub"
+    xhtml = (
+        "<html><body>"
+        "<h1>Storage and Indexing</h1>"
+        '<p id="source-id">Use <code>ls</code> and <em>emphasis</em> '
+        '<a href="chapter.xhtml#docs">docs</a>.</p>'
+        '<pre class="shell"><code>echo \'hi\'</code></pre>'
+        "<table><tr><th>Term</th><th>Value</th></tr><tr><td>Nested</td>"
+        "<td><table><tr><td>A</td></tr></table></td></tr></table>"
+        '<p><a href="java&#x0a;script:alert(1)">bad</a>'
+        '<img src="data:image/svg+xml,bad"></p>'
+        "<script>alert(1)</script></body></html>"
+    )
+    with zipfile.ZipFile(source, "w") as archive:
+        archive.writestr("OEBPS/chapter.xhtml", xhtml.encode())
+    markdown = (
+        "# Storage and Indexing\n\n"
+        "Use `ls` and *emphasis* [docs](chapter.xhtml#docs).\n\n"
+        "```sh\necho 'hi'\n```\n\n"
+        "Term | Value\n--- | ---\nNested | A\n\n"
+        "bad\n"
+    )
+    paths = WorkspacePaths(tmp_path)
+    document = MarkItDownParser(converter=_FakeConverter(markdown)).parse(
+        source, paths.sources_parsed / DOC
+    )
+    write_document(document, paths.sources_parsed / DOC)
+    write_sections(HeadingSegmenter(target_level=2).segment(document), paths.sources_sections / DOC)
+
+    html = build_translated_export(paths, DOC, lang="vi", mode="bilingual").html
+
+    assert (
+        '<p>Use <code>ls</code> and <em>emphasis</em> '
+        '<a href="chapter.xhtml#docs">docs</a>.</p>'
+    ) in html
+    assert '<pre class="shell"><code>echo &#x27;hi&#x27;</code></pre>' in html
+    assert "<table><tr><th>Term</th><th>Value</th></tr>" in html
+    assert "<td><table><tr><td>A</td></tr></table></td>" in html
+    assert "source-id" not in html
+    assert "java" not in html and "script:alert" not in html
+    assert "data:image" not in html
+    assert "<script" not in html and "alert(1)" not in html
 
 def test_translation_only_headings_clustered_before_prose_warn(workspace: WorkspacePaths) -> None:
     chapter = _section_ids(workspace)[0]

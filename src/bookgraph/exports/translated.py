@@ -39,6 +39,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from html import escape
+from html.parser import HTMLParser
 from pathlib import Path
 
 from markdown_it import MarkdownIt
@@ -107,6 +108,62 @@ from bookgraph.workspace import WorkspacePaths
 # Ingest quality warnings worth repeating in an export report: the section's source
 # prose is mostly captions, so the reader (or translator) should inspect its assets.
 _PASSTHROUGH_QUALITY_CODES = frozenset({ASSET_CAPTIONS_ONLY, ASSET_TEXT_SPARSE})
+_SOURCE_HTML_TAGS = frozenset(
+    {
+        "a",
+        "blockquote",
+        "br",
+        "caption",
+        "center",
+        "code",
+        "col",
+        "colgroup",
+        "dd",
+        "del",
+        "div",
+        "dl",
+        "dt",
+        "em",
+        "figcaption",
+        "figure",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "hr",
+        "img",
+        "li",
+        "ol",
+        "p",
+        "pre",
+        "s",
+        "span",
+        "strong",
+        "sub",
+        "sup",
+        "table",
+        "tbody",
+        "td",
+        "tfoot",
+        "th",
+        "thead",
+        "tr",
+        "u",
+        "ul",
+    }
+)
+_SOURCE_HTML_GLOBAL_ATTRS = frozenset({"class", "title"})
+_SOURCE_HTML_ATTRS = {
+    "a": frozenset({"href", "name"}),
+    "img": frozenset({"alt", "src"}),
+    "td": frozenset({"colspan", "headers", "rowspan"}),
+    "th": frozenset({"colspan", "headers", "rowspan", "scope"}),
+}
+_SOURCE_HTML_VOID_TAGS = frozenset({"br", "col", "hr", "img"})
+_SOURCE_HTML_DROP_CONTENT = frozenset({"script", "style", "iframe", "object", "embed"})
+
 
 
 class ExportError(ValueError):
@@ -622,6 +679,8 @@ class _Assembler(ImageEmbedder):
                 parts.append(heading(level, block.text))
             elif block.type in ASSET_BLOCK_TYPES and asset_reference(block):
                 parts.append(self._asset_block(block, section.id, counter, source))
+            elif source_html := _block_source_html(block):
+                parts.append(self._source_html(source_html, section.id, counter, source, block.id))
             elif block.type == "table":
                 parts.append(self._table_block(block, section.id, counter, source))
             elif block.type == "equation":
@@ -699,6 +758,85 @@ class _Assembler(ImageEmbedder):
         tokens = self._md.parse(text)
         self._rewrite_images(tokens, section_id, self._parsed_bases(), counter, source, block_id)
         return str(self._md.renderer.render(tokens, self._md.options, {}))
+
+    def _source_html(
+        self,
+        html: str,
+        section_id: str,
+        counter: AssetCounter,
+        source: str | None,
+        block_id: str | None,
+    ) -> str:
+        safe = sanitize_source_html(html)
+        origin = AssetOrigin(source, block_id)
+        return self._rewrite_html_images(safe, section_id, self._parsed_bases(), counter, origin)
+
+
+def _block_source_html(block: CanonicalBlock) -> str | None:
+    return block.source_html if block.source_html and block.source_html.strip() else None
+
+
+def sanitize_source_html(html: str) -> str:
+    sanitizer = _SourceHtmlSanitizer()
+    sanitizer.feed(html)
+    sanitizer.close()
+    return sanitizer.html
+
+
+class _SourceHtmlSanitizer(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self._parts: list[str] = []
+        self._drop_depth = 0
+
+    @property
+    def html(self) -> str:
+        return "".join(self._parts)
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        tag = tag.lower()
+        if tag in _SOURCE_HTML_DROP_CONTENT:
+            self._drop_depth += 1
+            return
+        if self._drop_depth:
+            return
+        if tag not in _SOURCE_HTML_TAGS:
+            return
+        self._parts.append(f"<{tag}{self._attrs(tag, attrs)}>")
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self.handle_starttag(tag, attrs)
+
+    def handle_endtag(self, tag: str) -> None:
+        tag = tag.lower()
+        if tag in _SOURCE_HTML_DROP_CONTENT:
+            self._drop_depth = max(0, self._drop_depth - 1)
+            return
+        if self._drop_depth or tag not in _SOURCE_HTML_TAGS or tag in _SOURCE_HTML_VOID_TAGS:
+            return
+        self._parts.append(f"</{tag}>")
+
+    def handle_data(self, data: str) -> None:
+        if not self._drop_depth:
+            self._parts.append(escape(data))
+
+    def _attrs(self, tag: str, attrs: list[tuple[str, str | None]]) -> str:
+        allowed = _SOURCE_HTML_GLOBAL_ATTRS | _SOURCE_HTML_ATTRS.get(tag, frozenset())
+        pieces: list[str] = []
+        for raw_name, raw_value in attrs:
+            name = raw_name.lower()
+            value = raw_value or ""
+            if name not in allowed or name.startswith("on"):
+                continue
+            if name in {"href", "src"} and _unsafe_url(value):
+                continue
+            pieces.append(f' {name}="{escape(value, quote=True)}"')
+        return "".join(pieces)
+
+
+def _unsafe_url(value: str) -> bool:
+    compact = re.sub(r"[\x00-\x20\x7f]+", "", value).lower()
+    return compact.startswith(("javascript:", "data:", "vbscript:"))
 
 
 def report_path_for(output: Path) -> Path:

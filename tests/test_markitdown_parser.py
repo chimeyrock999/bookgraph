@@ -349,6 +349,91 @@ def test_markitdown_parser_records_unresolved_image_count(tmp_path: Path) -> Non
     assert document.metadata["unresolved_image_count"] == 1
 
 
+def test_epub_source_html_fragments_follow_spine_order(tmp_path: Path) -> None:
+    source = tmp_path / "book.epub"
+    _make_epub(
+        source,
+        {
+            "OEBPS/chapter2.xhtml": b"<html><body><h1>Chapter Two</h1><p>Second.</p></body></html>",
+            "META-INF/container.xml": (
+                b'<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container">'
+                b'<rootfiles><rootfile full-path="OEBPS/content.opf"/></rootfiles></container>'
+            ),
+            "OEBPS/content.opf": (
+                b'<package xmlns="http://www.idpf.org/2007/opf"><manifest>'
+                b'<item id="c1" href="chapter1.xhtml"/>'
+                b'<item id="c2" href="chapter2.xhtml"/>'
+                b'</manifest><spine><itemref idref="c1"/><itemref idref="c2"/></spine></package>'
+            ),
+            "OEBPS/chapter1.xhtml": b"<html><body><h1>Chapter One</h1><p>First.</p></body></html>",
+        },
+    )
+
+    document = MarkItDownParser(
+        converter=_FakeConverter("# Chapter One\n\nFirst.\n\n# Chapter Two\n\nSecond.\n")
+    ).parse(source, tmp_path / "parsed" / "book")
+
+    assert [block.source_html for block in document.blocks] == [
+        "<h1>Chapter One</h1>",
+        "<p>First.</p>",
+        "<h1>Chapter Two</h1>",
+        "<p>Second.</p>",
+    ]
+
+
+def test_epub_source_html_fragments_fall_back_when_container_xml_is_malformed(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "book.epub"
+    _make_epub(
+        source,
+        {
+            "META-INF/container.xml": b"<bad",
+            "OEBPS/chapter.xhtml": b"<html><body><h1>T</h1><p>Hi</p></body></html>",
+        },
+    )
+
+    document = MarkItDownParser(converter=_FakeConverter("# T\n\nHi\n")).parse(
+        source, tmp_path / "parsed" / "book"
+    )
+
+    assert [block.source_html for block in document.blocks] == ["<h1>T</h1>", "<p>Hi</p>"]
+
+
+def test_epub_source_html_fragments_keep_markdown_fallback_when_zip_is_unreadable(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "book.epub"
+    source.write_bytes(b"not a zip")
+
+    document = MarkItDownParser(converter=_FakeConverter("# T\n\nHi\n")).parse(
+        source, tmp_path / "parsed" / "book"
+    )
+
+    assert [block.source_html for block in document.blocks] == ["<h1>T</h1>\n", "<p>Hi</p>\n"]
+
+
+def test_epub_source_html_with_inline_image_keeps_staged_markdown_fragment(tmp_path: Path) -> None:
+    figure = b"png bytes"
+    source = tmp_path / "book.epub"
+    _make_epub(
+        source,
+        {
+            "OEBPS/chapter.xhtml": (
+                b'<html><body><p>Lead <img alt="Fig" src="assets/fig.png"> text.</p></body></html>'
+            ),
+            "OEBPS/assets/fig.png": figure,
+        },
+    )
+
+    document = MarkItDownParser(
+        converter=_FakeConverter('Lead ![Fig](assets/fig.png) text.\n')
+    ).parse(source, tmp_path / "parsed" / "book")
+
+    [block] = document.blocks
+    assert block.text == "Lead ![Fig](images/fig.png) text."
+    assert block.source_html == '<p>Lead <img src="images/fig.png" alt="Fig" /> text.</p>\n'
+
 def test_markitdown_parser_clears_stale_assets_on_reparse(tmp_path: Path) -> None:
     source = tmp_path / "book.epub"
     output_dir = tmp_path / "parsed" / "book"

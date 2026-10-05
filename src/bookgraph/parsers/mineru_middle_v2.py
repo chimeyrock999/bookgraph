@@ -36,6 +36,7 @@ Non-PDF sources (MinerU's ``flash``-only formats) get two more rules:
 from __future__ import annotations
 
 import re
+from html import escape
 from pathlib import Path
 from typing import Any
 
@@ -125,6 +126,7 @@ def parse_middle_v2(payload: dict[str, Any], source: Path, parser_name: str) -> 
                     asset_path=asset_path,
                     source_path=str(source),
                     order=len(blocks),
+                    source_html=_source_html(raw_block, raw_type, block_type),
                     metadata=block_metadata,
                 )
             )
@@ -291,6 +293,49 @@ def _inline_text(span: dict[str, Any]) -> str:
     if span_type == "code_inline":
         return f"`{content}`"
     return content
+
+
+def _source_html(raw_block: dict[str, Any], raw_type: str, block_type: BlockType) -> str | None:
+    text = _block_text(raw_block)
+    if raw_type == "code" and text:
+        return f"<pre><code>{escape(text)}</code></pre>"
+    if block_type not in {"text", "list"}:
+        return None
+    inline = _content_html(raw_block.get("content") or [])
+    if not inline:
+        return None
+    tag = "li" if block_type == "list" else "p"
+    return f"<{tag}>{inline}</{tag}>"
+
+
+def _content_html(items: list[Any]) -> str:
+    parts: list[str] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") in _INLINE_SPAN_TYPES:
+            parts.append(_inline_html(item))
+        else:
+            nested = _content_html(item.get("content") or [])
+            if nested:
+                parts.append(nested)
+    return "".join(parts).strip()
+
+
+def _inline_html(span: dict[str, Any]) -> str:
+    span_type = span.get("type")
+    content = span.get("content")
+    if span_type == "hyperlink":
+        label = _content_html(content or [])
+        url = span.get("url")
+        if not label or not isinstance(url, str) or not url or url == ".":
+            return label
+        return f'<a href="{escape(url, quote=True)}">{label}</a>'
+    if not isinstance(content, str):
+        return ""
+    if span_type == "code_inline":
+        return f"<code>{escape(content)}</code>"
+    return escape(content)
 
 
 def _escape_link_label(label: str) -> str:

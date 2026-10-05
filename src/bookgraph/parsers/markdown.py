@@ -80,7 +80,8 @@ def document_from_markdown(
 
 
 def blocks_from_markdown(text: str, *, source_path: str | None = None) -> list[CanonicalBlock]:
-    tokens = markdown_reader().parse(text)
+    reader = markdown_reader()
+    tokens = reader.parse(text)
     blocks: list[CanonicalBlock] = []
     index = 0
 
@@ -88,6 +89,7 @@ def blocks_from_markdown(text: str, *, source_path: str | None = None) -> list[C
         token = tokens[index]
 
         if token.type == "heading_open":
+            end = _end_of_container(tokens, index, "heading_close")
             _append(
                 blocks,
                 "title",
@@ -95,19 +97,36 @@ def blocks_from_markdown(text: str, *, source_path: str | None = None) -> list[C
                 source_path,
                 token,
                 level=int(token.tag[1:]),
+                source_html=_render_source_html(reader, tokens[index:end]),
             )
-            index = _end_of_container(tokens, index, "heading_close")
+            index = end
         elif token.type == "paragraph_open":
             end = _end_of_container(tokens, index, "paragraph_close")
-            _append_paragraph(blocks, tokens[index + 1], source_path, token)
+            _append_paragraph(
+                blocks, tokens[index + 1], source_path, token, reader, tokens[index:end]
+            )
             index = end
         elif token.type in LIST_OPEN_TO_CLOSE:
             end = _end_of_container(tokens, index, LIST_OPEN_TO_CLOSE[token.type])
-            _append(blocks, "list", _render_list(tokens[index:end]), source_path, token)
+            _append(
+                blocks,
+                "list",
+                _render_list(tokens[index:end]),
+                source_path,
+                token,
+                source_html=_render_source_html(reader, tokens[index:end]),
+            )
             index = end
         elif token.type == "table_open":
             end = _end_of_container(tokens, index, "table_close")
-            _append(blocks, "table", _render_table(tokens[index:end]), source_path, token)
+            _append(
+                blocks,
+                "table",
+                _render_table(tokens[index:end]),
+                source_path,
+                token,
+                source_html=_render_source_html(reader, tokens[index:end]),
+            )
             index = end
         elif token.type == "blockquote_open":
             end = _end_of_container(tokens, index, "blockquote_close")
@@ -119,6 +138,7 @@ def blocks_from_markdown(text: str, *, source_path: str | None = None) -> list[C
                 source_path,
                 token,
                 metadata={"quote": True},
+                source_html=_render_source_html(reader, tokens[index:end]),
             )
             index = end
         elif token.type in {"fence", "code_block"}:
@@ -129,13 +149,21 @@ def blocks_from_markdown(text: str, *, source_path: str | None = None) -> list[C
                 source_path,
                 token,
                 metadata={"code": True, "language": token.info.strip() or None},
+                source_html=_render_source_html(reader, [token]),
             )
             index += 1
         elif token.type == "math_block":
             _append(blocks, "equation", token.content.strip(), source_path, token)
             index += 1
         elif token.type == "html_block":
-            _append(blocks, "unknown", token.content.strip(), source_path, token)
+            _append(
+                blocks,
+                "unknown",
+                token.content.strip(),
+                source_path,
+                token,
+                source_html=token.content,
+            )
             index += 1
         else:
             index += 1
@@ -152,6 +180,7 @@ def _append(
     *,
     level: int | None = None,
     metadata: BlockMetadata | None = None,
+    source_html: str | None = None,
 ) -> None:
     order = len(blocks)
     blocks.append(
@@ -162,9 +191,14 @@ def _append(
             level=level,
             source_path=source_path,
             order=order,
+            source_html=source_html,
             metadata={**_line_metadata(token), **(metadata or {})},
         )
     )
+
+
+def _render_source_html(reader: MarkdownIt, tokens: list[Token]) -> str:
+    return str(reader.renderer.render(tokens, reader.options, {}))
 
 
 def _append_paragraph(
@@ -172,6 +206,8 @@ def _append_paragraph(
     inline: Token,
     source_path: str | None,
     token: Token,
+    reader: MarkdownIt,
+    source_tokens: list[Token],
 ) -> None:
     image = _sole_image(inline)
     if image is not None:
@@ -182,9 +218,17 @@ def _append_paragraph(
             source_path,
             token,
             metadata={"src": str(image.attrGet("src") or "")},
+            source_html=_render_source_html(reader, source_tokens),
         )
         return
-    _append(blocks, "text", inline.content, source_path, token)
+    _append(
+        blocks,
+        "text",
+        inline.content,
+        source_path,
+        token,
+        source_html=_render_source_html(reader, source_tokens),
+    )
 
 
 def _sole_image(inline: Token) -> Token | None:
